@@ -36,7 +36,7 @@ if not exist "%ISCC%" goto noinno
 echo.
 echo ============================================
 echo   Done!
-echo   Installer:   installer\CentralRGB-Setup-2.0.exe   (run this to install)
+echo   Installer:   installer\CentralRGB-Setup.exe   (run this to install)
 echo   Portable:    dist\Central RGB.exe
 echo ============================================
 explorer installer

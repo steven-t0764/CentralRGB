@@ -34,10 +34,23 @@ Grab the latest version from the [**Releases page**](../../releases/latest):
 
 | File | What it is |
 |---|---|
-| `CentralRGB-Setup-2.0.exe` | **Installer (recommended).** A standard setup wizard: you choose the install folder, and it adds Start-menu and desktop shortcuts, an optional start at login, and an uninstaller under *Settings → Apps*. |
+| [`CentralRGB-Setup.exe`](../../releases/latest/download/CentralRGB-Setup.exe) | **Installer (recommended).** A standard setup wizard: you choose the install folder, it **installs the PawnIO driver for you** if it's missing, and it adds Start-menu and desktop shortcuts, an optional start at login, and an uninstaller under *Settings → Apps*. |
 | `Central RGB.exe` | **Portable.** One file that runs from anywhere with no install. |
 
 Run it and click **Yes** on the administrator prompt. Central RGB needs admin rights to reach RAM, motherboard lighting and fan controllers.
+
+### What the installer does about PawnIO
+
+1. Checks whether the PawnIO driver is already installed (it looks for the `PawnIO` Windows service).
+2. If it's missing, shows a ticked **"Install the PawnIO driver"** option.
+3. Downloads the **official, signed** installer from the link on [pawnio.eu](https://pawnio.eu)
+   (`github.com/namazso/PawnIO.Setup/releases/latest`). It isn't bundled, so you always get the latest version.
+4. Runs it silently (`PawnIO_setup.exe -install -silent`) and asks you to restart if the driver needs one.
+5. If the download fails, Central RGB still installs and tells you where to get PawnIO.
+
+Uninstalling Central RGB **leaves PawnIO installed**, because other tools (OpenRGB, FanControl, LibreHardwareMonitor) use it too.
+You can remove it separately from *Settings → Apps*.
+
 
 ---
 
@@ -47,7 +60,7 @@ Run it and click **Yes** on the administrator prompt. Central RGB needs admin ri
 |---|---|
 | Windows 10 (1803+) or Windows 11, 64-bit | Hardware access and the frosted-glass window are Windows-only |
 | Administrator rights | Needed for RAM and motherboard lighting, sensors and fan control. The .exe asks for them automatically. |
-| [PawnIO](https://pawnio.eu) driver | Low-level driver used by OpenRGB and LibreHardwareMonitor for RGB RAM, older motherboards, fan control and most temperature sensors |
+| [PawnIO](https://pawnio.eu) driver | Low-level driver used by OpenRGB and LibreHardwareMonitor for RGB RAM, older motherboards, fan control and most temperature sensors. **The installer sets it up for you.** If you use the portable .exe, install it yourself from pawnio.eu. |
 | .NET Framework 4.7.2+ | Already built into Windows 10 and 11. Used to load LibreHardwareMonitor. |
 | Internet on first run | Central RGB downloads OpenRGB (≈15 MB) and LibreHardwareMonitor the first time |
 
@@ -177,8 +190,8 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 
 ## Usage
 
-1. **Install PawnIO** from [pawnio.eu](https://pawnio.eu), then restart if it asks you to.
-2. **Run Central RGB** and accept the admin prompt.
+1. **Run the installer** and leave **"Install the PawnIO driver"** ticked. It only appears if PawnIO isn't installed yet. Restart if setup asks you to.
+2. **Open Central RGB** and accept the admin prompt.
 3. On first launch, let it **download OpenRGB** (click *Yes*). Hardware detection takes about 30 seconds the first time.
 4. Open **Devices** to check that everything was found, then go to **Lighting**, pick a color and effect, and press **Apply to all devices**.
 5. On **Fans**, start with **Balanced**, or drag the curve points to make your own.
@@ -211,7 +224,7 @@ Windows won't start apps that need admin rights from the normal Startup folder, 
 
 ```text
 dist\Central RGB.exe                    portable app
-installer\CentralRGB-Setup-2.0.exe      setup wizard
+installer\CentralRGB-Setup.exe          setup wizard
 ```
 
 To run it straight from source instead, open an **administrator** terminal and run:
@@ -221,7 +234,7 @@ py -m pip install -r requirements.txt
 py central_rgb.py
 ```
 
-**GitHub Actions**: every push to `main` builds the .exe and the installer on a Windows runner (see `.github/workflows/build.yml`). Pushing a tag like `v2.0` publishes both to a GitHub Release.
+**GitHub Actions**: every push to `main` builds the .exe and the installer on a Windows runner (see `.github/workflows/build.yml`). Publishing a GitHub Release builds both files and attaches them to it.
 
 ---
 
@@ -229,7 +242,7 @@ py central_rgb.py
 
 | Problem | Fix |
 |---|---|
-| RGB RAM or motherboard lighting is missing | Install **PawnIO**, make sure the app runs as administrator, then press **Rescan** |
+| RGB RAM or motherboard lighting is missing | Make sure **PawnIO** is installed (rerun the installer, or get it from pawnio.eu) and the app runs as administrator, then press **Rescan** |
 | A device keeps changing back to its old color | Another RGB app is running. Close it and turn off its auto-start. |
 | "OpenRGB closed right after starting" | A copy of OpenRGB is already open without its SDK server. Close it from the system tray and press **Rescan**. |
 | Fans page says no controllable fans | Your motherboard's fan chip may not be supported yet, or its fans are set to a fixed mode in the BIOS |
@@ -263,7 +276,7 @@ CentralRGB/
 |---|---|
 | [OpenRGB](https://openrgb.org) | Talking to RGB hardware. GPL-2.0, downloaded on first run and run as a separate program, not bundled. |
 | [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) | Sensors and fan control. MPL-2.0, downloaded on first run, not bundled. |
-| [PawnIO](https://pawnio.eu) | Low-level hardware access driver (installed separately) |
+| [PawnIO](https://pawnio.eu) | Low-level hardware access driver. The setup downloads and installs it if missing. |
 | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | Modern widgets |
 | [openrgb-python](https://github.com/jath03/openrgb-python) | OpenRGB SDK client |
 | [pythonnet](https://github.com/pythonnet/pythonnet) · [psutil](https://github.com/giampaolo/psutil) · [Pillow](https://python-pillow.org) | .NET bridge · system stats · images |
