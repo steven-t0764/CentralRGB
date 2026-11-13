@@ -1,1 +1,272 @@
-# CentralRGB
+<p align="center">
+  <img src="assets/banner.svg" alt="Animated Central RGB banner: the app icon, the name, the four main features appearing one by one, and a strip of LEDs cycling through a rainbow" width="900">
+</p>
+
+# Central RGB
+
+A Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
+
+- **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
+- **Sets every device at once** with a color wheel, presets, brightness and speed, plus five effects: Static, Breathing, Color Cycle, Rainbow Wave and Off
+- **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
+- **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
+- **Profiles** to save your favorite looks and switch between them in one click
+- **Frosted-glass window**: a modern, translucent interface with a blurred desktop behind it on Windows 10 and 11
+- **Starts with Windows** (optional) and reapplies your lighting and fan profile at login
+- **Normal Windows installer**: choose where to install it, and get a desktop shortcut and an uninstaller
+
+> [!NOTE]
+> The screenshots and demo below were captured with **simulated demo hardware**, so device names and sensor readings are examples. Which devices and fans Central RGB can control on your PC depends on support in [OpenRGB](https://openrgb.org) and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor). If something isn't detected, please open an issue.
+
+---
+
+## See it in action
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Demo: dragging the color wheel, switching effects, the Devices page, setting a fan curve, and the Monitor and Advanced sensor views" width="860">
+</p>
+
+---
+
+## Download
+
+Grab the latest version from the [**Releases page**](../../releases/latest):
+
+| File | What it is |
+|---|---|
+| `CentralRGB-Setup-2.0.exe` | **Installer (recommended).** A standard setup wizard: you choose the install folder, and it adds Start-menu and desktop shortcuts, an optional start at login, and an uninstaller under *Settings → Apps*. |
+| `Central RGB.exe` | **Portable.** One file that runs from anywhere with no install. |
+
+Run it and click **Yes** on the administrator prompt. Central RGB needs admin rights to reach RAM, motherboard lighting and fan controllers.
+
+---
+
+## Requirements
+
+| Requirement | Why |
+|---|---|
+| Windows 10 (1803+) or Windows 11, 64-bit | Hardware access and the frosted-glass window are Windows-only |
+| Administrator rights | Needed for RAM and motherboard lighting, sensors and fan control. The .exe asks for them automatically. |
+| [PawnIO](https://pawnio.eu) driver | Low-level driver used by OpenRGB and LibreHardwareMonitor for RGB RAM, older motherboards, fan control and most temperature sensors |
+| .NET Framework 4.7.2+ | Already built into Windows 10 and 11. Used to load LibreHardwareMonitor. |
+| Internet on first run | Central RGB downloads OpenRGB (≈15 MB) and LibreHardwareMonitor the first time |
+
+> [!TIP]
+> Close other RGB and fan apps (Corsair iCUE, ASUS Armoury Crate, MSI Mystic Light, Gigabyte RGB Fusion, NZXT CAM, SignalRGB, Razer Synapse, Logitech G HUB and others). They fight over the same hardware. **Settings → System check** tells you if any of them are running.
+
+---
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/lighting.png" alt="Lighting page"><br><b>Lighting</b>: color wheel, presets, effect tiles with live previews, brightness and speed</td>
+    <td width="50%"><img src="assets/screenshots/devices.png" alt="Devices page"><br><b>Devices</b>: every RGB device found, each with its own switch and live LEDs</td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/fans.png" alt="Fans page"><br><b>Fans</b>: profiles, a drag-able fan curve, live temperatures and per-fan control</td>
+    <td><img src="assets/screenshots/monitor.png" alt="Monitor overview"><br><b>Monitor</b>: CPU, GPU and memory gauges, live graphs, network, storage and system stats</td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/advanced.png" alt="Monitor advanced view"><br><b>Monitor → Advanced</b>: every sensor (value / min / max) plus full system details</td>
+    <td><img src="assets/screenshots/settings.png" alt="Settings page"><br><b>Settings</b>: system check, frosted glass, opacity, startup options and an activity log</td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/profiles.png" alt="Profiles page"><br><b>Profiles</b>: save a look and load it again in one click</td>
+    <td align="center"><img src="assets/icon.png" alt="Central RGB icon" width="180"><br><b>Central RGB</b></td>
+  </tr>
+</table>
+
+---
+
+## How it's built
+
+Central RGB is written in Python. It's split into four modules, each with one job, and it uses two open-source hardware engines that it downloads and runs for you.
+
+```mermaid
+flowchart LR
+    UI["central_rgb.py<br/>window & pages"] --> RGB["rgb_engine.py<br/>lighting engine"]
+    UI --> HW["hw_monitor.py<br/>sensors & fans"]
+    UI --> FX["win_effects.py<br/>frosted glass"]
+    RGB -- "SDK over TCP :6742" --> ORGB["OpenRGB<br/>(started in the background)"]
+    ORGB --> DEV["Motherboard · GPU · RAM<br/>LED strips · peripherals"]
+    HW -- "pythonnet" --> LHM["LibreHardwareMonitor<br/>library"]
+    LHM --> SENS["Temperatures · loads · clocks<br/>fan speeds & fan controllers"]
+    ORGB -. "PawnIO driver" .- DEV
+    LHM -. "PawnIO driver" .- SENS
+```
+
+### 1. The window: `central_rgb.py`
+
+A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sidebar and six pages. Pieces like the color wheel, LED strips, fan curve editor, ring gauges and graphs are custom-drawn on canvases, so they can animate smoothly.
+
+- The interface's **accent color follows the color you pick**: buttons, sliders, switches and highlights all change with it.
+- Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
+- Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
+
+### 2. Lighting: `rgb_engine.py`
+
+**Finding and starting OpenRGB (`OpenRGBManager`)**
+
+1. Checks whether OpenRGB's SDK server is already listening on `127.0.0.1:6742`.
+2. If not, looks for `OpenRGB.exe` next to the app, in Program Files, in `%LOCALAPPDATA%\Programs` and in its own download folder.
+3. If it can't find one, it offers to **download the newest Windows build** automatically. It reads the official releases page and falls back to a known 1.1 link. Every path inside the zip is checked before extracting.
+4. Starts it hidden in the tray with the SDK server turned on:
+
+```text
+OpenRGB.exe --server --startminimized
+```
+
+5. Waits for the server, connects with [openrgb-python](https://github.com/jath03/openrgb-python), then rescans after 4 s and again after 12 s, because OpenRGB keeps detecting devices for a while after it starts.
+
+**Driving the lights (`LightingEngine`)**
+
+A background thread pushes frames to every selected device:
+
+- Each device is switched to its most controllable mode, in this order: `Direct`, then `Custom`, then `Static`.
+- Devices that take **per-LED colors** are updated at **30 frames per second**. Devices that only take one color per mode (some RAM, for example) are limited to 2 updates a second, because they're slow to change.
+- A device that throws an error is skipped until the next rescan, so one bad device can't stall the rest.
+- `compute_colors()` produces every effect from color, brightness, speed and time. **Rainbow Wave** shifts the hue across each device's LEDs and offsets each device slightly, so the colors flow from one device to the next.
+- **Save to hardware** writes the current static color into each device's own memory where supported, so it stays even with the app closed.
+
+**System check (`system_check()`)** looks at admin rights, the PawnIO driver (service or install folder), running vendor RGB apps (from `tasklist`), and your motherboard, GPU and RAM models (from PowerShell `Get-CimInstance`).
+
+### 3. Sensors & fans: `hw_monitor.py`
+
+**Loading LibreHardwareMonitor (`LHMBackend`)**
+
+1. Downloads the latest LibreHardwareMonitor release (the .NET Framework build) into `%LOCALAPPDATA%\CentralRGB\LHM` the first time.
+2. Starts .NET with [pythonnet](https://github.com/pythonnet/pythonnet). It tries `netfx` first, then `coreclr`.
+3. Hooks `AppDomain.AssemblyResolve`, so LibreHardwareMonitor's dependency DLLs load from its own folder.
+4. Turns on the CPU, GPU, motherboard, controller, memory, storage, network and PSU sensors.
+
+All library calls happen on **one worker thread** (LibreHardwareMonitor isn't thread-safe). The window reads a snapshot from it every second. If the library can't load, the Monitor page still shows basic stats from `psutil`.
+
+**Fan control logic (runs every second)**
+
+```python
+FAN_FLOOR = 20        # never drive a fan below 20 %
+PUMP_FLOOR = 70       # anything named "pump" never goes below 70 %
+EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
+```
+
+1. Each fan controller is paired with its RPM sensor, and with the **GPU temperature** (GPU fans) or the **CPU temperature** (everything else).
+2. The target speed comes from, in order of priority: the emergency override, then your manual slider, then the active profile's curve.
+3. Speeds **rise instantly** but **fall by at most 4 % a second**, so fans don't rev up and down.
+4. **Auto** hands every fan back to the BIOS. Closing the app does the same.
+
+| Profile | Fan curve (°C → speed) |
+|---|---|
+| **Auto** | BIOS / firmware control |
+| **Silent** | 40° → 25% · 60° → 35% · 75° → 60% · 85° → 100% |
+| **Balanced** | 40° → 35% · 60° → 50% · 75° → 75% · 85° → 100% |
+| **Performance** | 40° → 50% · 60° → 70% · 70° → 90% · 80° → 100% |
+| **Max** | 100% all the time |
+| **Custom** | Your own 4-point curve. Drag the points on the graph. |
+
+**System details (`system_info()`)** collects your Windows version and build, CPU (cores, threads, cache, socket), motherboard and BIOS, every RAM stick (slot, size, part number, speed), GPUs and driver versions, display resolution, disks and network adapters, all in one PowerShell CIM query.
+
+### 4. Frosted glass: `win_effects.py`
+
+- **Windows 11 22H2 and later**: uses the system acrylic backdrop (`DwmSetWindowAttribute`, `DWMWA_SYSTEMBACKDROP_TYPE`).
+- **Windows 10 1803 and later**: uses the accent policy (`SetWindowCompositionAttribute`, acrylic blur-behind), falling back to plain blur.
+- The window extends its frame into the client area (`DwmExtendFrameIntoClientArea`). The app paints its background **pure black**, which Windows turns into the blurred desktop, and draws its panels in dark colors that read as tinted glass.
+- It also switches the title bar to dark mode, rounds the corners on Windows 11, and adds an optional whole-window opacity slider (60–100%).
+
+---
+
+## Usage
+
+1. **Install PawnIO** from [pawnio.eu](https://pawnio.eu), then restart if it asks you to.
+2. **Run Central RGB** and accept the admin prompt.
+3. On first launch, let it **download OpenRGB** (click *Yes*). Hardware detection takes about 30 seconds the first time.
+4. Open **Devices** to check that everything was found, then go to **Lighting**, pick a color and effect, and press **Apply to all devices**.
+5. On **Fans**, start with **Balanced**, or drag the curve points to make your own.
+6. Optionally turn on **Settings → Start with Windows**.
+
+| Page | What you can do |
+|---|---|
+| Lighting | Color wheel, hex code, 9 presets, 5 effects, brightness, speed, apply to all devices, save to hardware |
+| Devices | See every device and its LED count, switch devices on or off, rescan |
+| Fans | Profiles, custom curve, live CPU and GPU temperatures, a manual slider per fan (tap **MANUAL ↺** to go back to the curve) |
+| Monitor → Overview | CPU / GPU / RAM gauges and graphs, network up/down, drive usage, uptime, power draw |
+| Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
+| Profiles | Save the current look under a name, then load or delete it later |
+| Settings | System check, frosted glass on/off, opacity, start with Windows, reapply lighting on launch, activity log |
+
+> [!IMPORTANT]
+> Animated effects and custom fan profiles only run while Central RGB is open. Closing the window offers to **minimize instead**. If you quit, the lights stay on their last frame and the fans go back to BIOS control.
+
+### Start with Windows
+
+Windows won't start apps that need admin rights from the normal Startup folder, so Central RGB uses **Task Scheduler**. It creates a task called `CentralRGB` that runs at login with highest privileges, 20 seconds after sign-in, using `--background` (starts minimized and reapplies your lighting). You can switch it on from the installer or from **Settings**.
+
+---
+
+## Building from source
+
+1. Install **Python 3.12** from [python.org](https://www.python.org/downloads/) and tick **"Add python.exe to PATH"**.
+2. Optional: install **Inno Setup** for the installer (`winget install JRSoftware.InnoSetup`).
+3. Double-click **`build.bat`**. It installs the dependencies, packages the app with PyInstaller, and builds the installer:
+
+```text
+dist\Central RGB.exe                    portable app
+installer\CentralRGB-Setup-2.0.exe      setup wizard
+```
+
+To run it straight from source instead, open an **administrator** terminal and run:
+
+```powershell
+py -m pip install -r requirements.txt
+py central_rgb.py
+```
+
+**GitHub Actions**: every push to `main` builds the .exe and the installer on a Windows runner (see `.github/workflows/build.yml`). Pushing a tag like `v2.0` publishes both to a GitHub Release.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| RGB RAM or motherboard lighting is missing | Install **PawnIO**, make sure the app runs as administrator, then press **Rescan** |
+| A device keeps changing back to its old color | Another RGB app is running. Close it and turn off its auto-start. |
+| "OpenRGB closed right after starting" | A copy of OpenRGB is already open without its SDK server. Close it from the system tray and press **Rescan**. |
+| Fans page says no controllable fans | Your motherboard's fan chip may not be supported yet, or its fans are set to a fixed mode in the BIOS |
+| Monitor shows "Basic stats only" | LibreHardwareMonitor couldn't load. Check the Settings → Activity log, and confirm PawnIO is installed and you're running as admin. |
+| The glass window looks wrong | Turn off **Frosted glass** in Settings (takes effect on next launch). Keep opacity at 100% if lowering it removes the blur. |
+| Antivirus flags the .exe | New PyInstaller builds are sometimes flagged by mistake. Allow the file, or run from source. |
+
+---
+
+## Project structure
+
+```text
+CentralRGB/
+├── central_rgb.py        # window, pages and custom widgets
+├── rgb_engine.py         # OpenRGB setup, lighting effects, system check, settings
+├── hw_monitor.py         # LibreHardwareMonitor sensors, fan logic, system details
+├── win_effects.py        # frosted glass, dark title bar, opacity
+├── central_rgb.ico/.png  # app icon
+├── central_rgb.iss       # Inno Setup installer script
+├── build.bat             # one-click build (exe + installer)
+├── requirements.txt
+├── .github/workflows/build.yml
+└── assets/               # banner, demo and screenshots for this README
+```
+
+---
+
+## Built with
+
+| Project | Used for |
+|---|---|
+| [OpenRGB](https://openrgb.org) | Talking to RGB hardware. GPL-2.0, downloaded on first run and run as a separate program, not bundled. |
+| [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) | Sensors and fan control. MPL-2.0, downloaded on first run, not bundled. |
+| [PawnIO](https://pawnio.eu) | Low-level hardware access driver (installed separately) |
+| [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | Modern widgets |
+| [openrgb-python](https://github.com/jath03/openrgb-python) | OpenRGB SDK client |
+| [pythonnet](https://github.com/pythonnet/pythonnet) · [psutil](https://github.com/giampaolo/psutil) · [Pillow](https://python-pillow.org) | .NET bridge · system stats · images |
+
+> [!WARNING]
+> Fan control changes how your PC cools itself. Central RGB has safety limits (minimum speeds, a 90 °C override, and handing control back to the BIOS on exit), but use custom curves carefully and keep an eye on your temperatures.
