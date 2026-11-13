@@ -7,7 +7,10 @@
 ; installer is downloaded from the link on pawnio.eu while setup runs - it is not bundled here.
 
 #define AppName "Central RGB"
-#define AppVersion "2.0.1"
+; release builds pass the tag version with /DAppVersion=...; this is the default for local builds
+#ifndef AppVersion
+  #define AppVersion "2.0.2"
+#endif
 #define AppExe "Central RGB.exe"
 #define PawnIOUrl "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe"
 

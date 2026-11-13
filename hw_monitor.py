@@ -526,5 +526,5 @@ $r=[ordered]@{
         out.append(("Processor", [("Model", model or "Unknown"),
                                   ("Cores / threads", f"{psutil.cpu_count(False)} / {psutil.cpu_count(True)}")]))
         out.append(("Memory", [("Installed", f"{psutil.virtual_memory().total / 2**30:.1f} GB")]))
-    out.append(("Python runtime", [("Central RGB", "2.0.1"), ("Python", platform.python_version())]))
+    out.append(("Python runtime", [("Central RGB", eng.APP_VERSION), ("Python", platform.python_version())]))
     return out

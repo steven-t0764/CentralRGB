@@ -38,7 +38,7 @@ import hw_monitor as hwm
 import rgb_engine as eng
 import win_effects as fx
 
-APP_VERSION = "2.0.1"
+APP_VERSION = eng.APP_VERSION
 TASK_NAME = "CentralRGB"
 
 # ----------------------------------------------------------------------------- palette

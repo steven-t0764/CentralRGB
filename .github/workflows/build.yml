@@ -25,6 +25,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Use the release tag as the version
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $v = "${{ github.event.release.tag_name }}".TrimStart("v")
+          (Get-Content rgb_engine.py) -replace '^APP_VERSION = ".*?"', "APP_VERSION = `"$v`"" | Set-Content rgb_engine.py
+          "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Building version $v"
+
       - name: Build Central RGB.exe
         run: >
           pyinstaller --noconfirm --clean --onefile --windowed --uac-admin
@@ -38,7 +47,7 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc central_rgb.iss
+          if ($env:APP_VERSION) { & $iscc "/DAppVersion=$env:APP_VERSION" central_rgb.iss } else { & $iscc central_rgb.iss }
 
       - uses: actions/upload-artifact@v4
         with:

@@ -234,7 +234,7 @@ py -m pip install -r requirements.txt
 py central_rgb.py
 ```
 
-**GitHub Actions**: every push to `main` builds the .exe and the installer on a Windows runner (see `.github/workflows/build.yml`). Publishing a GitHub Release builds both files and attaches them to it.
+**GitHub Actions**: every push to `main` builds the .exe and the installer on a Windows runner (see `.github/workflows/build.yml`). Publishing a GitHub Release builds both files and attaches them to it, using the release tag as the version number (tag `v2.1` → app and installer show 2.1).
 
 ---
 
