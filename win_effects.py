@@ -70,6 +70,23 @@ def dark_titlebar(root):
         pass
 
 
+def titlebar_colors(root, caption_hex: str, border_hex: str, text_hex: str):
+    """Windows 11: paint the title bar and window border to match the app (ignored on Windows 10)."""
+    if not IS_WIN or win_build() < 22000:
+        return
+    try:
+        h = _hwnd(root)
+        def cref(hx):
+            hx = hx.lstrip("#")
+            r, g, b = int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
+            return r | (g << 8) | (b << 16)            # COLORREF = 0x00BBGGRR
+        _dwm_set(h, 35, cref(caption_hex))            # DWMWA_CAPTION_COLOR
+        _dwm_set(h, 34, cref(border_hex))             # DWMWA_BORDER_COLOR
+        _dwm_set(h, 36, cref(text_hex))               # DWMWA_TEXT_COLOR
+    except Exception:
+        pass
+
+
 def apply_glass(root, tint_abgr: int = 0xB0100C0A) -> bool:
     """Turn on blur-behind. Returns True if applied."""
     if not glass_supported():

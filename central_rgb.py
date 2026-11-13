@@ -46,11 +46,12 @@ TASK_NAME = "CentralRGB"
 # blurred desktop; dark panel colours then read as tinted, frosted glass.
 GLASS = dict(BG="#000000", SIDE="#000000", CARD="#14161c", CARD2="#1c1f27", LINE="#262a35",
              TEXT="#f2f4f8", MUTED="#8c94a6", FAINT="#4a5061", TRACK="#22252e")
-SOLID = dict(BG="#0a0b0f", SIDE="#0d0e13", CARD="#13151b", CARD2="#1a1d25", LINE="#232631",
-             TEXT="#f2f4f8", MUTED="#8c94a6", FAINT="#4a5061", TRACK="#20232b")
+# Default "Midnight" theme: solid, high-contrast and crisp on every Windows version.
+SOLID = dict(BG="#0f1117", SIDE="#0b0d12", CARD="#161922", CARD2="#1e222d", LINE="#272c38",
+             TEXT="#eef0f5", MUTED="#9097a8", FAINT="#5d6577", TRACK="#2a2f3b")
 P = dict(SOLID)
 OK, WARN, BAD, INFO = "#34d399", "#fbbf24", "#f87171", "#60a5fa"
-DEFAULT_ACCENT = "#6d7cff"
+DEFAULT_ACCENT = "#7b6cf6"   # brand accent (indigo-violet)
 FONT = "Segoe UI Variable Display" if (eng.IS_WIN and fx.win_build() >= 22000) else ("Segoe UI" if eng.IS_WIN else "DejaVu Sans")
 MONO = "Cascadia Mono" if eng.IS_WIN else "DejaVu Sans Mono"
 
@@ -81,6 +82,13 @@ def hex2rgb(h):
 
 def mix(a, b, t):
     return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def on_color(hex_color) -> str:
+    """Readable text colour (dark or white) for text drawn on top of hex_color."""
+    r, g, b = (c / 255 for c in hex2rgb(hex_color))
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return "#0f1117" if lum > 0.6 else "#ffffff"
 
 
 def F(size, weight="normal"):
@@ -417,7 +425,7 @@ class App(ctk.CTk):
 
     def __init__(self, background=False):
         self.settings = eng.Settings()
-        self.glass = bool(self.settings.data.get("glass", True)) and (fx.glass_supported() or os.environ.get("RGBC_GLASS_PALETTE"))
+        self.glass = bool(self.settings.data.get("glass_experimental", False)) and (fx.glass_supported() or os.environ.get("RGBC_GLASS_PALETTE"))
         P.update(GLASS if self.glass else SOLID)
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=P["BG"])
@@ -465,6 +473,8 @@ class App(ctk.CTk):
 
     def _window_effects(self):
         fx.dark_titlebar(self)
+        if not self.glass:
+            fx.titlebar_colors(self, P["BG"], P["LINE"], P["TEXT"])   # seamless title bar on Windows 11
         if self.glass and fx.glass_supported():
             fx.apply_glass(self)
         op = int(self.settings.data.get("opacity", 100))
@@ -506,7 +516,7 @@ class App(ctk.CTk):
 
     def primary(self, parent, text, cmd, **kw):
         b = ctk.CTkButton(parent, text=text, command=cmd, fg_color=self.accent, hover_color=self.accent,
-                          text_color="white", font=F(13, "bold"), corner_radius=kw.pop("corner_radius", 22), **kw)
+                          text_color=on_color(self.accent), font=F(13, "bold"), corner_radius=kw.pop("corner_radius", 22), **kw)
         self.accent_widgets.append(("button", b))
         return b
 
@@ -549,6 +559,7 @@ class App(ctk.CTk):
         side.grid(row=0, column=0, sticky="ns")
         side.grid_propagate(False)
         side.pack_propagate(False)
+        ctk.CTkFrame(side, width=1, corner_radius=0, fg_color=P["LINE"]).pack(side="right", fill="y")
         brand = ctk.CTkFrame(side, fg_color="transparent")
         brand.pack(fill="x", padx=18, pady=(28, 6))
         self.logo = tk.Canvas(brand, width=36, height=36, bg=P["SIDE"], highlightthickness=0)
@@ -1192,17 +1203,34 @@ class App(ctk.CTk):
         opt = self.card(top)
         opt.grid(row=0, column=1, sticky="nsew")
         self.caption(opt, "Appearance").pack(fill="x", padx=20, pady=(16, 6))
-        self.glass_sw = ctk.CTkSwitch(opt, text="Frosted glass window", font=F(12), text_color=P["TEXT"],
+        acc_row = ctk.CTkFrame(opt, fg_color="transparent")
+        acc_row.pack(fill="x", padx=20, pady=(2, 6))
+        self.label(acc_row, "Accent color", 12, "bold").pack(side="left")
+        self.accent_seg = ctk.CTkSegmentedButton(acc_row, values=["Central", "Match lighting"], command=self._set_accent_mode,
+                                                 height=28, font=F(11, "bold"), corner_radius=14, fg_color=P["CARD2"],
+                                                 unselected_color=P["CARD2"], unselected_hover_color=P["LINE"],
+                                                 selected_color=self.accent, selected_hover_color=self.accent,
+                                                 text_color=P["TEXT"])
+        self.accent_seg.pack(side="right")
+        self.accent_seg.set("Match lighting" if self.settings.data.get("accent_mode") == "match" else "Central")
+        self.accent_widgets.append(("seg", self.accent_seg))
+        self.glass_sw = ctk.CTkSwitch(opt, text="Frosted glass (experimental)", font=F(12), text_color=P["TEXT"],
                                       command=self._toggle_glass)
         self.glass_sw.pack(anchor="w", padx=20, pady=4)
-        if self.settings.data.get("glass", True):
+        if self.settings.data.get("glass_experimental", False):
             self.glass_sw.select()
         if not fx.glass_supported():
             self.glass_sw.configure(text="Frosted glass (Windows 10/11 only)")
         r, self.opacity = self.slider_row(opt, "Window opacity", int(self.settings.data.get("opacity", 100)),
                                           self._set_opacity, lo=60, hi=100)
         r.pack(fill="x", padx=20, pady=(8, 4))
-        self.caption(opt, "Startup").pack(fill="x", padx=20, pady=(14, 6))
+        self.caption(opt, "Sensors").pack(fill="x", padx=20, pady=(10, 4))
+        self.ramtemp_sw = ctk.CTkSwitch(opt, text="Read RAM temperatures (can make RGB RAM flicker)", font=F(12),
+                                        text_color=P["TEXT"], command=self._toggle_ram_temps)
+        self.ramtemp_sw.pack(anchor="w", padx=20, pady=4)
+        if self.settings.data.get("ram_temps", False):
+            self.ramtemp_sw.select()
+        self.caption(opt, "Startup").pack(fill="x", padx=20, pady=(10, 4))
         self.autostart_sw = ctk.CTkSwitch(opt, text="Start with Windows", font=F(12), text_color=P["TEXT"],
                                           command=self._toggle_autostart)
         self.autostart_sw.pack(anchor="w", padx=20, pady=4)
@@ -1213,11 +1241,11 @@ class App(ctk.CTk):
         self.restore_sw.pack(anchor="w", padx=20, pady=4)
         if self.settings["restore_on_start"]:
             self.restore_sw.select()
-        self.caption(opt, "Helpers").pack(fill="x", padx=20, pady=(14, 6))
+        self.caption(opt, "Helpers").pack(fill="x", padx=20, pady=(10, 4))
         for txt, cmd in (("Get PawnIO driver", lambda: webbrowser.open(eng.PAWNIO_PAGE)),
                          ("Locate OpenRGB.exe", self._browse_openrgb),
                          ("OpenRGB supported devices", lambda: webbrowser.open(eng.RELEASES_PAGE))):
-            self.secondary(opt, txt, cmd, height=32, anchor="w", corner_radius=16).pack(fill="x", padx=20, pady=3)
+            self.secondary(opt, txt, cmd, height=30, anchor="w", corner_radius=16).pack(fill="x", padx=20, pady=2)
         ctk.CTkFrame(opt, fg_color="transparent", height=12).pack()
 
         logc = self.card(p)
@@ -1244,9 +1272,21 @@ class App(ctk.CTk):
 
     def _toggle_glass(self):
         on = self.glass_sw.get() == 1
-        self.settings["glass"] = on
+        self.settings["glass_experimental"] = on
         messagebox.showinfo(eng.APP_NAME, f"Frosted glass will be turned {'on' if on else 'off'} the next time "
-                                          "Central RGB starts.")
+                                          "Central RGB starts." + ("\n\nIt's experimental: panels look lighter and "
+                                          "edges can look rough on some PCs." if on else ""))
+
+    def _toggle_ram_temps(self):
+        on = self.ramtemp_sw.get() == 1
+        self.settings["ram_temps"] = on
+        messagebox.showinfo(eng.APP_NAME, "Restart Central RGB for this to take effect." + (
+            "\n\nReading RAM temperatures shares the RAM's SMBus with the RGB controller, which can make "
+            "RGB RAM blink. Leave this off if you have RGB RAM." if on else ""))
+
+    def _set_accent_mode(self, choice):
+        self.settings["accent_mode"] = "match" if choice == "Match lighting" else "central"
+        self._update_accent()
 
     def _set_opacity(self, v):
         self.settings.data["opacity"] = v
@@ -1266,16 +1306,18 @@ class App(ctk.CTk):
 
     def _update_accent(self):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))
-        if self.effect in ("Color Cycle", "Rainbow Wave", "Off") or s < 0.25:
+        match = self.settings.data.get("accent_mode") == "match"
+        if not match or self.effect in ("Color Cycle", "Rainbow Wave", "Off") or s < 0.25:
             acc = DEFAULT_ACCENT
         else:
-            acc = hexcol([c * 255 for c in colorsys.hsv_to_rgb(h, min(1, s) * 0.85, 0.95)])
+            # keep it rich but never neon: cap saturation and brightness so white text stays readable
+            acc = hexcol([c * 255 for c in colorsys.hsv_to_rgb(h, min(s, 0.78), 0.80)])
         self.accent = acc
-        hov = hexcol(mix(hex2rgb(acc), (255, 255, 255), 0.15))
+        hov = hexcol(mix(hex2rgb(acc), (255, 255, 255), 0.12))
         for kind, w in self.accent_widgets:
             try:
                 if kind == "button":
-                    w.configure(fg_color=acc, hover_color=hov)
+                    w.configure(fg_color=acc, hover_color=hov, text_color=on_color(acc))
                 elif kind == "slider":
                     w.configure(progress_color=acc)
                 elif kind == "seg":
@@ -1284,7 +1326,7 @@ class App(ctk.CTk):
                 pass
         for n, t in self.tiles.items():
             t.select(n == self.effect, acc)
-        for sw in (self.autostart_sw, self.restore_sw, self.glass_sw):
+        for sw in (self.autostart_sw, self.restore_sw, self.glass_sw, self.ramtemp_sw):
             sw.configure(progress_color=acc)
         for card in self.device_cards:
             card.switch.configure(progress_color=acc)

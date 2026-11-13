@@ -67,8 +67,9 @@ def interp_curve(points, t: float) -> float:
 class LHMBackend:
     """Thin wrapper around LibreHardwareMonitorLib. Only call from the monitor thread."""
 
-    def __init__(self, log):
+    def __init__(self, log, ram_temps=False):
         self.log = log
+        self.ram_temps = ram_temps   # DIMM temps are read over the SMBus, which RGB RAM also uses
         self.computer = None
         self.controls = {}   # sensor id -> IControl
 
@@ -153,8 +154,14 @@ class LHMBackend:
         from LibreHardwareMonitor.Hardware import Computer
 
         c = Computer()
-        for prop in ("IsCpuEnabled", "IsGpuEnabled", "IsMotherboardEnabled", "IsControllerEnabled",
-                     "IsMemoryEnabled", "IsStorageEnabled", "IsNetworkEnabled", "IsPsuEnabled"):
+        props = ["IsCpuEnabled", "IsGpuEnabled", "IsMotherboardEnabled", "IsControllerEnabled",
+                 "IsStorageEnabled", "IsNetworkEnabled", "IsPsuEnabled"]
+        # LHM's memory group polls each DIMM's temperature chip over the SMBus (and switches SPD pages).
+        # OpenRGB drives RGB RAM over the same bus, so polling it makes RGB RAM flicker. Off by default;
+        # memory usage comes from Windows (psutil) either way.
+        if self.ram_temps:
+            props.append("IsMemoryEnabled")
+        for prop in props:
             try:
                 setattr(c, prop, True)
             except Exception:
@@ -269,7 +276,7 @@ class HardwareMonitor(threading.Thread):
     def run(self):
         psutil.cpu_percent(None)
         if self.backend is None:
-            self.backend = LHMBackend(self.log)
+            self.backend = LHMBackend(self.log, ram_temps=bool(self.settings.data.get("ram_temps", False)))
         try:
             self.backend.open()
             self.status, self.status_msg = "ok", "Sensors online"
