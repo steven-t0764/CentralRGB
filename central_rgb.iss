@@ -1,4 +1,5 @@
 ; Central RGB - Windows installer (Inno Setup 6.1+)
+; Copyright (C) 2026 steven-t0764 - GPL-3.0-or-later
 ; Build:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" central_rgb.iss   (build.bat does this for you)
 ; Output: installer\CentralRGB-Setup.exe
 ;
@@ -27,6 +28,8 @@ OutputBaseFilename=CentralRGB-Setup
 SetupIconFile=central_rgb.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
+; show the GPL-3.0 license page during setup
+LicenseFile=LICENSE
 WizardStyle=modern
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -44,6 +47,7 @@ Name: "startup"; Description: "Start Central RGB when I sign in (re-applies my l
 Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "central_rgb.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\central_rgb.ico"

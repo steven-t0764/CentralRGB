@@ -4,7 +4,7 @@
 
 # Central RGB
 
-A Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
+A free and open-source Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
 - **Sets every device at once** with a color wheel, presets, brightness and speed, plus five effects: Static, Breathing, Color Cycle, Rainbow Wave and Off
@@ -283,3 +283,19 @@ CentralRGB/
 
 > [!WARNING]
 > Fan control changes how your PC cools itself. Central RGB has safety limits (minimum speeds, a 90 °C override, and handing control back to the BIOS on exit), but use custom curves carefully and keep an eye on your temperatures.
+
+---
+
+## Contributing
+
+Bug reports, device reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run from source,
+what to include in an issue (it helps a lot to paste the **Settings → Activity** log and your hardware list from
+**Monitor → Advanced → Copy**), and how to send a change.
+
+## License
+
+Central RGB is free software, released under the **GNU General Public License v3.0 or later**. See [LICENSE](LICENSE).
+
+You can use, study, share and change it. If you distribute a modified version, it must stay open source under the same
+license. OpenRGB (GPL-2.0) and LibreHardwareMonitor (MPL-2.0) are separate projects with their own licenses. Central RGB
+downloads them on first run and doesn't bundle them.

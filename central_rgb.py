@@ -1,3 +1,11 @@
+# Central RGB - control all your PC's RGB lighting, fans and system monitoring from one app.
+# Copyright (C) 2026 steven-t0764
+#
+# This program is free software: you can redistribute it and/or modify it under the terms of the
+# GNU General Public License as published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY; see the
+# GNU General Public License for more details: <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
 Central RGB - RGB lighting, fan control and system monitoring in one sleek app.
 
