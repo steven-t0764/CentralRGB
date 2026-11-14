@@ -23,6 +23,7 @@ import math
 import os
 import queue
 import sys
+import subprocess
 import threading
 import time
 import traceback
@@ -363,16 +364,19 @@ class Splash(tk.Frame):
     FPS = 60
     T_IN, T_HOLD, T_OUT, T_DIP, T_RISE = 1.0, 0.75, 0.5, 0.14, 0.32
 
-    def __init__(self, root, icon_img, on_done=None):
+    def __init__(self, root, icon_img, on_done=None, size=176):
         super().__init__(root, bg=P["BG"])
         self.root, self.on_done, self.icon = root, on_done, icon_img
-        self.sc = ctk.ScalingTracker.get_window_scaling(root) if hasattr(ctk, "ScalingTracker") else 1.0
+        try:
+            self.sc = ctk.ScalingTracker.get_window_scaling(root)
+        except Exception:
+            self.sc = max(1.0, root.winfo_fpixels("1i") / 96)
         self.cv = tk.Canvas(self, bg=P["BG"], highlightthickness=0)
         self.cv.pack(fill="both", expand=True)
         self.place(relx=0, rely=0, relwidth=1, relheight=1)
         tk.Misc.lift(self)
         bg = hex2rgb(P["BG"])
-        self.size = int(176 * self.sc)
+        self.size = int(size * self.sc)
         g = int(self.size * 3.2)
         glow = Image.new("RGB", (g, g), bg)
         d = ImageDraw.Draw(glow)
@@ -381,6 +385,9 @@ class Splash(tk.Frame):
             d.ellipse((g * fx_ - r, g * fy_ - r, g * fx_ + r, g * fy_ + r), fill=hex2rgb(col))
         flat = Image.new("RGB", (g, g), bg)
         glow = Image.blend(glow.filter(ImageFilter.GaussianBlur(g * 0.11)), flat, 0.45)
+        # fade to the background well before the edge of the image, so no square outline can show
+        fade = Image.radial_gradient("L").resize((g, g), Image.BILINEAR).point(lambda v: max(0, 255 - int(v * 1.3)))
+        glow = Image.composite(glow, flat, fade.filter(ImageFilter.GaussianBlur(g * 0.04)))
         self.glow_frames = [ImageTk.PhotoImage(Image.blend(flat, glow, k / 23)) for k in range(24)]
         self.glow_item = self.cv.create_image(-4000, -4000, image=self.glow_frames[0])   # off-screen until begin()
         self.logo_item = self.cv.create_image(-4000, -4000)
@@ -415,17 +422,11 @@ class Splash(tk.Frame):
             self.t0 += t - t_out
             t = t_out
         t_dip = t_out + self.T_OUT
-        if t >= t_dip:                                   # logo has faded out: reveal the app
-            # freeze drawing while the splash goes, so the app appears in one repaint (no blank flash)
-            root = self.root
-            hnd = fx.freeze(root)
-            try:
-                self.destroy()
-                root.update_idletasks()
-            finally:
-                fx.thaw(hnd)
+        if t >= t_dip:                                   # logo has faded out
             if self.on_done:
                 self.on_done()
+            else:
+                self.destroy()
             return
         w, h, sc = max(self.winfo_width(), 200), max(self.winfo_height(), 200), self.sc
         cx, cy = w / 2, h / 2 - 40 * sc
@@ -1284,6 +1285,83 @@ def claim_single_instance(app_q) -> bool:
     return True
 
 
+# ---------------------------------------------------------------- startup splash in its own process
+class SplashProcess:
+    """Runs the logo animation in a separate small process. The app builds its window at full speed
+    while staying invisible, so nothing it does can make the animation stutter."""
+
+    def __init__(self):
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--splash"]
+        else:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--splash"]
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  creationflags=eng.NO_WINDOW)
+        self.t0 = time.perf_counter()
+
+    def ready(self):
+        """App is built: the logo plays its exit and the helper closes."""
+        try:
+            self.p.stdin.write(b"ready\n")
+            self.p.stdin.flush()
+            self.p.stdin.close()
+        except Exception:
+            pass
+
+    def alive(self) -> bool:
+        return self.p.poll() is None
+
+
+def run_splash():
+    """Entry point of the splash helper: a borderless, rounded card in the middle of the screen."""
+    if eng.IS_WIN:
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+    P.update(SOLID)
+    root = tk.Tk()
+    root.withdraw()
+    root.overrideredirect(True)
+    root.configure(bg=P["BG"])
+    sc = max(1.0, root.winfo_fpixels("1i") / 96)
+    w, h = int(560 * sc), int(420 * sc)
+    x, y = (root.winfo_screenwidth() - w) // 2, (root.winfo_screenheight() - h) // 2
+    root.geometry(f"{w}x{h}+{x}+{y}")
+    root.attributes("-topmost", True)
+    try:
+        icon = Image.open(resource("central_rgb.png")).convert("RGBA")
+    except Exception:
+        return
+    sp = Splash(root, icon, on_done=root.destroy, size=132)   # glow sized to fade out inside the card
+    root.deiconify()
+    root.update_idletasks()
+    if eng.IS_WIN:
+        try:                                     # Windows 11: rounded corners on the borderless card
+            import ctypes
+            from ctypes import wintypes
+            hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+            v = ctypes.c_int(2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(wintypes.HWND(hwnd), 33, ctypes.byref(v), ctypes.sizeof(v))
+        except Exception:
+            pass
+
+    def wait_for_app():
+        try:
+            sys.stdin.readline()                 # "ready", or EOF if the app went away
+        except Exception:
+            pass
+        root.after(0, lambda: setattr(sp, "ready", True))
+    if sys.stdin is not None:
+        threading.Thread(target=wait_for_app, daemon=True).start()
+    else:
+        sp.ready = True
+    root.after(30000, lambda: setattr(sp, "ready", True))   # never hang around
+    sp.begin()
+    root.mainloop()
+
+
 class App(ctk.CTk):
     TEST_BACKEND = None   # tests can inject a simulated sensor backend
 
@@ -1297,7 +1375,14 @@ class App(ctk.CTk):
         self.settings = eng.Settings()
         P.update(SOLID)
         ctk.set_appearance_mode("dark")
+        self.splash_proc = None
+        if not background and selftest is None and self.settings.data.get("animations", True):
+            try:
+                self.splash_proc = SplashProcess()          # starts animating while we build
+            except Exception:
+                self.splash_proc = None
         super().__init__(fg_color=P["BG"])
+        self.withdraw()                                     # stays hidden until fully built
         self.title(eng.APP_NAME)
         self.geometry("1300x840")
         self.minsize(1200, 790)
@@ -1331,28 +1416,22 @@ class App(ctk.CTk):
         self.current_page = "Home"
         self.snap = self.monitor.snapshot()
 
-        # startup animation goes up first, so the app can build behind it without being seen
-        self.splash = None
-        if not background and self._icon_img is not None and self.settings.data.get("animations", True):
-            self.splash = Splash(self, self._icon_img)
-            self.update()
+        self.splash = None                       # the logo animation now runs in SplashProcess
         self._ttk_style()
         self._build()
         self.background = background
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._size_seen, self._resize_freeze, self._resize_job = None, 0, None
+        self.bind("<Configure>", self._on_resize, add="+")
         self._steps = self._page_steps()
         if selftest:
             self._last_tick = time.perf_counter()
             self._stall_samples = []
             self.after(16, self._stall_tick)
             threading.Thread(target=self._watchdog, daemon=True).start()
-        if self.splash is not None:
-            self.splash.begin()                 # animate straight away; pages build between frames
-            self.after(1, self._build_slice)
-        else:
-            for _ in self._steps:
-                pass
-            self._finish_startup()
+        for _ in self._steps:                   # window is hidden, so build everything in one go
+            pass
+        self._finish_startup()
 
     def _finish_startup(self):
         background, selftest = self.background, self.selftest
@@ -1377,8 +1456,8 @@ class App(ctk.CTk):
                 self.withdraw()          # start-at-login: straight to the tray
             else:
                 self.iconify()
-        if self.splash is not None and self.splash.winfo_exists():
-            self.splash.ready = True            # let the logo fade out now the app is ready
+        if not background:
+            self._reveal()
         self.timings["window built"] = time.perf_counter() - self._t_start
         if selftest:
             self.after(9000, self._run_selftest)
@@ -1458,6 +1537,27 @@ class App(ctk.CTk):
             for kind in ("RAM", "GPU", "Cooler", "Case", "Keyboard", "Mouse", "Motherboard", "LED strip", "Other"):
                 dm.model_for(kind, 24, hex2rgb(P["CARD"])).render(dm.rainbow(24))
             steps.append("device models: ok")
+            sp = SplashProcess()
+            time.sleep(1.5)
+            up = sp.alive()
+            sp.ready()
+            for _ in range(60):
+                if not sp.alive():
+                    break
+                time.sleep(0.05)
+            if not up or sp.alive():
+                raise RuntimeError(f"Splash helper problem (started={up}, still running={sp.alive()})")
+            steps.append(f"splash helper: started, closed {time.perf_counter() - sp.t0 - 1.5:.1f} s after ready")
+            t0 = time.perf_counter()
+            self.state("zoomed" if eng.IS_WIN else "normal")
+            self.update()
+            self.after(200)
+            self.update()
+            self.state("normal")
+            self.update()
+            self.after(200)
+            self.update()
+            steps.append(f"maximize + restore: {(time.perf_counter() - t0 - 0.4) * 1000:.0f} ms")
             if eng.IS_WIN:                                   # tray: icon shows, X hides, Open brings it back
                 if self.tray is None:
                     raise RuntimeError("System tray icon was not created")
@@ -1523,6 +1623,59 @@ class App(ctk.CTk):
             pass
         self.engine.stop()
         os._exit(0 if ok else 1)
+
+    def _on_resize(self, e):
+        """Maximize / restore / drag-resize: pause drawing while the layout changes, then repaint once.
+        Pages you aren't looking at leave the layout and are laid out again when next opened."""
+        if e.widget is not self:
+            return
+        size = (e.width, e.height)
+        if self._size_seen is None or size == self._size_seen:
+            self._size_seen = size
+            return
+        self._size_seen = size
+        if not self._resize_freeze:
+            self._resize_freeze = fx.freeze(self) or -1
+            for n, pg in self.pages.items():
+                if n != self.current_page and pg.winfo_manager():
+                    pg.place_forget()
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(90, self._resize_done)
+
+    def _resize_done(self):
+        self._resize_job = None
+        self.update_idletasks()
+        h, self._resize_freeze = self._resize_freeze, 0
+        if h and h != -1:
+            fx.thaw(h)
+            self.update_idletasks()
+
+    def _reveal(self):
+        """Show the finished window: drawn while fully transparent, then faded in as the logo leaves."""
+        def show():
+            try:
+                self.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
+            self.deiconify()
+            self.update_idletasks()
+            self.update()                        # everything painted while still invisible
+            self._fade_in(0.0)
+        if self.splash_proc is not None and self.splash_proc.alive():
+            self.splash_proc.ready()             # logo plays its exit (about half a second)
+            self.after(320, show)
+        else:
+            show()
+
+    def _fade_in(self, a):
+        a = min(1.0, a + 0.12)
+        try:
+            self.attributes("-alpha", a)
+        except tk.TclError:
+            return
+        if a < 1.0:
+            self.after(16, lambda: self._fade_in(a))
 
     def _window_effects(self):
         fx.dark_titlebar(self)
@@ -3576,8 +3729,14 @@ class App(ctk.CTk):
 
     def _tray_action(self, what):
         if what == "show":
+            try:
+                self.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
             self.deiconify()
             self.state("normal")
+            self.update()                        # repaint everything while invisible (no white flash)
+            self._fade_in(0.4)
             self.lift()
             self.attributes("-topmost", True)
             self.after(200, lambda: self.attributes("-topmost", False))
@@ -3620,6 +3779,9 @@ class App(ctk.CTk):
 def main():
     if "--sensor-worker" in sys.argv:          # helper process that runs the hardware sensors
         hwm.sensor_worker()
+        return
+    if "--splash" in sys.argv:                 # helper process that plays the startup animation
+        run_splash()
         return
     if eng.IS_WIN:
         try:
