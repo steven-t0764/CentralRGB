@@ -230,7 +230,7 @@ class SmoothFrame(ctk.CTkFrame):
         self._r = max(2, int(corner_radius))
         self._fill = fg
         self._corners, self._imgs = [], []
-        self.after_idle(self._make_corners)
+        self._make_corners()
 
     @staticmethod
     def _color_behind(w):
@@ -249,27 +249,28 @@ class SmoothFrame(ctk.CTkFrame):
             w = w.master
         return P["BG"]
 
+    _corner_cache: dict = {}
+
     def _make_corners(self):
-        if not self.winfo_exists():
-            return
         r = self._r
         bg = self._color_behind(self.master)
         sc = ctk.ScalingTracker.get_widget_scaling(self) if hasattr(ctk, "ScalingTracker") else 1.0
         px = max(2, int(round(r * sc)))
-        big = Image.new("RGB", (2 * px * AA, 2 * px * AA), hex2rgb(bg))
-        ImageDraw.Draw(big).ellipse((0, 0, 2 * px * AA - 1, 2 * px * AA - 1), fill=hex2rgb(self._fill))
-        circle = big.resize((2 * px, 2 * px), Image.LANCZOS)
-        spots = ((0, 0, "nw", 0, 0), (px, 0, "ne", 1, 0), (0, px, "sw", 0, 1), (px, px, "se", 1, 1))
-        for c in self._corners:
-            c.destroy()
-        self._corners, self._imgs = [], []
-        for ox, oy, anchor, rx, ry in spots:
-            img = ImageTk.PhotoImage(circle.crop((ox, oy, ox + px, oy + px)))
+        key = (px, bg, self._fill)
+        if key not in SmoothFrame._corner_cache:             # 4 corner images per size/colour, made once
+            big = Image.new("RGB", (2 * px * AA, 2 * px * AA), hex2rgb(bg))
+            ImageDraw.Draw(big).ellipse((0, 0, 2 * px * AA - 1, 2 * px * AA - 1), fill=hex2rgb(self._fill))
+            circle = big.resize((2 * px, 2 * px), Image.LANCZOS)
+            SmoothFrame._corner_cache[key] = [ImageTk.PhotoImage(circle.crop((ox, oy, ox + px, oy + px)))
+                                              for ox, oy in ((0, 0), (px, 0), (0, px), (px, px))]
+        imgs = SmoothFrame._corner_cache[key]
+        spots = (("nw", 0, 0), ("ne", 1, 0), ("sw", 0, 1), ("se", 1, 1))
+        self._corners, self._imgs = [], imgs
+        for img, (anchor, rx, ry) in zip(imgs, spots):
             cv = tk.Canvas(self, width=px, height=px, highlightthickness=0, bd=0, bg=self._fill)
             cv.create_image(0, 0, anchor="nw", image=img)
             cv.place(relx=rx, rely=ry, anchor=anchor)
             self._corners.append(cv)
-            self._imgs.append(img)
         self.bind("<Map>", lambda e: [tk.Misc.lift(c) for c in self._corners], add="+")
         for c in self._corners:
             tk.Misc.lift(c)
@@ -535,6 +536,8 @@ class Sparkline(tk.Canvas):
     def set(self, values, vmax=None, color=None):
         self.set_multi([(values, color or self.color)], vmax)
 
+    _fill_cache: dict = {}
+
     def set_multi(self, series, vmax=None):
         h = self.winfo_height() if self.winfo_height() > 20 else self.h
         w = max(self.winfo_width(), 40)
@@ -542,25 +545,32 @@ class Sparkline(tk.Canvas):
         if not series:
             return
         top = vmax if vmax else max(max(max(v) for v, _ in series) * 1.2, 1e-6)
+        k = 2
+        W, H = w * k, h * k
         step = w / 59
         bgc = self.bgc
-
-        def draw(d, k, img):
-            for vals, color in series:
-                rgb = hex2rgb(color)
-                x0 = w - step * (len(vals) - 1)
-                pts = [((x0 + i * step) * k, (h - 3 - (h - 10) * min(v, top) / top) * k) for i, v in enumerate(vals)]
-                fill = Image.new("RGB", img.size, imix(bgc, rgb, 0.30))
-                grad = Image.linear_gradient("L").resize(img.size).point(lambda v: int((255 - v) * 0.55))
-                m = Image.new("L", img.size, 0)
-                ImageDraw.Draw(m).polygon([(pts[0][0], h * k)] + pts + [(pts[-1][0], h * k)], fill=255)
-                img.paste(fill, (0, 0), ImageChops.multiply(m, grad))
-                d.line(pts, fill=imix(bgc, rgb, 0.30), width=int(6 * k), joint="curve")   # glow
-                d.line(pts, fill=rgb, width=int(2 * k), joint="curve")
-
-        self._img = ImageTk.PhotoImage(aa_image(w, h, bgc, draw))
-        self.itemconfigure(self.img_item, image=self._img)
-
+        img = Image.new("RGB", (W, H), bgc)
+        d = ImageDraw.Draw(img)
+        for vals, color in series:
+            rgb = hex2rgb(color)
+            fkey = (W, H, color, bgc)
+            if fkey not in Sparkline._fill_cache:            # fading fill colour + fade mask, made once
+                grad = Image.linear_gradient("L").resize((W, H)).point(lambda v: int((255 - v) * 0.55))
+                Sparkline._fill_cache[fkey] = (Image.new("RGB", (W, H), imix(bgc, rgb, 0.30)), grad)
+            fill, grad = Sparkline._fill_cache[fkey]
+            x0 = w - step * (len(vals) - 1)
+            pts = [((x0 + i * step) * k, (h - 3 - (h - 10) * min(v, top) / top) * k) for i, v in enumerate(vals)]
+            m = Image.new("L", (W, H), 0)
+            ImageDraw.Draw(m).polygon([(pts[0][0], H)] + pts + [(pts[-1][0], H)], fill=255)
+            img.paste(fill, (0, 0), ImageChops.multiply(m, grad))
+            d.line(pts, fill=imix(bgc, rgb, 0.30), width=6 * k, joint="curve")   # glow
+            d.line(pts, fill=rgb, width=2 * k, joint="curve")
+        out = img.resize((w, h), Image.BILINEAR)
+        if self._img is None or (self._img.width(), self._img.height()) != (w, h):
+            self._img = ImageTk.PhotoImage(out)
+            self.itemconfigure(self.img_item, image=self._img)
+        else:
+            self._img.paste(out)
 
 class Ring(tk.Canvas):
     """Circular gauge: a smooth 270-degree arc with a two-colour gradient and rounded ends."""
@@ -574,40 +584,63 @@ class Ring(tk.Canvas):
         self.sub = self.create_text(size / 2, size / 2 + 17, text="", fill=P["MUTED"], font=(FONT, 9))
         self._draw(0, TEAL, CYAN)
 
+    _conic_cache: dict = {}
+
+    def _conic(self, c1, c2, n):
+        """Gradient ring image (cached): c1 at the start of the gauge, c2 at the end."""
+        key = (c1, c2, n)
+        if key not in Ring._conic_cache:
+            img = Image.new("RGB", (n, n), hex2rgb(c1))
+            d = ImageDraw.Draw(img)
+            a1, a2 = hex2rgb(c1), hex2rgb(c2)
+            for i in range(270):
+                d.pieslice((0, 0, n - 1, n - 1), 135 + i - 0.5, 135 + i + 1.5, fill=imix(a1, a2, i / 269))
+            d.pieslice((0, 0, n - 1, n - 1), 404, 496, fill=a2)
+            Ring._conic_cache[key] = img
+        return Ring._conic_cache[key]
+
     def _draw(self, pct, c1, c2):
         key = (round(pct * 2) / 2, c1, c2)
         if key == self._key:
             return
         self._key = key
+        k = 3
         s, wd = self.s, self.w
-        a1, a2 = hex2rgb(c1), hex2rgb(c2)
+        n = s * k
+        pad, lw = 3 * k, int(wd * k)
+        box = (pad, pad, n - pad, n - pad)
+        c = n / 2
+        r = (n - 2 * pad) / 2 - lw / 2                     # Pillow strokes inward: caps go on the centre line
 
-        def draw(d, k, _img):
-            pad = 3 * k                                      # outer edge of the stroke
-            box = (pad, pad, s * k - pad, s * k - pad)
-            cx = cy = s * k / 2
-            lw = int(wd * k)
-            r = (s * k - 2 * pad) / 2 - lw / 2               # Pillow strokes inward: caps go on the centre line
-            track = hex2rgb(P["TRACK"])
-            # PIL angles: 0 = 3 o'clock, clockwise. Gauge runs from 135 (bottom left) round to 405.
-            d.arc(box, 135, 405, fill=track, width=lw)
-            for ang in (135, 405):                                   # rounded ends of the track
-                x, y = cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))
-                d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=track)
-            if pct <= 0:
-                return
-            sweep = 270 * pct / 100
-            steps = max(2, int(sweep / 1.5))
-            for i in range(steps):                                   # gradient along the arc
-                t0, t1 = i / steps, (i + 1) / steps
-                col = imix(a1, a2, (t0 + t1) / 2)
-                d.arc(box, 135 + sweep * t0, 135 + sweep * t1 + 0.8, fill=col, width=lw)
-            for ang, col in ((135, a1), (135 + sweep, imix(a1, a2, 1.0))):
-                x, y = cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))
-                d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=col)
+        def cap(d, ang, fill):
+            x, y = c + r * math.cos(math.radians(ang)), c + r * math.sin(math.radians(ang))
+            d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=fill)
 
-        self._img = ImageTk.PhotoImage(aa_image(s, s, P["CARD"], draw))
-        self.itemconfigure(self.img_item, image=self._img)
+        tkey = (n, lw, P["CARD"], P["TRACK"])
+        if tkey not in Ring._conic_cache:                   # empty track, drawn once
+            base = Image.new("RGB", (n, n), hex2rgb(P["CARD"]))
+            track = Image.new("L", (n, n), 0)
+            td = ImageDraw.Draw(track)
+            td.arc(box, 135, 405, fill=255, width=lw)
+            cap(td, 135, 255)
+            cap(td, 405, 255)
+            base.paste(hex2rgb(P["TRACK"]), (0, 0, n, n), track)
+            Ring._conic_cache[tkey] = base
+        img = Ring._conic_cache[tkey].copy()
+        if pct > 0:
+            m = Image.new("L", (n, n), 0)
+            md = ImageDraw.Draw(m)
+            end = 135 + 270 * pct / 100
+            md.arc(box, 135, end, fill=255, width=lw)
+            cap(md, 135, 255)
+            cap(md, end, 255)
+            img.paste(self._conic(c1, c2, n), (0, 0), m)
+        out = img.resize((s, s), Image.LANCZOS)
+        if self._img is None:
+            self._img = ImageTk.PhotoImage(out)
+            self.itemconfigure(self.img_item, image=self._img)
+        else:
+            self._img.paste(out)                            # reuse the Tk image: much cheaper than a new one
 
     def set(self, pct, text, sub="", color=(TEAL, CYAN)):
         c1, c2 = color if isinstance(color, (tuple, list)) else (color, color)
@@ -820,8 +853,12 @@ class GlowBar(tk.Canvas):
         colour = strip.resize((w, 1), Image.BILINEAR).resize((w, h), Image.NEAREST)
         out = Image.composite(colour, self.bg_img, self.halo)
         out = Image.composite(colour, out, self.core)
-        self._photo = ImageTk.PhotoImage(out)
-        self.itemconfigure(self.item, image=self._photo)
+        ph = getattr(self, "_photo", None)
+        if ph is None or (ph.width(), ph.height()) != out.size:
+            self._photo = ImageTk.PhotoImage(out)
+            self.itemconfigure(self.item, image=self._photo)
+        else:
+            ph.paste(out)                                   # reuse the Tk image every frame
 
 
 class PillSwitcher(ctk.CTkFrame):
@@ -997,8 +1034,7 @@ class DeviceArt(tk.Canvas):
         if colors == self._last:                         # nothing changed: skip the redraw
             return
         self._last = colors
-        self._img = ImageTk.PhotoImage(self.model.render(colors))
-        self.itemconfigure(self._item, image=self._img)
+        self._img.paste(self.model.render(colors))         # same size every frame: reuse the Tk image
 
 
 class DeviceCard(SmoothFrame):
