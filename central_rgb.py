@@ -285,13 +285,19 @@ class SmoothFrame(ctk.CTkFrame):
             tk.Misc.lift(c)
 
 
+# CustomTkinter widgets call update_idletasks() on their canvas whenever they redraw. That forces a layout
+# pass of the whole window, so while pages are being built every new dropdown or scrollbar stalled the app.
+# Tk redraws them at the next idle moment anyway, so the forced pass is switched off.
+ctk.CTkCanvas.update_idletasks = lambda self: None
+
+
 class LightScroll(tk.Frame):
     """A light scrolling area (canvas + slim scrollbar + mouse wheel).
 
     CTkScrollableFrame is slow to create (the first one cost 0.7 s on a cold Windows start); this does the
     same job for a fraction of that. Put children in .inner."""
 
-    def __init__(self, master, height, bg=None):
+    def __init__(self, master, height=100, bg=None):
         bg = bg or P["CARD"]
         super().__init__(master, bg=bg, height=height)
         self.h = height
@@ -307,9 +313,21 @@ class LightScroll(tk.Frame):
         self.cv.configure(yscrollcommand=self._on_scroll)
         for w in (self, self.cv, self.inner, self.bar):
             w.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self._wheel), add="+")
-            w.bind("<Leave>", lambda e: self.unbind_all("<MouseWheel>"), add="+")
+            w.bind("<Leave>", self._leave, add="+")
         self.bar.bind("<B1-Motion>", self._drag)
         self.bar.bind("<Button-1>", self._drag)
+
+    def _leave(self, _e):
+        """Moving onto a child also sends <Leave>; only stop wheel scrolling when the pointer is really outside."""
+        try:
+            w = self.winfo_containing(*self.winfo_pointerxy())
+        except Exception:
+            w = None
+        while w is not None:
+            if w is self:
+                return
+            w = w.master
+        self.unbind_all("<MouseWheel>")
 
     def _sync(self):
         self.cv.configure(scrollregion=(0, 0, self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()))
@@ -1255,7 +1273,9 @@ class App(ctk.CTk):
         self._steps = self._page_steps()
         if selftest:
             self._last_tick = time.perf_counter()
+            self._stall_samples = []
             self.after(16, self._stall_tick)
+            threading.Thread(target=self._watchdog, daemon=True).start()
         if self.splash is not None:
             self.splash.begin()                 # animate straight away; pages build between frames
             self.after(1, self._build_slice)
@@ -1293,6 +1313,24 @@ class App(ctk.CTk):
         if self.selftest is not None:
             self.selftest_errors.append(msg)
         sys.stderr.write(msg)
+
+    def _watchdog(self):
+        """Self-test only: when the window stops responding for 200 ms, note what every thread is doing."""
+        sampled = None
+        while len(self._stall_samples) < 8:
+            time.sleep(0.05)
+            last = self._last_tick
+            if time.perf_counter() - last > 0.2 and sampled != last:
+                sampled = last
+                names = {t.ident: t.name for t in threading.enumerate()}
+                lines = []
+                for tid, fr in sys._current_frames().items():
+                    if tid == threading.get_ident():
+                        continue
+                    st = traceback.extract_stack(fr)[-4:]
+                    lines.append(f"    {names.get(tid, tid)}: " + " <- ".join(
+                        f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in reversed(st)))
+                self._stall_samples.append((time.perf_counter() - self._t_start, lines))
 
     def _stall_tick(self):
         now = time.perf_counter()
@@ -1354,6 +1392,9 @@ class App(ctk.CTk):
         for k, v in self.timings.items():
             steps.append(f"  {k}: {v * 1000:.0f} ms")
         steps.append("slow build steps: " + (", ".join(self.slow_steps) or "none"))
+        for at, lines in getattr(self, "_stall_samples", []):
+            steps.append(f"  stall at {at:.1f} s, threads were in:")
+            steps.extend(lines)
         worst = sorted(self._gaps, key=lambda g: -g[1])[:5]
         steps.append("longest UI freezes after the window appeared (at time: length):")
         for at, g in worst:
@@ -1926,9 +1967,10 @@ class App(ctk.CTk):
         yield
         self.dev_summary.pack(side="right")
         yield
-        self.dev_area = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        _sc_dev_area = LightScroll(p, bg=P["BG"])
+        self.dev_area = _sc_dev_area.inner
         yield
-        self.dev_area.pack(fill="both", expand=True)
+        _sc_dev_area.pack(fill="both", expand=True)
         yield
         self.dev_area.grid_columnconfigure((0, 1), weight=1, uniform="d")
         yield
@@ -2026,8 +2068,9 @@ class App(ctk.CTk):
         for sec, items in self.sysinfo:
             if sec == section:
                 rows += [(k, v) for k, v in items]
-        box = ctk.CTkScrollableFrame(det, fg_color=P["CARD"], corner_radius=0)
-        box.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        _sc_box = LightScroll(det, bg=P["CARD"])
+        box = _sc_box.inner
+        _sc_box.pack(fill="both", expand=True, padx=8, pady=(0, 10))
         for k, v in rows:
             if not str(v).strip():
                 continue
@@ -2148,9 +2191,10 @@ class App(ctk.CTk):
         self.fan_note.pack(fill="x", padx=20, pady=(10, 16))
 
         yield
-        self.fan_area = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        _sc_fan_area = LightScroll(p, bg=P["BG"])
+        self.fan_area = _sc_fan_area.inner
         yield
-        self.fan_area.pack(fill="both", expand=True, pady=(14, 0))
+        _sc_fan_area.pack(fill="both", expand=True, pady=(14, 0))
         yield
         self.fan_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="f")
         yield
@@ -2405,9 +2449,10 @@ class App(ctk.CTk):
         yield
         self.secondary(top, "Copy", self._copy_sysinfo, height=26, width=64, corner_radius=6).pack(side="right")
         yield
-        self.info_box = ctk.CTkScrollableFrame(left, fg_color=P["CARD"], corner_radius=0)
+        _sc_info_box = LightScroll(left, bg=P["CARD"])
+        self.info_box = _sc_info_box.inner
         yield
-        self.info_box.pack(fill="both", expand=True, padx=6, pady=(0, 10))
+        _sc_info_box.pack(fill="both", expand=True, padx=6, pady=(0, 10))
         yield
         self.label(self.info_box, "Gathering hardware details…", 12, color=P["MUTED"]).pack(pady=20)
         yield
@@ -2828,9 +2873,10 @@ class App(ctk.CTk):
         yield
         self.primary(row, "Save current", self._save_profile, height=40, width=140).pack(side="left", padx=(10, 0))
         yield
-        self.prof_area = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        _sc_prof_area = LightScroll(p, bg=P["BG"])
+        self.prof_area = _sc_prof_area.inner
         yield
-        self.prof_area.pack(fill="both", expand=True)
+        _sc_prof_area.pack(fill="both", expand=True)
         yield
         self.prof_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="p")
         yield
@@ -2860,9 +2906,10 @@ class App(ctk.CTk):
     def _page_settings(self, p):
         self.header(p, "Settings", "")
         yield
-        body = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        _sc_body = LightScroll(p, bg=P["BG"])
+        body = _sc_body.inner
         yield
-        body.pack(fill="both", expand=True)
+        _sc_body.pack(fill="both", expand=True)
 
         yield
         hr = ctk.CTkFrame(body, fg_color="transparent")
