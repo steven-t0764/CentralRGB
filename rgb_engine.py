@@ -120,6 +120,67 @@ CONFLICTING_APPS = {
 }
 
 
+def find_conflicts() -> dict[str, list[int]]:
+    """Running vendor RGB apps: friendly name -> process ids."""
+    out: dict[str, list[int]] = {}
+    try:
+        import psutil
+        for p in psutil.process_iter(["name"]):
+            name = (p.info["name"] or "").lower()
+            if name in CONFLICTING_APPS:
+                out.setdefault(CONFLICTING_APPS[name], []).append(p.pid)
+    except Exception:
+        pass
+    return out
+
+
+def close_conflicts(log=print) -> list[str]:
+    """Close the vendor RGB apps that hold the hardware, including their background services
+    (e.g. MSI's Mystic Light service keeps running after MSI Center is closed). Services are set to
+    start manually so they don't grab the hardware again at the next sign-in; the vendor app still
+    works if the user opens it. Returns what was done."""
+    done: list[str] = []
+    if not IS_WIN:
+        return done
+    try:
+        import psutil
+    except Exception:
+        return done
+    exes = set(CONFLICTING_APPS)
+    try:                                         # services first, so they can't restart the processes
+        for svc in psutil.win_service_iter():
+            try:
+                info = svc.as_dict()
+                binpath = (info.get("binpath") or "").lower()
+                if not any(e in binpath for e in exes):
+                    continue
+                name = info["name"]
+                if info.get("start_type") == "automatic":
+                    run_quiet(["sc", "config", name, "start=", "demand"])
+                    done.append(f"Service '{info.get('display_name') or name}' set to start manually")
+                if info.get("status") == "running":
+                    run_quiet(["sc", "stop", name])
+                    done.append(f"Stopped service '{info.get('display_name') or name}'")
+            except Exception:
+                continue
+    except Exception as e:
+        log(f"Couldn't check services: {e}")
+    time.sleep(1.0)
+    for p in psutil.process_iter(["name"]):
+        try:
+            name = (p.info["name"] or "").lower()
+            if name in CONFLICTING_APPS:
+                p.terminate()
+                try:
+                    p.wait(timeout=4)
+                except psutil.TimeoutExpired:
+                    p.kill()
+                done.append(f"Closed {CONFLICTING_APPS[name]} ({p.info['name']})")
+        except Exception:
+            continue
+    return done
+
+
 # --------------------------------------------------------------------------- helpers
 def app_dir() -> Path:
     """Folder the program lives in (next to the .exe when frozen)."""
