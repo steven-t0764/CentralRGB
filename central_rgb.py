@@ -1423,6 +1423,9 @@ class App(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self._size_seen, self._resize_freeze, self._resize_job = None, 0, None
         self.bind("<Configure>", self._on_resize, add="+")
+        self._was_minimized = False
+        self.bind("<Unmap>", self._on_unmap, add="+")
+        self.bind("<Map>", self._on_map, add="+")
         self._steps = self._page_steps()
         if selftest:
             self._last_tick = time.perf_counter()
@@ -1559,6 +1562,18 @@ class App(ctk.CTk):
             self.after(200)
             self.update()
             steps.append(f"maximize + restore: {(time.perf_counter() - t0 - 0.4) * 1000:.0f} ms")
+            self.iconify()
+            self.update()
+            self.after(300)
+            self.update()
+            self.deiconify()
+            for _ in range(40):
+                self.update()
+                time.sleep(0.02)
+            alpha = float(self.attributes("-alpha"))
+            if alpha < 0.99:
+                raise RuntimeError(f"Window not fully visible after restoring from minimized (alpha={alpha})")
+            steps.append("minimize + restore: window comes back fully drawn")
             if eng.IS_WIN:                                   # tray: icon shows, X hides, Open brings it back
                 if self.tray is None:
                     raise RuntimeError("System tray icon was not created")
@@ -1624,6 +1639,29 @@ class App(ctk.CTk):
             pass
         self.engine.stop()
         os._exit(0 if ok else 1)
+
+    def _on_unmap(self, e):
+        """Minimized: make the window transparent, so when it comes back nothing half-drawn can show."""
+        if e.widget is self and self.state() == "iconic":
+            self._was_minimized = True
+            try:
+                self.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
+
+    def _on_map(self, e):
+        """Restored from the taskbar: repaint while still transparent, then fade in (no black flash)."""
+        if e.widget is self and self._was_minimized:
+            self._was_minimized = False
+            self.after(1, self._repaint_and_show)
+
+    def _repaint_and_show(self):
+        try:
+            self.update_idletasks()
+            self.update()
+        except tk.TclError:
+            return
+        self._fade_in(0.25)
 
     def _on_resize(self, e):
         """Maximize / restore / drag-resize: pause drawing while the layout changes, then repaint once.
