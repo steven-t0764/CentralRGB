@@ -3490,7 +3490,10 @@ class App(ctk.CTk):
         else:
             cmd = [sys.executable, str(Path(__file__).resolve()), "--restarted"]
         try:
-            subprocess.Popen(cmd, creationflags=eng.NO_WINDOW if not getattr(sys, "frozen", False) else 0)
+            # env: the portable exe must give the new copy a clean start, or PyInstaller refuses it
+            # ("Security validation failure ... PID not found") once this copy has closed
+            subprocess.Popen(cmd, creationflags=eng.NO_WINDOW if not getattr(sys, "frozen", False) else 0,
+                             env=eng.child_env())
         except Exception as e:
             messagebox.showerror(eng.APP_NAME, f"Couldn't restart automatically ({e}). Please reopen Central RGB.")
         self._quit()
