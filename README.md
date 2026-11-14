@@ -11,7 +11,8 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
-- **Clean dark interface**: a high-contrast "Midnight" theme, a title bar that blends into the app on Windows 11, an optional accent that matches your lighting, and an adjustable window opacity
+- **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
+- **Vivid "Aurora" interface**: layered indigo panels with pink, violet and cyan accents, squared corners, a startup animation and a slightly translucent window
 - **Starts with Windows** (optional) and reapplies your lighting and fan profile at login
 - **Normal Windows installer**: choose where to install it, and get a desktop shortcut and an uninstaller
 
@@ -85,8 +86,8 @@ You can remove it separately from *Settings → Apps*.
     <td><img src="assets/screenshots/settings.png" alt="Settings page"><br><b>Settings</b>: system check, accent color, opacity, sensor and startup options, and an activity log</td>
   </tr>
   <tr>
+    <td><img src="assets/screenshots/overlay.png" alt="Overlay page"><br><b>Overlay</b>: in-game FPS and temperature readout with position, size and item options</td>
     <td><img src="assets/screenshots/profiles.png" alt="Profiles page"><br><b>Profiles</b>: save a look and load it again in one click</td>
-    <td align="center"><img src="assets/icon.png" alt="Central RGB icon" width="180"><br><b>Central RGB</b></td>
   </tr>
 </table>
 
@@ -113,7 +114,7 @@ flowchart LR
 
 A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sidebar and six pages. Pieces like the color wheel, LED strips, fan curve editor, ring gauges and graphs are custom-drawn on canvases, so they can animate smoothly.
 
-- A deep "Midnight" palette with one indigo-violet accent. Switch **Settings → Accent color** to **Match lighting** and the buttons, sliders and switches take on your lighting color, toned down so text stays readable.
+- A layered "Aurora" palette with a pink-to-cyan signature gradient. Switch **Settings → Accent color** to **Match lighting** and the buttons, sliders and switches take on your lighting color, toned down so text stays readable.
 - Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
 - Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
 
@@ -207,6 +208,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Fans | Profiles, custom curve, live CPU and GPU temperatures, a manual slider per fan (tap **MANUAL ↺** to go back to the curve) |
 | Monitor → Overview | CPU / GPU / RAM gauges and graphs, network up/down, drive usage, uptime, power draw |
 | Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
+| Overlay | Turn on the in-game overlay, choose its corner and size, and pick what it shows (FPS, 1% low, frame time, CPU, GPU). It works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
 | Profiles | Save the current look under a name, then load or delete it later |
 | Settings | System check, accent color (Central or match lighting), opacity, RAM temperature reading, frosted glass (experimental), start with Windows, reapply lighting on launch, activity log |
 
@@ -263,6 +265,7 @@ CentralRGB/
 ├── central_rgb.py        # window, pages and custom widgets
 ├── rgb_engine.py         # OpenRGB setup, lighting effects, system check, settings
 ├── hw_monitor.py         # LibreHardwareMonitor sensors, fan logic, system details
+├── fps_overlay.py        # in-game FPS overlay (PresentMon)
 ├── win_effects.py        # title bar colors, opacity, experimental glass
 ├── central_rgb.ico/.png  # app icon
 ├── central_rgb.iss       # Inno Setup installer script
@@ -280,6 +283,7 @@ CentralRGB/
 |---|---|
 | [OpenRGB](https://openrgb.org) | Talking to RGB hardware. GPL-2.0, downloaded on first run and run as a separate program, not bundled. |
 | [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) | Sensors and fan control. MPL-2.0, downloaded on first run, not bundled. |
+| [PresentMon](https://github.com/GameTechDev/PresentMon) | FPS measurement for the overlay. MIT, downloaded the first time the overlay is turned on. |
 | [PawnIO](https://pawnio.eu) | Low-level hardware access driver. The setup downloads and installs it if missing. |
 | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | Modern widgets |
 | [openrgb-python](https://github.com/jath03/openrgb-python) | OpenRGB SDK client |
