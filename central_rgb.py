@@ -2392,6 +2392,20 @@ class App(ctk.CTk):
         yield
         self.dev_summary.pack(side="right")
         yield
+        # warning when vendor RGB apps are holding the hardware, with a button to close them
+        self.conflict_bar = SmoothFrame(p, fg_color="#2a2112", corner_radius=8)
+        cb_txt = ctk.CTkFrame(self.conflict_bar, fg_color="transparent")
+        self.conflict_btn = ctk.CTkButton(self.conflict_bar, text="Close them", width=110, height=32, corner_radius=16,
+                                          font=F(13, "bold"), fg_color=WARN, hover_color="#ffd166", text_color="#1a1a1a",
+                                          command=self._close_conflicts)
+        self.conflict_btn.pack(side="right", padx=14, pady=12)
+        cb_txt.pack(side="left", fill="x", expand=True, padx=16, pady=10)
+        self.conflict_title = self.label(cb_txt, "", 13, "bold", anchor="w", color="#ffd166")
+        self.conflict_title.pack(fill="x")
+        self.label(cb_txt, "They can hide devices from Central RGB (on MSI boards, Mystic Light holds the motherboard "
+                           "and RAM lighting).", 12, color=P["MUTED"], anchor="w", justify="left",
+                   wraplength=760).pack(fill="x")
+        yield
         _sc_dev_area = LightScroll(p, bg=P["BG"])
         self.dev_area = _sc_dev_area.inner
         yield
@@ -3677,6 +3691,8 @@ class App(ctk.CTk):
                     self._fill_devices(item[1])
                 elif kind == "checks":
                     self._show_checks(item[1])
+                elif kind == "conflicts":
+                    self._update_conflict_bar(item[1])
                 elif kind == "need_openrgb":
                     self._ask_for_openrgb()
                 elif kind == "disconnected":
@@ -3699,6 +3715,7 @@ class App(ctk.CTk):
     def _run_check(self):
         res = eng.system_check()
         self.q.put(("checks", res))
+        self.q.put(("conflicts", eng.find_conflicts()))
         for level, msg in res:
             self.log(msg, level)
 
@@ -3746,9 +3763,52 @@ class App(ctk.CTk):
             self.engine.paused = False
             self.engine.force_reapply()
 
+    def _update_conflict_bar(self, found):
+        self._conflicts = found
+        if not hasattr(self, "conflict_bar"):
+            return
+        if found:
+            self.conflict_title.configure(text="Other RGB software is running: " + ", ".join(sorted(found)))
+            if not self.conflict_bar.winfo_manager():
+                self.conflict_bar.pack(fill="x", pady=(0, 12), before=self.dev_area.master.master)
+        elif self.conflict_bar.winfo_manager():
+            self.conflict_bar.pack_forget()
+
+    def _close_conflicts(self):
+        names = sorted(getattr(self, "_conflicts", {}) or eng.find_conflicts())
+        if not names:
+            self._update_conflict_bar({})
+            return
+        if not messagebox.askyesno(eng.APP_NAME, "Close these so Central RGB can reach your hardware?\n\n  "
+                                   + "\n  ".join(names) + "\n\nTheir background services are stopped and set to start "
+                                   "manually, so they don't take the hardware back at the next sign-in. You can still "
+                                   "open those apps yourself any time. Central RGB then re-detects your devices."):
+            return
+        self.conflict_btn.configure(state="disabled", text="Closing…")
+
+        def work():
+            for line in eng.close_conflicts(self.log):
+                self.log(line, "ok")
+            left = eng.find_conflicts()
+            self.q.put(("call", lambda: (self.conflict_btn.configure(state="normal", text="Close them"),
+                                         self._update_conflict_bar(left))))
+            time.sleep(1.5)
+            self._full_rescan()
+        self._bg(work)
+
     def _full_rescan(self):
         """Rescan button: make OpenRGB look for hardware again. The hidden OpenRGB this app runs is
         restarted (it only detects devices when it starts); an OpenRGB you run yourself is just refreshed."""
+        if not hasattr(self, "_rescan_lock"):
+            self._rescan_lock = threading.Lock()
+        if not self._rescan_lock.acquire(blocking=False):
+            return                           # a rescan is already running
+        try:
+            self._full_rescan_locked()
+        finally:
+            self._rescan_lock.release()
+
+    def _full_rescan_locked(self):
         if not self.manager.started_by_us() and not self.manager.own_copies():
             self._rescan()                   # an OpenRGB you run yourself: just refresh its list
             return
@@ -4056,6 +4116,11 @@ class App(ctk.CTk):
         self._quit()
 
     def _quit(self):
+        try:
+            self.withdraw()                      # disappear immediately; shutting things down takes a moment
+            self.update_idletasks()
+        except tk.TclError:
+            pass
         self.settings["state"] = self._current_state()
         if self.tray is not None:
             self.tray.stop()
