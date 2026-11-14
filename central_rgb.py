@@ -1537,6 +1537,7 @@ class App(ctk.CTk):
             for kind in ("RAM", "GPU", "Cooler", "Case", "Keyboard", "Mouse", "Motherboard", "LED strip", "Other"):
                 dm.model_for(kind, 24, hex2rgb(P["CARD"])).render(dm.rainbow(24))
             steps.append("device models: ok")
+            steps.append(f"windows accent read as: {windows_accent('(not found)')}")
             sp = SplashProcess()
             time.sleep(1.5)
             up = sp.alive()
@@ -2228,7 +2229,7 @@ class App(ctk.CTk):
         yield
         bar.pack(fill="x", pady=(0, 14))
         yield
-        self.primary(bar, "⟳  Rescan", lambda: self._bg(self._rescan), height=38, width=120).pack(side="left")
+        self.primary(bar, "⟳  Rescan", lambda: self._bg(self._full_rescan), height=38, width=120).pack(side="left")
         yield
         self.secondary(bar, "All on", lambda: self._set_all_devices(True), height=38, width=90).pack(side="left", padx=8)
         yield
@@ -3337,9 +3338,20 @@ class App(ctk.CTk):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))
         mode = self.settings.data.get("accent_mode", "cyan")
         match = mode == "match"
+        if match and self.effect not in eng.USES_COLOR and self.effect != "Off":
+            # animated effects: their main colour = average hue of the LEDs over time, weighted by how vivid
+            # they are. Effects that use every colour (rainbows) average out to nothing and keep cyan.
+            sx = sy = wt = 0.0
+            for tt in (0.0, 0.7, 1.4, 2.1, 2.8):
+                for col in eng.compute_colors(self.effect, self.color, 100, 50, 24, tt):
+                    hh, ss, vv = colorsys.rgb_to_hsv(*(x / 255 for x in col))
+                    k = ss * vv
+                    sx, sy, wt = sx + k * math.cos(hh * 2 * math.pi), sy + k * math.sin(hh * 2 * math.pi), wt + k
+            spread_ok = wt > 0 and math.hypot(sx, sy) / wt > 0.45
+            h, s = (math.atan2(sy, sx) / (2 * math.pi)) % 1.0, (1.0 if spread_ok else 0.0)
         if mode == "windows":
             acc = windows_accent(CYAN)
-        elif not match or self.effect not in eng.USES_COLOR or s < 0.25:
+        elif not match or s < 0.25:
             acc = DEFAULT_ACCENT
         else:
             # a light, softened shade like Windows' own dark-mode accents
@@ -3472,10 +3484,19 @@ class App(ctk.CTk):
         for level, msg in res:
             self.log(msg, level)
 
+    def _wait_for_sensors(self, limit=25.0):
+        """RAM and graphics-card lighting are found over the SMBus, which the sensor library also uses
+        while it loads. Scanning at the same time makes OpenRGB miss those devices, so wait for it."""
+        end = time.time() + limit
+        while time.time() < end and self.monitor.snapshot()["status"] == "starting":
+            time.sleep(0.2)
+
     def _connect_flow(self):
         if self.manager.replace_visible_copy():
             time.sleep(1.0)                  # let its server port close
         if not self.manager.server_running():
+            self.status("Waiting for sensors…")
+            self._wait_for_sensors()
             exe = self.manager.find_exe()
             if not exe:
                 self.status("OpenRGB needed")
@@ -3498,6 +3519,28 @@ class App(ctk.CTk):
         if self.settings["restore_on_start"] or self.background:
             self.engine.paused = False
             self.engine.force_reapply()
+
+    def _full_rescan(self):
+        """Rescan button: make OpenRGB look for hardware again. The hidden OpenRGB this app runs is
+        restarted (it only detects devices when it starts); an OpenRGB you run yourself is just refreshed."""
+        if not self.manager.started_by_us():
+            self._rescan()
+            return
+        self.status("Re-detecting hardware…")
+        self.log("Re-detecting hardware (restarting the hidden OpenRGB)…")
+        exe = Path(self.manager.proc.args[0]) if isinstance(self.manager.proc.args, (list, tuple)) else self.manager.find_exe()
+        self.engine.disconnect()
+        self.manager.stop()
+        for _ in range(25):
+            if not self.manager.server_running():
+                break
+            time.sleep(0.2)
+        self._wait_for_sensors()
+        if not self.manager.launch(exe):
+            self.status("OpenRGB problem - see Settings", "bad")
+            return
+        if self.engine.connect():
+            self._rescan(initial=True)
 
     def _rescan(self, initial=False, quiet=False):
         if not self.engine.client:

@@ -236,6 +236,9 @@ class OpenRGBManager:
             self.log("Closed a visible OpenRGB window so it can run hidden in the background.")
         return closed
 
+    def started_by_us(self) -> bool:
+        return bool(self.proc and self.proc.poll() is None)
+
     def stop(self):
         """Close the hidden OpenRGB this app started (when quitting)."""
         if self.proc and self.proc.poll() is None:
@@ -614,6 +617,15 @@ class LightingEngine(threading.Thread):
             self.broken.clear()
             self.dirty = True
             return True
+
+    def disconnect(self):
+        with self.lock:
+            try:
+                if self.client:
+                    self.client.disconnect()
+            except Exception:
+                pass
+            self.client = None
 
     def devices(self) -> list:
         with self.lock:
