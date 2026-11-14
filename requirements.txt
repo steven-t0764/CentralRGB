@@ -3,3 +3,4 @@ customtkinter>=5.2
 pillow>=10
 psutil>=5.9
 pythonnet>=3.0
+pystray>=0.19

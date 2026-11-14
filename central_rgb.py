@@ -1224,6 +1224,66 @@ class FanCard(SmoothFrame):
 
 
 # ----------------------------------------------------------------------------- main window
+# ---------------------------------------------------------------- system tray + single instance
+INSTANCE_PORT = 47616          # localhost only: a second launch tells the running copy to show itself
+
+
+class Tray:
+    """Notification-area (system tray) icon. Clicks arrive on pystray's thread, so they're passed to the
+    app through its queue and handled on the UI thread."""
+
+    def __init__(self, app, image):
+        import pystray                      # Windows backend; imported here so other platforms still start
+        self.app = app
+        menu = pystray.Menu(
+            pystray.MenuItem("Open Central RGB", lambda *_: app.q.put(("tray", "show")), default=True),
+            pystray.MenuItem("Turn lights off", lambda *_: app.q.put(("tray", "off"))),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Quit Central RGB", lambda *_: app.q.put(("tray", "quit"))))
+        self.icon = pystray.Icon("CentralRGB", image.resize((64, 64), Image.LANCZOS), eng.APP_NAME, menu)
+        self.icon.run_detached()
+
+    def notify(self, text):
+        try:
+            self.icon.notify(text, eng.APP_NAME)
+        except Exception:
+            pass
+
+    def stop(self):
+        try:
+            self.icon.stop()
+        except Exception:
+            pass
+
+
+def claim_single_instance(app_q) -> bool:
+    """Become the running copy. Returns False if Central RGB is already running (it is asked to show itself)."""
+    import socket
+    try:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", INSTANCE_PORT))
+        srv.listen(4)
+    except OSError:
+        try:
+            with socket.create_connection(("127.0.0.1", INSTANCE_PORT), timeout=2) as c:
+                c.sendall(b"show")
+        except OSError:
+            return True                     # port taken by something else: just run
+        return False
+
+    def serve():
+        while True:
+            try:
+                conn, _ = srv.accept()
+                with conn:
+                    if conn.recv(16).startswith(b"show"):
+                        app_q.put(("tray", "show"))
+            except OSError:
+                return
+    threading.Thread(target=serve, daemon=True).start()
+    return True
+
+
 class App(ctk.CTk):
     TEST_BACKEND = None   # tests can inject a simulated sensor backend
 
@@ -1296,6 +1356,12 @@ class App(ctk.CTk):
 
     def _finish_startup(self):
         background, selftest = self.background, self.selftest
+        self.tray = None
+        if eng.IS_WIN and self._icon_img is not None:
+            try:
+                self.tray = Tray(self, self._icon_img)
+            except Exception as e:
+                self.log(f"System tray icon unavailable: {e}", "warn")
         self._sync_ui_from_state()
         self.show_page("Home", animate=False)
         threading.Thread(target=self._check_autostart, daemon=True).start()
@@ -1307,7 +1373,10 @@ class App(ctk.CTk):
             self.fps.start()
         self.after(60, self._window_effects)
         if background:
-            self.iconify()
+            if self.tray is not None:
+                self.withdraw()          # start-at-login: straight to the tray
+            else:
+                self.iconify()
         if self.splash is not None and self.splash.winfo_exists():
             self.splash.ready = True            # let the logo fade out now the app is ready
         self.timings["window built"] = time.perf_counter() - self._t_start
@@ -1389,6 +1458,22 @@ class App(ctk.CTk):
             for kind in ("RAM", "GPU", "Cooler", "Case", "Keyboard", "Mouse", "Motherboard", "LED strip", "Other"):
                 dm.model_for(kind, 24, hex2rgb(P["CARD"])).render(dm.rainbow(24))
             steps.append("device models: ok")
+            if eng.IS_WIN:                                   # tray: icon shows, X hides, Open brings it back
+                if self.tray is None:
+                    raise RuntimeError("System tray icon was not created")
+                for _ in range(40):
+                    if self.tray.icon.visible:
+                        break
+                    time.sleep(0.05)
+                self.settings["tray_hint_shown"] = True
+                self.on_close()
+                self.update()
+                hidden = self.state() == "withdrawn"
+                self._tray_action("show")
+                self.update()
+                if not hidden or self.state() != "normal":
+                    raise RuntimeError(f"Close-to-tray failed (hidden={hidden}, state={self.state()})")
+                steps.append(f"tray: icon visible={self.tray.icon.visible}, X hides the window, Open restores it")
             self.overlay_preview.render(self.overlay_cfg, {"name": "test", "fps": 144, "low": 110, "ms": 6.9}, {})
             steps.append("overlay preview: ok")
             res = eng.system_check()
@@ -2962,6 +3047,17 @@ class App(ctk.CTk):
         yield
         self.setting_row(body, "\ue790", "◐", "Accent color", "Cyan, your Windows accent color, or follow your lighting color", accent)
         yield
+        def closing(row):
+            self.close_seg = PillSwitcher(row, values=["Keep running in tray", "Quit"], command=self._set_close_mode,
+                                          height=32, font=F(13), corner_radius=6, fg_color=P["CARD2"],
+                                          unselected_color=P["CARD2"], unselected_hover_color=P["BTN_HOVER"],
+                                          selected_color=self.accent, selected_hover_color=self.accent,
+                                          text_color=P["TEXT"])
+            self.close_seg.set("Keep running in tray" if self.settings.data.get("close_to_tray", True) else "Quit")
+            self.accent_widgets.append(("seg", self.close_seg))
+            return self.close_seg
+        self.setting_row(body, "\ue8bb", "✕", "Close button", "What the X does: hide to the system tray, or quit", closing)
+        yield
         self.setting_row(body, "\ue768", "▶", "Startup animation", "Show the logo animation when the app opens",
                          switch("anim_sw", self.settings.data.get("animations", True),
                                 lambda: self.settings.__setitem__("animations", self.anim_sw.get() == 1)))
@@ -3158,6 +3254,8 @@ class App(ctk.CTk):
                     self.logbox.insert("end", time.strftime("%H:%M:%S  ") + prefix + item[1] + "\n", item[2] or None)
                     self.logbox.see("end")
                     self.logbox.configure(state="disabled")
+                elif kind == "tray":
+                    self._tray_action(item[1])
                 elif kind == "status":
                     dot, oval, sub = self.status_rows["rgb"]
                     sub.configure(text=item[1])
@@ -3192,6 +3290,8 @@ class App(ctk.CTk):
             self.log(msg, level)
 
     def _connect_flow(self):
+        if self.manager.replace_visible_copy():
+            time.sleep(1.0)                  # let its server port close
         if not self.manager.server_running():
             exe = self.manager.find_exe()
             if not exe:
@@ -3431,6 +3531,33 @@ class App(ctk.CTk):
 
     # ---------------------------------------------------------------- closing
     def on_close(self):
+        """The X button: hide to the system tray (keeps lighting and fan control running), or quit."""
+        if self.tray is not None and self.settings.data.get("close_to_tray", True):
+            self.settings["state"] = self._current_state()
+            self.withdraw()                                  # off the taskbar, still running
+            if not self.settings.data.get("tray_hint_shown"):
+                self.settings["tray_hint_shown"] = True
+                self.tray.notify("Still running in the system tray. Right-click the icon to open or quit.")
+            return
+        self._confirm_quit()
+
+    def _set_close_mode(self, value):
+        self.settings["close_to_tray"] = value != "Quit"
+
+    def _tray_action(self, what):
+        if what == "show":
+            self.deiconify()
+            self.state("normal")
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(200, lambda: self.attributes("-topmost", False))
+            self.focus_force()
+        elif what == "off":
+            self._set_effect("Off")
+        elif what == "quit":
+            self._quit()
+
+    def _confirm_quit(self):
         s = self.monitor.snapshot()
         fan_custom = s["profile"] != "Auto" or s["manual"]
         if self.effect in eng.ANIMATED or fan_custom:
@@ -3447,10 +3574,16 @@ class App(ctk.CTk):
             if ans:
                 self.iconify()
                 return
+        self._quit()
+
+    def _quit(self):
         self.settings["state"] = self._current_state()
+        if self.tray is not None:
+            self.tray.stop()
         self.engine.stop()
         self.fps.stop()
         self.monitor.stop()       # hands fans back to the BIOS
+        self.manager.stop()       # the hidden OpenRGB this app started
         self.destroy()
 
 
@@ -3476,7 +3609,15 @@ def main():
             Path(selftest).write_text("Central RGB self-test: FAILED\n" + traceback.format_exc(), encoding="utf-8")
             os._exit(1)
         return
-    App(background="--background" in sys.argv).mainloop()
+    q: queue.Queue = queue.Queue()
+    if not claim_single_instance(q):
+        return                                   # already running: it has been asked to show its window
+    app = App(background="--background" in sys.argv)
+    while not q.empty():                         # a "show" that arrived while starting
+        app.q.put(q.get())
+    _forward = threading.Thread(target=lambda: [app.q.put(q.get()) for _ in iter(int, 1)], daemon=True)
+    _forward.start()
+    app.mainloop()
 
 
 if __name__ == "__main__":

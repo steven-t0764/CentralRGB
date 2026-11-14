@@ -210,6 +210,41 @@ class OpenRGBManager:
         self.log = log
         self.proc: subprocess.Popen | None = None
 
+    def replace_visible_copy(self) -> bool:
+        """An OpenRGB that Central RGB started earlier with its window / tray icon (older versions used
+        --startminimized) is closed so a hidden copy can take its place. An OpenRGB the user runs
+        themselves is left alone. Returns True if one was closed."""
+        try:
+            import psutil
+        except Exception:
+            return False
+        ours = str(install_dir()).lower()
+        closed = False
+        for p in psutil.process_iter(["name", "exe", "cmdline"]):
+            try:
+                if (p.info["name"] or "").lower() != "openrgb.exe":
+                    continue
+                cmd = [c.lower() for c in (p.info["cmdline"] or [])]
+                exe = (p.info["exe"] or "").lower()
+                if "--startminimized" in cmd or (exe.startswith(ours) and "--noautoconnect" not in cmd):
+                    p.terminate()
+                    p.wait(timeout=5)
+                    closed = True
+            except Exception:
+                continue
+        if closed:
+            self.log("Closed a visible OpenRGB window so it can run hidden in the background.")
+        return closed
+
+    def stop(self):
+        """Close the hidden OpenRGB this app started (when quitting)."""
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=5)
+            except Exception:
+                pass
+
     @staticmethod
     def server_running(timeout=0.5) -> bool:
         try:
