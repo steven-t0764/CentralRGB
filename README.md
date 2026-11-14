@@ -15,7 +15,7 @@
 A free and open-source Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
-- **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** with picture previews: Calm Water, Rain, Side to Side, Crimson, RGBarz, Gradient Wave, Neon Storm and Black Ice
+- **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** with picture previews: Tide, Drizzle, Sweep, Ember, Pulse, Drift, Volt and Frost
 - **Per-device lighting**: click Customize on a device to see a drawing of it with live LEDs and its exact model details, and give it its own effect, color and brightness
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details

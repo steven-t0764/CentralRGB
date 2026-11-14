@@ -179,8 +179,8 @@ def black_ice():
     return glow(img, 6, 0.6)
 
 
-ART = {"calm-water": calm_water, "rain": rain, "side-to-side": side_to_side, "crimson": crimson,
-       "rgbarz": rgbarz, "gradient-wave": gradient_wave, "neon-storm": neon_storm, "black-ice": black_ice}
+ART = {"tide": calm_water, "drizzle": rain, "sweep": side_to_side, "ember": crimson,
+       "pulse": rgbarz, "drift": gradient_wave, "volt": neon_storm, "frost": black_ice}
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)

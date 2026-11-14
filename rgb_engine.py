@@ -52,7 +52,8 @@ IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW for helper commands
 
 BASIC_EFFECTS = ["Static", "Breathing", "Color Cycle", "Rainbow Wave", "Off"]
-PRESET_EFFECTS = ["Calm Water", "Rain", "Side to Side", "Crimson", "RGBarz", "Gradient Wave", "Neon Storm", "Black Ice"]
+PRESET_EFFECTS = ["Tide", "Drizzle", "Sweep", "Ember", "Pulse", "Drift", "Volt", "Frost"]
+RENAMED = {'Calm Water': 'Tide', 'Rain': 'Drizzle', 'Side to Side': 'Sweep', 'Crimson': 'Ember', 'RGBarz': 'Pulse', 'Gradient Wave': 'Drift', 'Neon Storm': 'Volt', 'Black Ice': 'Frost'}   # older preset names, kept so saved settings still work
 EFFECTS = BASIC_EFFECTS[:4] + PRESET_EFFECTS + ["Off"]
 ANIMATED = set(EFFECTS) - {"Static", "Off"}
 USES_COLOR = {"Static", "Breathing"}        # effects that use the colour you pick
@@ -169,8 +170,19 @@ class Settings:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 self.data.update(loaded)
+                self._migrate()
         except Exception:
             pass
+
+    def _migrate(self):
+        """Rename old preset effect names in saved lighting, profiles and per-device settings."""
+        def fix(st):
+            if isinstance(st, dict) and st.get("effect") in RENAMED:
+                st["effect"] = RENAMED[st["effect"]]
+        fix(self.data.get("state"))
+        for group in ("profiles", "device_overrides"):
+            for st in (self.data.get(group) or {}).values():
+                fix(st)
 
     def __getitem__(self, k):
         return self.data[k]
@@ -356,6 +368,7 @@ def system_check() -> list[tuple[str, str]]:
 def compute_colors(effect: str, color, brightness: int, speed: int, n: int, t: float,
                    offset: float = 0.0) -> list[tuple[int, int, int]]:
     """Pure function: colors for n LEDs at time t."""
+    effect = RENAMED.get(effect, effect)
     n = max(n, 1)
     b = max(0, min(100, brightness)) / 100.0
     f = 0.1 + max(0, min(100, speed)) / 100.0 * 1.4  # 0.1 .. 1.5 Hz-ish
@@ -399,12 +412,12 @@ def _palette(stops, x):
 def _preset(effect, n, t, offset=0.0):
     """Colours for the preset effects. t is already scaled by the speed setting."""
     out = []
-    if effect == "Calm Water":            # slow overlapping blue-teal waves
+    if effect == "Tide":            # slow overlapping blue-teal waves
         for i in range(n):
             x = i / n
             w = 0.5 + 0.25 * math.sin(x * 9 + t * 0.9 + offset * 6) + 0.25 * math.sin(x * 4 - t * 0.6)
             out.append(_mix((0, 25, 90), (70, 210, 255), w))
-    elif effect == "Rain":                # colourful drops that flash and fade on a dark background
+    elif effect == "Drizzle":                # colourful drops that flash and fade on a dark background
         for i in range(n):
             period = 1.2 + 2.2 * _rnd(i, 1 + offset)
             tt = t * 1.3 + _rnd(i, 2) * period
@@ -412,18 +425,18 @@ def _preset(effect, n, t, offset=0.0):
             hue = _rnd(i, 10 + cycle)
             drop = [c * 255 for c in colorsys.hsv_to_rgb(hue, 0.9, 1)]
             out.append(_mix((0, 4, 14), drop, math.exp(-x * 3.5)))
-    elif effect == "Side to Side":        # a rainbow bar sweeping left and right
+    elif effect == "Sweep":        # a rainbow bar sweeping left and right
         pos = 0.5 + 0.5 * math.sin(t * 1.6 + offset * 6)
         for i in range(n):
             x = (i + 0.5) / n
             col = [c * 255 for c in colorsys.hsv_to_rgb((x * 0.9 + t * 0.05) % 1.0, 1, 1)]
             k = max(0.0, 1 - abs(x - pos) * 3.2) if n > 1 else 1.0
             out.append(_mix(_mix((0, 0, 0), col, 0.12), col, k))
-    elif effect == "Crimson":             # deep red embers that glow at their own pace
+    elif effect == "Ember":             # deep red embers that glow at their own pace
         for i in range(n):
             v = 0.5 + 0.5 * math.sin(t * (1.0 + 2.2 * _rnd(i, 3)) + _rnd(i, 4 + offset) * 6.28)
             out.append(_mix((70, 0, 4), (255, 38, 20), v * v))
-    elif effect == "RGBarz":              # equaliser bar bouncing green to yellow to red
+    elif effect == "Pulse":              # equaliser bar bouncing green to yellow to red
         level = 0.12 + 0.88 * abs(math.sin(t * 2.3 + offset * 9) * math.sin(t * 0.9 + 1.3) + 0.25 * math.sin(t * 5.1)) / 1.25
         for i in range(n):
             x = (i + 0.5) / n
@@ -432,10 +445,10 @@ def _preset(effect, n, t, offset=0.0):
                 out.append(_mix((0, 40, 10), _palette([(0, 255, 60), (255, 230, 0), (255, 40, 0)], level * 0.66), 1))
             else:
                 out.append(col if x <= level else _mix((0, 0, 0), col, 0.06))
-    elif effect == "Gradient Wave":       # smooth cyan, blue, violet, pink gradient drifting along
+    elif effect == "Drift":       # smooth cyan, blue, violet, pink gradient drifting along
         stops = [(0, 220, 255), (40, 90, 255), (170, 60, 255), (255, 60, 190)]
         out = [_palette(stops, i / n * 0.8 + t * 0.12 + offset) for i in range(n)]
-    elif effect == "Neon Storm":          # purple-blue clouds with lightning flashes
+    elif effect == "Volt":          # purple-blue clouds with lightning flashes
         slot, x = int(t * 1.4), (t * 1.4) % 1.0
         strike = _rnd(slot, 7) < 0.45
         centre, flash = _rnd(slot, 8), math.exp(-x * 7) * (0.6 + 0.4 * math.sin(x * 60))
@@ -444,7 +457,7 @@ def _preset(effect, n, t, offset=0.0):
             base = _mix((70, 0, 160), (20, 40, 220), 0.5 + 0.5 * math.sin(p * 5 + t * 0.7 + offset * 6))
             k = flash * max(0.0, 1 - abs(p - centre) * 2.5) if (strike and n > 1) else (flash if strike else 0)
             out.append(_mix(base, (230, 240, 255), k))
-    elif effect == "Black Ice":           # near-black with cold glints
+    elif effect == "Frost":           # near-black with cold glints
         for i in range(n):
             v = (0.5 + 0.5 * math.sin(t * (0.6 + 1.5 * _rnd(i, 5)) + _rnd(i, 6 + offset) * 6.28)) ** 6
             out.append(_mix((0, 10, 22), (150, 235, 255), v))

@@ -32,7 +32,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageFilter, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageTk
 
 import fps_overlay as fpo
 import hw_monitor as hwm
@@ -79,10 +79,10 @@ MONO = "Cascadia Mono" if eng.IS_WIN else "DejaVu Sans Mono"
 SWATCHES = [(255, 0, 0), (255, 90, 0), (255, 200, 0), (0, 255, 60), (0, 255, 255),
             (0, 70, 255), (150, 0, 255), (255, 0, 160), (255, 255, 255)]
 EFFECT_INFO = {"Static": "Solid color", "Breathing": "Slow fade", "Color Cycle": "Shifting hue",
-               "Rainbow Wave": "Flowing rainbow", "Off": "Lights off", "Calm Water": "Slow blue waves",
-               "Rain": "Falling color drops", "Side to Side": "Sweeping rainbow bar", "Crimson": "Glowing red embers",
-               "RGBarz": "Bouncing equalizer", "Gradient Wave": "Drifting gradient", "Neon Storm": "Lightning flashes",
-               "Black Ice": "Cold glints"}
+               "Rainbow Wave": "Flowing rainbow", "Off": "Lights off", "Tide": "Slow blue waves",
+               "Drizzle": "Falling color drops", "Sweep": "Sweeping rainbow bar", "Ember": "Glowing red embers",
+               "Pulse": "Bouncing equalizer", "Drift": "Drifting gradient", "Volt": "Lightning flashes",
+               "Frost": "Cold glints"}
 TYPE_ICONS = {"Motherboard": "▦", "RAM": "▥", "GPU": "▣", "Cooler": "✺", "LED strip": "┅",
               "Keyboard": "⌨", "Mouse": "◖", "Mousepad": "▭", "Headset": "◠", "Headset stand": "⊥",
               "Case": "▢", "Light": "✦", "Speaker": "◉", "Other": "◆"}
@@ -544,9 +544,25 @@ class CurveEditor(tk.Canvas):
         pts = sorted(self.points)
         line = [self._xy(self.T0, pts[0][1])] + [self._xy(*p) for p in pts] + [self._xy(self.T1, pts[-1][1])]
         base = self._xy(self.T0, 0)[1]
-        fill = hexcol(mix(hex2rgb(P["CARD"]), hex2rgb(self.accent), 0.13))
-        self.create_polygon([(line[0][0], base)] + line + [(line[-1][0], base)], fill=fill, outline="")
-        self.create_line(line, fill=self.accent if self.editable else P["MUTED"], width=2.5)
+        bgc = hex2rgb(P["CARD"])
+        for k in range(6):                                          # fill fades towards the bottom
+            poly = [(x, y + (base - y) * k / 6) for x, y in line]
+            self.create_polygon([(line[0][0], base)] + poly + [(line[-1][0], base)],
+                                fill=hexcol(mix(bgc, hex2rgb(CYAN), 0.03 + 0.025 * (6 - k))), outline="")
+        dense = []                                                  # split the line so it can change colour
+        for (xa, ya), (xb, yb) in zip(line, line[1:]):
+            for j in range(12):
+                dense.append((xa + (xb - xa) * j / 12, ya + (yb - ya) * j / 12))
+        dense.append(line[-1])
+        x_min, x_max = dense[0][0], dense[-1][0]
+        for (xa, ya), (xb, yb) in zip(dense, dense[1:]):
+            k = (xa - x_min) / max(1, x_max - x_min)
+            col = hexcol(mix(hex2rgb(CYAN), hex2rgb(PURPLE), k)) if self.editable else P["MUTED"]
+            self.create_line(xa, ya, xb, yb, fill=hexcol(mix(bgc, hex2rgb(col), 0.3)), width=8, capstyle="round")
+        for (xa, ya), (xb, yb) in zip(dense, dense[1:]):
+            k = (xa - x_min) / max(1, x_max - x_min)
+            col = hexcol(mix(hex2rgb(CYAN), hex2rgb(PURPLE), k)) if self.editable else P["MUTED"]
+            self.create_line(xa, ya, xb, yb, fill=col, width=2.5, capstyle="round")
         if self.temp is not None:
             t = max(self.T0, min(self.T1, self.temp))
             x, _ = self._xy(t, 0)
@@ -557,8 +573,9 @@ class CurveEditor(tk.Canvas):
                              anchor="w", font=(FONT, 9, "bold"))
         for i, (t, p) in enumerate(pts):
             x, y = self._xy(t, p)
-            self.create_oval(x - 7, y - 7, x + 7, y + 7, fill=P["CARD"], outline=self.accent if self.editable else P["MUTED"],
-                             width=3, tags=("pt",))
+            k = (x - x_min) / max(1, x_max - x_min)
+            ring = hexcol(mix(hex2rgb(CYAN), hex2rgb(PURPLE), k)) if self.editable else P["MUTED"]
+            self.create_oval(x - 7, y - 7, x + 7, y + 7, fill=P["CARD"], outline=ring, width=3, tags=("pt",))
 
     def _press(self, e):
         best, bd = None, 18
@@ -588,60 +605,117 @@ class CurveEditor(tk.Canvas):
 
 
 # ----------------------------------------------------------------------------- composite widgets
-EFFECT_ICONS = {"Static": "✧", "Breathing": "∿", "Color Cycle": "↻", "Rainbow Wave": "≋", "Calm Water": "≈",
-                "Rain": "⁖", "Side to Side": "⇆", "Crimson": "◉", "RGBarz": "▮", "Gradient Wave": "∿",
-                "Neon Storm": "ϟ", "Black Ice": "❄", "Off": "⏻"}
+EFFECT_ICONS = {"Static": "✧", "Breathing": "∿", "Color Cycle": "↻", "Rainbow Wave": "≋", "Tide": "≈",
+                "Drizzle": "⁖", "Sweep": "⇆", "Ember": "◉", "Pulse": "▮", "Drift": "∿",
+                "Volt": "ϟ", "Frost": "❄", "Off": "⏻"}
 
 
 PRESET_FILES = {name: "presets/" + name.lower().replace(" ", "-") + ".jpg" for name in eng.PRESET_EFFECTS}
 
 
 class GlowBar(tk.Canvas):
-    """Smooth light bar: colours blend into each other, with rounded ends and a soft, fading glow."""
-    LAYERS = ((1.0, 0.05), (0.72, 0.10), (0.48, 0.17))      # (height fraction, glow strength), outer to inner
+    """Smooth light bar drawn with Pillow: colours blend into each other, the ends are anti-aliased and
+    rounded, and a soft blurred glow fades straight into the card - no hard edges or outlines."""
 
-    def __init__(self, master, height=16, thickness=6, bg=None, slices=110):
+    def __init__(self, master, height=16, thickness=6, bg=None, glow=0.55):
         self.bgc_hex = bg or P["CARD"]
-        super().__init__(master, height=height, bg=self.bgc_hex, highlightthickness=0)
-        self.h, self.t, self.slices, self.n = height, thickness, slices, 48
+        super().__init__(master, height=height, bg=self.bgc_hex, highlightthickness=0, bd=0)
+        self.h, self.t, self.glow_k, self.n = height, thickness, glow, 48
         self.bgc = hex2rgb(self.bgc_hex)
-        self.layers = []          # list of (strength, rects, caps)
-        self.bind("<Configure>", lambda e: self._layout())
+        self._size, self._last, self._photo = None, None, None
+        self.item = self.create_image(0, 0, anchor="nw")
+        self.bind("<Configure>", lambda e: self._masks())
 
-    def _band(self, x0, x1, half, cy):
-        step = (x1 - x0) / self.slices
-        rects = [self.create_rectangle(x0 + i * step, cy - half, x0 + (i + 1) * step + 1, cy + half, width=0,
-                                       fill=self.bgc_hex) for i in range(self.slices)]
-        caps = [self.create_oval(x0 - half, cy - half, x0 + half, cy + half, width=0, fill=self.bgc_hex),
-                self.create_oval(x1 - half, cy - half, x1 + half, cy + half, width=0, fill=self.bgc_hex)]
-        return rects, caps
-
-    def _layout(self):
-        self.delete("all")
-        w, cy = max(self.winfo_width(), 30), self.h / 2
-        pad = self.h / 2
-        self.layers = []
-        for frac, k in self.LAYERS:
-            half = max(self.t / 2 + 1, self.h / 2 * frac)
-            self.layers.append((k, *self._band(pad, w - pad, half, cy)))
-        self.layers.append((None, *self._band(pad, w - pad, self.t / 2, cy)))     # bright core
+    def _masks(self):
+        w, h = max(self.winfo_width(), 20), self.h
+        if (w, h) == self._size:
+            return
+        self._size = (w, h)
+        ss = 4                                                      # draw 4x larger, then shrink = smooth edges
+        big = Image.new("L", (w * ss, h * ss), 0)
+        r = self.t * ss / 2
+        pad = h * ss / 2
+        ImageDraw.Draw(big).rounded_rectangle((pad - r, h * ss / 2 - r, w * ss - pad + r, h * ss / 2 + r), r, fill=255)
+        self.core = big.resize((w, h), Image.LANCZOS)
+        # the glow must fade to nothing before the canvas edge, or it shows as a faint box
+        glow = self.core.filter(ImageFilter.GaussianBlur(max(1.5, (h - self.t) / 5)))
+        glow = glow.point(lambda v: int(min(255, v * 2.0) * self.glow_k))
+        fade = Image.new("L", (w, h), 0)
+        e = max(2, int((h - self.t) / 4))
+        ImageDraw.Draw(fade).rounded_rectangle((e, e, w - 1 - e, h - 1 - e), max(1, (h - 2 * e) // 2), fill=255)
+        fade = fade.filter(ImageFilter.GaussianBlur(e))
+        self.halo = ImageChops.multiply(glow, fade)
+        self.bg_img = Image.new("RGB", (w, h), self.bgc)
+        self._last = None
+        if getattr(self, "_pending", None):
+            self.show(self._pending)
 
     def show(self, colors):
-        if not self.layers or not colors:
+        if not colors:
             return
-        m = len(colors)
-        cols = []
-        for i in range(self.slices):
-            f = i / max(1, self.slices - 1) * (m - 1)
-            a, b = colors[int(f)], colors[min(m - 1, int(f) + 1)]
-            c = mix(a, b, f - int(f))
-            cols.append(mix(c, (255, 255, 255), 0.1) if max(c) > 20 else mix(self.bgc, c, 0.6))
-        for k, rects, caps in self.layers:
-            for i, it in enumerate(rects):
-                c = cols[i] if k is None else mix(self.bgc, cols[i], k)
-                self.itemconfigure(it, fill=hexcol(c))
-            self.itemconfigure(caps[0], fill=self.itemcget(rects[0], "fill"))
-            self.itemconfigure(caps[1], fill=self.itemcget(rects[-1], "fill"))
+        self._pending = colors
+        if self._size is None:
+            return
+        key = tuple(colors)
+        if key == self._last:
+            return
+        self._last = key
+        w, h = self._size
+        lit = [tuple(int(v) for v in (mix(c, (255, 255, 255), 0.08) if max(c) > 20 else mix(self.bgc, c, 0.5)))
+               for c in colors]
+        strip = Image.new("RGB", (len(lit), 1))
+        strip.putdata(lit)
+        colour = strip.resize((w, 1), Image.BILINEAR).resize((w, h), Image.NEAREST)
+        out = Image.composite(colour, self.bg_img, self.halo)
+        out = Image.composite(colour, out, self.core)
+        self._photo = ImageTk.PhotoImage(out)
+        self.itemconfigure(self.item, image=self._photo)
+
+
+class PillSwitcher(ctk.CTkFrame):
+    """Outlined pill selector: the chosen option gets a cyan outline and cyan text (replaces segmented buttons)."""
+
+    def __init__(self, master, values, command=None, height=32, font=None, selected_color=None, **_ignored):
+        super().__init__(master, fg_color=P["CARD"], corner_radius=height // 2 + 3, border_width=1, border_color=P["LINE"])
+        self.values, self.command, self.accent = list(values), command, selected_color or DEFAULT_ACCENT
+        self.current = self.values[0] if self.values else None
+        self.buttons = {}
+        for v in self.values:
+            b = ctk.CTkButton(self, text=v, height=height - 6, width=40, corner_radius=(height - 6) // 2, font=font or F(13),
+                              border_width=1, command=lambda x=v: self._click(x))
+            b.pack(side="left", padx=2, pady=3, fill="x", expand=True)
+            self.buttons[v] = b
+        self._style()
+
+    def _click(self, v):
+        self.set(v)
+        if self.command:
+            self.command(v)
+
+    def _style(self):
+        for v, b in self.buttons.items():
+            on = v == self.current
+            b.configure(fg_color=P["SEL"] if on else P["CARD"], hover_color=P["HOVER"],
+                        border_color=self.accent if on else P["CARD"], text_color=self.accent if on else P["MUTED"])
+
+    def get(self):
+        return self.current
+
+    def set(self, v):
+        if v in self.buttons:
+            self.current = v
+            self._style()
+
+    def configure(self, require_redraw=False, **kw):
+        acc = kw.pop("selected_color", None)
+        kw.pop("selected_hover_color", None)
+        if "command" in kw:
+            self.command = kw.pop("command")
+        if acc:
+            self.accent = acc
+            self._style()
+        if kw:
+            super().configure(require_redraw=require_redraw, **kw)
 
 
 class PresetTile(tk.Canvas):
@@ -869,22 +943,24 @@ class DeviceCard(ctk.CTkFrame):
         self.key = key
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=16, pady=(14, 6))
-        ctk.CTkLabel(top, text=TYPE_ICONS.get(tname, "◆"), width=40, height=40, corner_radius=6,
-                     fg_color=P["CARD2"], font=F(18), text_color=P["TEXT"]).pack(side="left")
+        ctk.CTkLabel(top, text=TYPE_ICONS.get(tname, "◆"), width=40, height=40, corner_radius=10,
+                     fg_color=P["SEL"], font=F(18), text_color=CYAN).pack(side="left")
+        # controls are packed before the text so a long device name can never squeeze them
+        self.switch = Switch(top, text="", width=44, command=lambda: on_toggle(key, self.switch.get() == 1))
+        self.switch.pack(side="right")
+        self.edit_btn = ctk.CTkButton(top, text="Customize", width=96, height=30, corner_radius=15, font=F(13),
+                                      fg_color=P["BTN"], hover_color=P["BTN_HOVER"], text_color=P["TEXT"],
+                                      border_width=1, border_color=P["BTN_LINE"], command=lambda: on_edit(key))
+        self.edit_btn.pack(side="right", padx=10)
         info = ctk.CTkFrame(top, fg_color="transparent")
         info.pack(side="left", fill="x", expand=True, padx=12)
         ctk.CTkLabel(info, text=name, font=F(14, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
         ctk.CTkLabel(info, text=f"{tname} · {leds} LEDs", font=F(11), text_color=P["MUTED"], anchor="w").pack(fill="x")
-        self.switch = Switch(top, text="", width=44, command=lambda: on_toggle(key, self.switch.get() == 1))
-        self.switch.pack(side="right")
-        self.edit_btn = ctk.CTkButton(top, text="Customize", width=92, height=30, corner_radius=6, font=F(13),
-                                      fg_color=P["CARD2"], hover_color=P["BTN_HOVER"], text_color=P["TEXT"],
-                                      border_width=1, border_color=P["BTN_LINE"], command=lambda: on_edit(key))
-        self.edit_btn.pack(side="right", padx=10)
         if enabled:
             self.switch.select()
-        self.strip = LedStrip(self, n=max(1, min(leds, 20)), height=26, pill=True)
-        self.strip.pack(fill="x", padx=16, pady=(4, 16))
+        self.strip = GlowBar(self, height=20, thickness=6)
+        self.strip.n = max(1, min(leds, 24))
+        self.strip.pack(fill="x", padx=12, pady=(4, 14))
 
 
 class FanCard(ctk.CTkFrame):
@@ -900,14 +976,15 @@ class FanCard(ctk.CTkFrame):
                        for a in (0, 120, 240)]
         self.spin.create_oval(15, 15, 25, 25, fill=P["CARD"], outline="")
         self.angle = 0
+        self.badge = ctk.CTkButton(top, text="", width=78, height=24, corner_radius=12, font=F(10, "bold"),
+                                   fg_color=P["SEL"], hover_color=P["HOVER"], text_color=CYAN,
+                                   border_width=1, border_color=P["BTN_LINE"],
+                                   command=lambda: on_reset(self.fid))
+        self.badge.pack(side="right")
         info = ctk.CTkFrame(top, fg_color="transparent")
         info.pack(side="left", fill="x", expand=True, padx=12)
         ctk.CTkLabel(info, text=fan["name"], font=F(14, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
         ctk.CTkLabel(info, text=fan["hw"], font=F(11), text_color=P["MUTED"], anchor="w").pack(fill="x")
-        self.badge = ctk.CTkButton(top, text="", width=72, height=24, corner_radius=6, font=F(10, "bold"),
-                                   fg_color=P["CARD2"], hover_color=P["LINE"], text_color=P["MUTED"],
-                                   command=lambda: on_reset(self.fid))
-        self.badge.pack(side="right")
         mid = ctk.CTkFrame(self, fg_color="transparent")
         mid.pack(fill="x", padx=16, pady=(10, 0))
         self.rpm = ctk.CTkLabel(mid, text="—", font=F(26, "bold"), text_color=P["TEXT"])
@@ -935,9 +1012,9 @@ class FanCard(ctk.CTkFrame):
                 self.slider.set(shown)
         self.slider.configure(progress_color=accent)
         if f.get("manual") is not None:
-            self.badge.configure(text="MANUAL  ↺", fg_color=hexcol(mix(hex2rgb(P["CARD"]), hex2rgb(accent), 0.3)), text_color=P["TEXT"])
+            self.badge.configure(text="MANUAL  ↺", fg_color=P["SEL"], text_color=accent, border_color=accent)
         else:
-            self.badge.configure(text="BIOS" if auto else "CURVE", fg_color=P["CARD2"], text_color=P["MUTED"])
+            self.badge.configure(text="BIOS" if auto else "CURVE", fg_color=P["SEL"], text_color=CYAN, border_color=P["BTN_LINE"])
         speed = (rpm or 0) / 2500
         self.angle = (self.angle + 40 * speed) % 360
         col = accent if rpm else P["FAINT"]
@@ -1267,7 +1344,7 @@ class App(ctk.CTk):
         self.setting_row(p, "\uea80", "✦", "Lighting", "Quick effects for every RGB device", lights)
 
         def fans(row):
-            self.home_fan_seg = ctk.CTkSegmentedButton(row, values=hwm.PROFILES[:5], height=32, font=F(13), corner_radius=6,
+            self.home_fan_seg = PillSwitcher(row, values=hwm.PROFILES[:5], height=32, font=F(13), corner_radius=6,
                                                        fg_color=P["CARD2"], unselected_color=P["CARD2"],
                                                        unselected_hover_color=P["BTN_HOVER"], selected_color=self.accent,
                                                        selected_hover_color=self.accent, text_color=P["TEXT"],
@@ -1589,7 +1666,7 @@ class App(ctk.CTk):
         cur = self.settings.data.get("device_overrides", {}).get(key)
         state = dict(cur or self._current_state())
         self.caption(right, "Lighting for this device").pack(fill="x", padx=20, pady=(14, 8))
-        mode = ctk.CTkSegmentedButton(right, values=["Follow all devices", "Custom"], height=32, font=F(13), corner_radius=6,
+        mode = PillSwitcher(right, values=["Follow all devices", "Custom"], height=32, font=F(13), corner_radius=6,
                                       fg_color=P["CARD2"], unselected_color=P["CARD2"], unselected_hover_color=P["BTN_HOVER"],
                                       selected_color=self.accent, selected_hover_color=self.accent, text_color=P["TEXT"])
         mode.pack(fill="x", padx=20)
@@ -1638,7 +1715,7 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Fans
     def _page_fans(self, p):
         h = self.header(p, "Fans", "Pick a profile or draw your own curve. Fans always speed up if things get too hot.")
-        self.fan_seg = ctk.CTkSegmentedButton(p, values=hwm.PROFILES, command=self._set_fan_profile, height=36,
+        self.fan_seg = PillSwitcher(p, values=hwm.PROFILES, command=self._set_fan_profile, height=36,
                                               font=F(12, "bold"), corner_radius=6, fg_color=P["CARD"],
                                               unselected_color=P["CARD"], unselected_hover_color=P["CARD2"],
                                               selected_color=self.accent, selected_hover_color=self.accent,
@@ -1744,7 +1821,7 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Monitor
     def _page_monitor(self, p):
         h = self.header(p, "Monitor", "Live view of your system. Advanced shows every sensor and full hardware details.")
-        self.mon_seg = ctk.CTkSegmentedButton(h, values=["Overview", "Advanced"], command=self._mon_tab, height=34,
+        self.mon_seg = PillSwitcher(h, values=["Overview", "Advanced"], command=self._mon_tab, height=34,
                                               width=220, font=F(12, "bold"), corner_radius=6, fg_color=P["CARD"],
                                               unselected_color=P["CARD"], unselected_hover_color=P["CARD2"],
                                               selected_color=self.accent, selected_hover_color=self.accent,
@@ -2094,7 +2171,7 @@ class App(ctk.CTk):
         self.overlay_status.pack(fill="x", padx=20, pady=(2, 10))
 
         def seg(parent, values, current, cmd):
-            sb = ctk.CTkSegmentedButton(parent, values=values, command=cmd, height=34, font=F(12, "bold"),
+            sb = PillSwitcher(parent, values=values, command=cmd, height=34, font=F(12, "bold"),
                                         corner_radius=RADIUS, fg_color=P["CARD2"], unselected_color=P["CARD2"],
                                         unselected_hover_color=P["LINE"], selected_color=self.accent,
                                         selected_hover_color=self.accent, text_color=P["TEXT"])
@@ -2225,8 +2302,8 @@ class App(ctk.CTk):
         for i, (name, st) in enumerate(sorted(self.settings["profiles"].items())):
             c = self.card(self.prof_area)
             c.grid(row=i // 3, column=i % 3, sticky="ew", padx=6, pady=6)
-            strip = LedStrip(c, n=16, height=30, pill=True)
-            strip.pack(fill="x", padx=16, pady=(16, 6))
+            strip = GlowBar(c, height=24, thickness=7)
+            strip.pack(fill="x", padx=12, pady=(14, 4))
             cols = eng.compute_colors("Rainbow Wave" if st["effect"] == "Color Cycle" else st["effect"],
                                       st["color"], max(st["brightness"], 40), 50, 16, 0)
             strip.after(60, lambda s=strip, c2=cols: s.show(c2))
@@ -2236,7 +2313,7 @@ class App(ctk.CTk):
             r = ctk.CTkFrame(c, fg_color="transparent")
             r.pack(fill="x", padx=14, pady=(10, 14))
             self.secondary(r, "Load", lambda n=name: self._load_profile(n), height=32).pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(r, text="✕", width=34, height=32, corner_radius=6, fg_color=P["CARD2"], hover_color="#4a1f28",
+            ctk.CTkButton(r, text="✕", width=34, height=32, corner_radius=16, fg_color=P["BTN"], hover_color="#4a1f28",
                           text_color=P["MUTED"], command=lambda n=name: self._delete_profile(n)).pack(side="left", padx=(6, 0))
 
     # ---------------------------------------------------------------- Settings
@@ -2264,7 +2341,7 @@ class App(ctk.CTk):
         self.caption(body, "Appearance").pack(fill="x", pady=(22, 8))
 
         def accent(row):
-            self.accent_seg = ctk.CTkSegmentedButton(row, values=["Cyan", "Windows", "Match lighting"], command=self._set_accent_mode,
+            self.accent_seg = PillSwitcher(row, values=["Cyan", "Windows", "Match lighting"], command=self._set_accent_mode,
                                                      height=32, font=F(13), corner_radius=6, fg_color=P["CARD2"],
                                                      unselected_color=P["CARD2"], unselected_hover_color=P["BTN_HOVER"],
                                                      selected_color=self.accent, selected_hover_color=self.accent,
