@@ -1400,7 +1400,7 @@ class SplashProcess:
         else:
             cmd = [sys.executable, str(Path(__file__).resolve()), "--splash"]
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                  creationflags=eng.NO_WINDOW)
+                                  creationflags=eng.NO_WINDOW, env=eng.child_env())
         self.t0 = time.perf_counter()
 
     def ready(self):
@@ -1480,7 +1480,7 @@ class App(ctk.CTk):
         P.update(SOLID)
         ctk.set_appearance_mode("dark")
         self.splash_proc = None
-        if not background and selftest is None and self.settings.data.get("animations", True):
+        if not background and selftest is None and self.settings.data.get("animations", True) and not eng.is_onefile():
             try:
                 self.splash_proc = SplashProcess()          # starts animating while we build
             except Exception:
@@ -1660,7 +1660,7 @@ class App(ctk.CTk):
             time.sleep(1.5)
             up = sp.alive()
             sp.ready()
-            for _ in range(60):
+            for _ in range(200):
                 if not sp.alive():
                     break
                 time.sleep(0.05)
@@ -3709,6 +3709,15 @@ class App(ctk.CTk):
     def _connect_flow(self):
         if self.manager.replace_visible_copy():
             time.sleep(1.0)                  # let its server port close
+        if not self.manager.started_by_us() and self.manager.own_copies():
+            # a hidden OpenRGB of ours left over from an earlier session (e.g. ended in Task Manager):
+            # its device list may be incomplete, so restart it for a fresh hardware scan
+            self.log("Restarting a hidden OpenRGB left from an earlier session, for a fresh hardware scan.")
+            self.manager.stop_own_copies()
+            for _ in range(25):
+                if not self.manager.server_running():
+                    break
+                time.sleep(0.2)
         if not self.manager.server_running():
             self.status("Waiting for sensors…")
             self._wait_for_sensors()
@@ -3737,14 +3746,14 @@ class App(ctk.CTk):
     def _full_rescan(self):
         """Rescan button: make OpenRGB look for hardware again. The hidden OpenRGB this app runs is
         restarted (it only detects devices when it starts); an OpenRGB you run yourself is just refreshed."""
-        if not self.manager.started_by_us():
-            self._rescan()
+        if not self.manager.started_by_us() and not self.manager.own_copies():
+            self._rescan()                   # an OpenRGB you run yourself: just refresh its list
             return
         self.status("Re-detecting hardware…")
         self.log("Re-detecting hardware (restarting the hidden OpenRGB)…")
-        exe = Path(self.manager.proc.args[0]) if isinstance(self.manager.proc.args, (list, tuple)) else self.manager.find_exe()
+        exe = self.manager.find_exe()
         self.engine.disconnect()
-        self.manager.stop()
+        self.manager.stop_own_copies()
         for _ in range(25):
             if not self.manager.server_running():
                 break

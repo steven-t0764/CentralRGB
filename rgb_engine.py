@@ -51,6 +51,27 @@ PAWNIO_PAGE = "https://pawnio.eu"
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW for helper commands
 
+
+def is_onefile() -> bool:
+    """True for the portable single-file exe (it unpacks itself to a _MEI temp folder each launch)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    return bool(getattr(sys, "frozen", False) and meipass and Path(meipass).name.startswith("_MEI"))
+
+
+def child_env() -> dict | None:
+    """Environment for starting another copy of this app (helpers, restart).
+    The portable exe passes its unpack folder to child processes, and PyInstaller then insists the
+    original parent is still running ("Security validation failure ... PID not found") - which breaks
+    helpers and restarts. Asking for a reset gives each copy its own clean start."""
+    if not getattr(sys, "frozen", False):
+        return None
+    env = dict(os.environ)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for k in list(env):
+        if k.startswith("_PYI_") or k.startswith("_MEIPASS"):
+            env.pop(k, None)
+    return env
+
 BASIC_EFFECTS = ["Static", "Breathing", "Color Cycle", "Rainbow Wave", "Off"]
 PRESET_EFFECTS = ["Tide", "Drizzle", "Sweep", "Ember", "Pulse", "Drift", "Volt", "Frost",
                   "Aurora", "Supernova", "Cascade", "Cyberpunk", "Magma", "Stardust", "Nebula", "Eclipse"]
@@ -239,6 +260,34 @@ class OpenRGBManager:
     def started_by_us(self) -> bool:
         return bool(self.proc and self.proc.poll() is None)
 
+    def own_copies(self) -> list:
+        """OpenRGB processes running from Central RGB's own folder (its hidden copies, possibly left over
+        from an earlier session that was ended in Task Manager)."""
+        try:
+            import psutil
+        except Exception:
+            return []
+        ours, out = str(install_dir()).lower(), []
+        for p in psutil.process_iter(["name", "exe"]):
+            try:
+                if (p.info["name"] or "").lower() == "openrgb.exe" and (p.info["exe"] or "").lower().startswith(ours):
+                    out.append(p)
+            except Exception:
+                continue
+        return out
+
+    def stop_own_copies(self) -> bool:
+        """Close every hidden OpenRGB of ours so the next start detects hardware from scratch."""
+        self.stop()
+        found = self.own_copies()
+        for p in found:
+            try:
+                p.terminate()
+                p.wait(timeout=5)
+            except Exception:
+                pass
+        return bool(found)
+
     def stop(self):
         """Close the hidden OpenRGB this app started (when quitting)."""
         if self.proc and self.proc.poll() is None:
@@ -335,7 +384,7 @@ class OpenRGBManager:
                 si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 si.wShowWindow = 0                       # SW_HIDE
             self.proc = subprocess.Popen([str(exe), "--server", "--noautoconnect"], cwd=str(exe.parent),
-                                         creationflags=NO_WINDOW, startupinfo=si,
+                                         creationflags=NO_WINDOW, startupinfo=si, env=child_env(),
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
         except OSError as e:
             self.log(f"Could not start OpenRGB: {e}")
