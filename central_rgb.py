@@ -34,6 +34,7 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
+import fps_overlay as fpo
 import hw_monitor as hwm
 import rgb_engine as eng
 import win_effects as fx
@@ -66,7 +67,7 @@ EFFECT_INFO = {"Static": "Solid color", "Breathing": "Slow fade", "Color Cycle":
 TYPE_ICONS = {"Motherboard": "▦", "RAM": "▥", "GPU": "▣", "Cooler": "✺", "LED strip": "┅",
               "Keyboard": "⌨", "Mouse": "◖", "Mousepad": "▭", "Headset": "◠", "Headset stand": "⊥",
               "Case": "▢", "Light": "✦", "Speaker": "◉", "Other": "◆"}
-NAV = [("Lighting", "✦"), ("Devices", "▣"), ("Fans", "✺"), ("Monitor", "◔"), ("Profiles", "★"), ("Settings", "⚙")]
+NAV = [("Lighting", "✦"), ("Devices", "▣"), ("Fans", "✺"), ("Monitor", "◔"), ("Overlay", "▤"), ("Profiles", "★"), ("Settings", "⚙")]
 
 
 def resource(name: str) -> Path:
@@ -132,6 +133,7 @@ class Switch(ctk.CTkSwitch):
         kw.setdefault("corner_radius", 4)
         kw.setdefault("button_color", P["TEXT"])
         kw.setdefault("fg_color", P["TRACK"])
+        kw.setdefault("progress_color", DEFAULT_ACCENT)
         super().__init__(*a, **kw)
 
 
@@ -636,6 +638,9 @@ class App(ctk.CTk):
         self.engine.start()
         self.monitor = hwm.HardwareMonitor(self.log, self.settings, backend=self.TEST_BACKEND)
         self.monitor.start()
+        self.fps = fpo.FpsCounter(self.log)
+        self.overlay_cfg = fpo.overlay_settings(self.settings)
+        self.overlay_win = None
 
         st = self.settings["state"]
         self.color = tuple(st.get("color", (0, 120, 255)))
@@ -662,6 +667,9 @@ class App(ctk.CTk):
         self.after(100, self._poll_queue)
         self.after(40, self._animate)
         self.after(500, self._refresh_hw)
+        self.after(900, self._overlay_tick)
+        if self.overlay_cfg["enabled"]:
+            self.fps.start()
         self.after(60, self._window_effects)
         if background:
             self.iconify()
@@ -821,7 +829,6 @@ class App(ctk.CTk):
             self.pages[name] = f
             if self.splash is not None:
                 self.splash.keep_on_top()
-        self._slide_id = 0
 
     # ---------------------------------------------------------------- Lighting
     def _page_lighting(self, p):
@@ -1357,6 +1364,119 @@ class App(ctk.CTk):
             traceback.print_exc()
         self.after(1000, self._refresh_hw)
 
+    # ---------------------------------------------------------------- Overlay (in-game FPS counter)
+    def _overlay_colors(self):
+        return dict(bg=P["BG"], line=P["LINE"], text=P["TEXT"], muted=P["MUTED"], grad=GRAD, ok=OK, warn=WARN, bad=BAD)
+
+    def _page_overlay(self, p):
+        self.header(p, "Overlay", "A small FPS and temperature readout that sits on top of your games.")
+        body = ctk.CTkFrame(p, fg_color="transparent")
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=3, uniform="ov")
+        body.grid_columnconfigure(1, weight=2, uniform="ov")
+        body.grid_rowconfigure(0, weight=1)
+        cfg = self.overlay_cfg
+
+        left = self.card(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        self.caption(left, "FPS overlay").pack(fill="x", padx=20, pady=(18, 6))
+        self.overlay_sw = Switch(left, text="Show the overlay in games", font=F(13, "bold"), text_color=P["TEXT"],
+                                 command=self._overlay_toggle)
+        self.overlay_sw.pack(anchor="w", padx=20, pady=4)
+        if cfg["enabled"]:
+            self.overlay_sw.select()
+        self.overlay_status = self.label(left, "Off", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=560)
+        self.overlay_status.pack(fill="x", padx=20, pady=(2, 10))
+
+        def seg(parent, values, current, cmd):
+            sb = ctk.CTkSegmentedButton(parent, values=values, command=cmd, height=34, font=F(12, "bold"),
+                                        corner_radius=RADIUS, fg_color=P["CARD2"], unselected_color=P["CARD2"],
+                                        unselected_hover_color=P["LINE"], selected_color=self.accent,
+                                        selected_hover_color=self.accent, text_color=P["TEXT"])
+            sb.set(current)
+            self.accent_widgets.append(("seg", sb))
+            return sb
+
+        self.caption(left, "Position").pack(fill="x", padx=20, pady=(10, 6))
+        seg(left, fpo.CORNERS, cfg["corner"], lambda v: self._overlay_set("corner", v)).pack(fill="x", padx=20)
+        self.caption(left, "Size").pack(fill="x", padx=20, pady=(16, 6))
+        seg(left, list(fpo.SIZES), cfg["size"], lambda v: self._overlay_set("size", v)).pack(fill="x", padx=20)
+        self.caption(left, "Show").pack(fill="x", padx=20, pady=(16, 6))
+        self.overlay_item_sw = {}
+        for key, label in fpo.ITEMS:
+            sw = Switch(left, text=label, font=F(12), text_color=P["TEXT"], command=lambda k=key: self._overlay_item(k))
+            sw.pack(anchor="w", padx=20, pady=4)
+            if cfg["items"].get(key):
+                sw.select()
+            self.overlay_item_sw[key] = sw
+
+        right = self.card(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        self.caption(right, "Preview").pack(fill="x", padx=20, pady=(18, 10))
+        stage = tk.Frame(right, bg=P["SIDE"], highlightthickness=1, highlightbackground=P["LINE"])
+        stage.pack(fill="x", padx=20)
+        self.overlay_preview = fpo.OverlayPanel(stage, self._overlay_colors(), FONT)
+        self.overlay_preview.pack(padx=24, pady=24, anchor="w")
+        self.overlay_preview_note = self.label(right, "", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=360)
+        self.overlay_preview_note.pack(fill="x", padx=20, pady=(10, 4))
+        self.label(right, "How it works\n"
+                          "• FPS is measured with Intel PresentMon, which reads Windows' own graphics events. "
+                          "Nothing is injected into the game.\n"
+                          "• The overlay appears over the app you're playing and hides on the desktop.\n"
+                          "• It shows over windowed and borderless-fullscreen games. Games in exclusive "
+                          "fullscreen can cover it, so switch them to borderless.\n"
+                          "• Clicks pass straight through it.",
+                   11, color=P["MUTED"], anchor="w", justify="left", wraplength=360).pack(fill="x", padx=20, pady=(8, 18))
+
+    def _overlay_save(self):
+        self.settings["overlay"] = self.overlay_cfg
+
+    def _overlay_set(self, key, value):
+        self.overlay_cfg[key] = value
+        self._overlay_save()
+
+    def _overlay_item(self, key):
+        self.overlay_cfg["items"][key] = self.overlay_item_sw[key].get() == 1
+        self._overlay_save()
+
+    def _overlay_toggle(self):
+        on = self.overlay_sw.get() == 1
+        self.overlay_cfg["enabled"] = on
+        self._overlay_save()
+        if on:
+            self.fps.start()
+        else:
+            self._bg(self.fps.stop)
+            if self.overlay_win is not None:
+                self.overlay_win.destroy()
+                self.overlay_win = None
+
+    def _overlay_tick(self):
+        try:
+            cfg, metrics = self.overlay_cfg, self.snap.get("metrics", {})
+            fps = self.fps.current() if (cfg["enabled"] and self.fps.status == "running") else None
+            if cfg["enabled"]:
+                if self.overlay_win is None:
+                    self.overlay_win = fpo.OverlayWindow(self, self._overlay_colors(), FONT)
+                self.overlay_win.update_overlay(cfg, fps, metrics)
+            if self.current_page == "Overlay":
+                sample = fps or {"name": "", "fps": 144, "low": 112, "ms": 6.9}
+                self.overlay_preview.render(cfg, sample, metrics)
+                self.overlay_preview_note.configure(
+                    text=f"Live: {fps['name']}" if fps else "Sample numbers. Live FPS shows here while a game is in front.")
+                st = self.fps.status
+                self.overlay_status.configure(
+                    text={"off": "Off", "starting": "Starting the FPS counter (first time downloads PresentMon)…",
+                          "running": (f"Tracking {fps['name']}: {fps['fps']:.0f} FPS" if fps else
+                                      "Running. Waiting for a game or app in the foreground."),
+                          "error": self.fps.message}.get(st, ""),
+                    text_color=BAD if st == "error" else OK if st == "running" else P["MUTED"])
+        except tk.TclError:
+            pass
+        except Exception:
+            traceback.print_exc()
+        self.after(300, self._overlay_tick)
+
     # ---------------------------------------------------------------- Profiles
     def _page_profiles(self, p):
         self.header(p, "Profiles", "Save looks you like and switch between them in one click.")
@@ -1424,7 +1544,7 @@ class App(ctk.CTk):
         self.accent_seg.pack(side="right")
         self.accent_seg.set("Match lighting" if self.settings.data.get("accent_mode") == "match" else "Central")
         self.accent_widgets.append(("seg", self.accent_seg))
-        self.anim_sw = Switch(opt, text="Animations (startup and section transitions)", font=F(12), text_color=P["TEXT"],
+        self.anim_sw = Switch(opt, text="Startup animation", font=F(12), text_color=P["TEXT"],
                               command=lambda: self.settings.__setitem__("animations", self.anim_sw.get() == 1))
         self.anim_sw.pack(anchor="w", padx=20, pady=4)
         if self.settings.data.get("animations", True):
@@ -1510,46 +1630,15 @@ class App(ctk.CTk):
 
     # ---------------------------------------------------------------- navigation / accent / animation
     def show_page(self, name, animate=True):
-        prev = self.current_page
         self.current_page = name
         page = self.pages[name]
-        self._slide_id += 1
-        for f in self.pages.values():
-            f.place_configure(relx=0, rely=0)
-        if animate and prev != name and self.settings.data.get("animations", True) and self.winfo_viewable():
-            self._fade_page(page, self._slide_id)
-        else:
-            page.tkraise()
+        page.tkraise()
         for n, b in self.nav.items():
             on = n == name
             b.configure(fg_color=P["CARD"] if on else "transparent", text_color=P["TEXT"] if on else P["MUTED"])
             self.nav_bars[n].configure(fg_color=self.accent if on else P["SIDE"])
         if name in ("Monitor", "Fans"):
             self.after(10, lambda: (self._refresh_monitor(self.snap) if name == "Monitor" else self._refresh_fans(self.snap)))
-
-    def _fade_page(self, page, sid, phase=0, t0=None):
-        """Cross-fade between sections: the window dims, the section swaps, and it fades back in."""
-        if sid != self._slide_id:
-            return
-        if t0 is None:
-            t0 = time.time()
-        target = max(0.6, min(1.0, int(self.settings.data.get("opacity", DEFAULT_OPACITY)) / 100))
-        t = time.time() - t0
-        dur = 0.09 if phase == 0 else 0.22
-        k = min(1.0, t / dur)
-        k = k * k * (3 - 2 * k)
-        level = 1 - 0.35 * k if phase == 0 else 0.65 + 0.35 * k
-        try:
-            self.attributes("-alpha", target * level)
-        except tk.TclError:
-            pass
-        if k >= 1.0:
-            if phase == 1:
-                return
-            page.tkraise()
-            self.after(10, lambda: self._fade_page(page, sid, 1))
-            return
-        self.after(12, lambda: self._fade_page(page, sid, phase, t0))
 
     def _update_accent(self):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))
@@ -1900,6 +1989,7 @@ class App(ctk.CTk):
                 return
         self.settings["state"] = self._current_state()
         self.engine.stop()
+        self.fps.stop()
         self.monitor.stop()       # hands fans back to the BIOS
         self.destroy()
 
