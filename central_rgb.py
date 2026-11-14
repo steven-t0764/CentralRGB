@@ -66,7 +66,7 @@ CARD_BORDER, CARD_BORDER_W = None, 0      # outlined panels (set by some themes)
 
 # ----------------------------------------------------------------------------- themes
 # Each theme sets the panel colours, the accent (CYAN slot), the chart colours and an optional panel
-# outline. A theme is applied once at startup, before any widget is made, so changing it needs a restart.
+# outline. Changing it rebuilds the window in place (App._switch_theme); nothing else restarts.
 THEMES = {
     "cyber_cyan": dict(name="Cyber Cyan", desc="Default: navy panels, cyan accent"),
     "ultraviolet": dict(name="Ultraviolet Pulse", desc="Deep purple with magenta",
@@ -115,10 +115,14 @@ def _saved_theme() -> str:
 
 
 def _apply_theme(key: str):
-    """Swap the module colours for a theme. Must run before any widget or default argument uses them."""
-    global CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W
+    """Swap the module colours for a theme (widgets made afterwards use them)."""
+    global CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W, DEFAULT_ACCENT
     t = THEMES.get(key) or THEMES[DEFAULT_THEME]
-    if "BG" not in t:                         # the default theme keeps the original values exactly
+    if "BG" not in t:                         # the default theme: the original values exactly
+        SOLID.update(_BASE_SOLID)
+        P.update(SOLID)
+        CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W = _BASE_COLORS
+        DEFAULT_ACCENT = CYAN
         return
     s = dict(t)
     acc = s["accent"]
@@ -134,6 +138,7 @@ def _apply_theme(key: str):
     CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET = acc, s["PURPLE"], s["TEAL"], s["BLUE"], s["PINK"], s["VIOLET"]
     GRAD = (PINK, VIOLET, CYAN)
     CARD_BORDER, CARD_BORDER_W = s.get("border"), s.get("border_w", 0)
+    DEFAULT_ACCENT = CYAN
 
 
 def windows_accent(fallback="#60cdff") -> str:
@@ -199,9 +204,11 @@ def on_color(hex_color) -> str:
     return "#0f1117" if lum > 0.6 else "#ffffff"
 
 
+_BASE_SOLID = dict(SOLID)                 # the default theme, so it can be switched back to live
+_BASE_COLORS = (CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W)
+DEFAULT_ACCENT = CYAN
 THEME = _saved_theme()
 _apply_theme(THEME)
-DEFAULT_ACCENT = CYAN
 
 
 def lerp_grad(t, stops=GRAD):
@@ -687,12 +694,13 @@ class NavItem(ctk.CTkFrame):
         self.text.pack(side="left", padx=14, fill="x", expand=True)
         self.on = False
         for w in (self, self.icon, self.text, self.pill):
-            w.bind("<Button-1>", lambda e: command())
-            w.bind("<Enter>", lambda e: self._hover(True))
-            w.bind("<Leave>", lambda e: self._hover(False))
+            # e=None: CustomTkinter 6 can call these without an event
+            w.bind("<Button-1>", lambda e=None: command())
+            w.bind("<Enter>", lambda e=None: self._hover(True))
+            w.bind("<Leave>", lambda e=None: self._hover(False))
 
     def _hover(self, inside):
-        if not self.on:
+        if not self.on and self.winfo_exists():
             self.configure(fg_color=P["HOVER"] if inside else "transparent")
 
     def set(self, on, accent):
@@ -1759,6 +1767,15 @@ class App(ctk.CTk):
             for kind in ("RAM", "GPU", "Cooler", "Case", "Keyboard", "Mouse", "Motherboard", "LED strip", "Other"):
                 dm.model_for(kind, 24, hex2rgb(P["CARD"])).render(dm.rainbow(24))
             steps.append("device models: ok")
+            for key in list(THEMES)[1:] + [list(THEMES)[0]]:
+                t_sw = time.perf_counter()
+                self._switch_theme(key)
+                for _ in range(20):
+                    self.update()
+                    time.sleep(0.01)
+                if not all(pg.winfo_exists() for pg in self.pages.values()):
+                    raise RuntimeError(f"Pages missing after switching to theme {key}")
+                steps.append(f"theme {THEMES[key]['name']}: applied live in {(time.perf_counter() - t_sw - 0.2) * 1000:.0f} ms")
             steps.append(f"windows accent read as: {windows_accent('(not found)')}")
             sp = SplashProcess()
             time.sleep(1.5)
@@ -3502,7 +3519,7 @@ class App(ctk.CTk):
             self.theme_menu.set(THEMES[saved if saved in THEMES else THEME]["name"])
             return self.theme_menu
         yield
-        self.setting_row(body, "\ue771", "◑", "Theme", "The look of the whole app. Changing it restarts Central RGB", theme)
+        self.setting_row(body, "\ue771", "◑", "Theme", "The look of the whole app, applied straight away", theme)
         yield
         def accent(row):
             self.accent_seg = PillSwitcher(row, values=["Theme", "Windows", "Match lighting"], command=self._set_accent_mode,
@@ -3598,16 +3615,69 @@ class App(ctk.CTk):
 
     def _set_theme(self, name):
         key = next((k for k, t in THEMES.items() if t["name"] == name), DEFAULT_THEME)
-        if key == THEME:
-            self.settings["theme"] = key
-            return
         self.settings["theme"] = key
-        if messagebox.askyesno(eng.APP_NAME, f"Restart Central RGB now to switch to {name}?\n\n"
-                               "Your lighting comes back right away. Fans go back to BIOS control for a moment "
-                               "while it restarts."):
-            self._restart()
-        else:
-            self.status(f"{name} will be used next time Central RGB opens")
+        if key != THEME:
+            self.after(60, lambda: self._switch_theme(key))   # after the dropdown has closed
+
+    def _switch_theme(self, key):
+        """Apply a theme live: the window fades out, is rebuilt in the new colours and fades back in.
+        Lighting, fan control, sensors and OpenRGB keep running untouched (no restart, no re-detection)."""
+        global THEME
+        t0 = time.perf_counter()
+        for a in (0.7, 0.4, 0.15, 0.0):                         # quick fade out
+            try:
+                self.attributes("-alpha", a)
+                self.update()
+            except tk.TclError:
+                break
+            time.sleep(0.012)
+        _apply_theme(key)
+        THEME = key
+        page = self.current_page
+        rows = list(self.device_rows)
+        if self.overlay_win is not None:
+            try:
+                self.overlay_win.destroy()
+            except Exception:
+                pass
+            self.overlay_win = None
+        for w in self.winfo_children():
+            w.destroy()
+        self.configure(fg_color=P["BG"])
+        self.accent = DEFAULT_ACCENT
+        self.accent_widgets = []
+        self.device_rows, self.device_cards = [], []
+        self.fan_cards, self.sensor_items = {}, {}
+        self.editor, self.editor_key = None, None
+        self.current_page = "Home"
+        self._ttk_style()
+        self._build()
+        for _ in self._page_steps():
+            pass
+        self._sync_ui_from_state()
+        if rows:
+            self._fill_devices(rows)
+        if getattr(self, "_last_checks", None):
+            self._show_checks(self._last_checks)
+        if getattr(self, "_conflicts", None) is not None:
+            self._update_conflict_bar(self._conflicts)
+        if self.sysinfo:
+            self._show_sysinfo(self.sysinfo)
+        try:                                                     # activity log comes back too
+            self.logbox.configure(state="normal")
+            for stamp, msg, level in getattr(self, "_log_hist", []):
+                prefix = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}.get(level, "")
+                self.logbox.insert("end", stamp + "  " + prefix + msg + "\n", level or None)
+            self.logbox.see("end")
+            self.logbox.configure(state="disabled")
+        except Exception:
+            pass
+        self.show_page(page)
+        self._update_accent()
+        self._window_effects()
+        self.update()
+        self._fade_in(0.0)
+        self.log(f"Theme changed to {THEMES[key]['name']} ({(time.perf_counter() - t0) * 1000:.0f} ms).", "ok")
 
     def _restart(self):
         """Start a fresh copy (it waits for this one to close), then quit."""
@@ -3765,6 +3835,10 @@ class App(ctk.CTk):
 
     def log(self, msg, level=""):
         self.q.put(("log", msg, level))
+        hist = self.__dict__.setdefault("_log_hist", [])
+        hist.append((time.strftime("%H:%M:%S"), str(msg), level))
+        if len(hist) > 300:
+            del hist[:100]
         try:                                     # also kept in %APPDATA%\CentralRGB\activity.log
             if not hasattr(self, "_logfile"):
                 path = Path(eng.settings_dir()) / "activity.log"
@@ -3799,6 +3873,7 @@ class App(ctk.CTk):
                 elif kind == "devices":
                     self._fill_devices(item[1])
                 elif kind == "checks":
+                    self._last_checks = item[1]
                     self._show_checks(item[1])
                 elif kind == "conflicts":
                     self._update_conflict_bar(item[1])
