@@ -285,6 +285,50 @@ class SmoothFrame(ctk.CTkFrame):
             tk.Misc.lift(c)
 
 
+class LightScroll(tk.Frame):
+    """A light scrolling area (canvas + slim scrollbar + mouse wheel).
+
+    CTkScrollableFrame is slow to create (the first one cost 0.7 s on a cold Windows start); this does the
+    same job for a fraction of that. Put children in .inner."""
+
+    def __init__(self, master, height, bg=None):
+        bg = bg or P["CARD"]
+        super().__init__(master, bg=bg, height=height)
+        self.h = height
+        self.cv = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, height=height)
+        self.bar = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, width=8)
+        self.bar.pack(side="right", fill="y", padx=(4, 2))
+        self.cv.pack(side="left", fill="both", expand=True)
+        self.inner = tk.Frame(self.cv, bg=bg)
+        self.win = self.cv.create_window(0, 0, anchor="nw", window=self.inner)
+        self.thumb = self.bar.create_rectangle(2, 0, 6, 0, fill=P["TRACK"], width=0)
+        self.inner.bind("<Configure>", lambda e: self._sync())
+        self.cv.bind("<Configure>", lambda e: (self.cv.itemconfigure(self.win, width=e.width), self._sync()))
+        self.cv.configure(yscrollcommand=self._on_scroll)
+        for w in (self, self.cv, self.inner, self.bar):
+            w.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self._wheel), add="+")
+            w.bind("<Leave>", lambda e: self.unbind_all("<MouseWheel>"), add="+")
+        self.bar.bind("<B1-Motion>", self._drag)
+        self.bar.bind("<Button-1>", self._drag)
+
+    def _sync(self):
+        self.cv.configure(scrollregion=(0, 0, self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()))
+
+    def _on_scroll(self, first, last):
+        first, last = float(first), float(last)
+        h = max(self.bar.winfo_height(), 10)
+        if last - first >= 0.999:
+            self.bar.coords(self.thumb, 2, 0, 6, 0)
+        else:
+            self.bar.coords(self.thumb, 2, first * h, 6, last * h)
+
+    def _wheel(self, e):
+        self.cv.yview_scroll(int(-e.delta / 120) * 2, "units")
+
+    def _drag(self, e):
+        self.cv.yview_moveto(max(0.0, e.y / max(1, self.bar.winfo_height()) - 0.1))
+
+
 class Splash(tk.Frame):
     """Startup animation: the logo fades and zooms in over a soft glow, the name fades in beneath it,
     then everything keeps zooming as it fades away and the app fades in."""
@@ -1767,10 +1811,10 @@ class App(ctk.CTk):
         self.caption(ec, "Presets").pack(fill="x", padx=18, pady=(4, 6))
         yield
         # 16 presets: about two and a half rows show, the rest scroll into view
-        pg = ctk.CTkScrollableFrame(ec, fg_color=P["CARD"], height=218, corner_radius=0,
-                                    scrollbar_button_color=P["TRACK"], scrollbar_button_hover_color=P["LINE"])
+        scroll = LightScroll(ec, height=218)
+        pg = scroll.inner
         yield
-        pg.pack(fill="x", padx=(12, 4), pady=(0, 12))
+        scroll.pack(fill="x", padx=(12, 4), pady=(0, 12))
         yield
         for i, name in enumerate(eng.PRESET_EFFECTS):
             t = PresetTile(pg, name, self._set_effect, height=88)
