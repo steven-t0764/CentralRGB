@@ -25,6 +25,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # Fan-safety rules (20 % fans, 70 % pumps, 100 % at 90 °C, hand back to BIOS) and other tests in tests/.
+      # A failure stops the build, so nothing that breaks them can reach a release.
+      - name: Run tests
+        run: python -m unittest discover tests -v
+
       - name: Use the release tag as the version
         if: github.event_name == 'release'
         shell: pwsh

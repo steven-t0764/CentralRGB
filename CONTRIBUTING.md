@@ -34,12 +34,14 @@ Open an [issue](../../issues) and include:
 | `hw_monitor.py` | LibreHardwareMonitor sensors, fan-curve logic and safety limits, system details |
 | `win_effects.py` | Frosted-glass window, dark title bar, opacity |
 | `central_rgb.iss` | Inno Setup installer (including the optional PawnIO driver install) |
+| `tests/` | Simulated hardware, the fan-safety tests and a page-by-page preview (see [tests/README.md](tests/README.md)) |
 
 ## Sending a change
 
 1. Fork the repo and create a branch (`fix-ram-detection`, `add-wave-effect`...).
 2. Keep each pull request focused on one thing, and describe what you tested and on which hardware.
 3. Push your branch. GitHub Actions builds the .exe and installer on Windows, so check that the build passes.
-4. Anything that touches **fan control** must keep the safety limits: the minimum speeds, the 90 °C override, and handing fans back to the BIOS on exit.
+4. Anything that touches **fan control** must keep the safety limits: the minimum speeds, the 90 °C override, and handing fans back to the BIOS on exit. `python -m unittest discover tests` checks them.
+5. Put any new test, fake device or preview script in the `tests/` folder.
 
 By contributing, you agree that your contribution is licensed under the project's [GPL-3.0-or-later](LICENSE) license.
