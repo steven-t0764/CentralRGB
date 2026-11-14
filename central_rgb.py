@@ -177,6 +177,15 @@ class Slider(ctk.CTkSlider):
         kw.setdefault("button_corner_radius", 9)    # round thumb
         kw.setdefault("button_length", 0)
         super().__init__(*a, **kw)
+        # The mouse wheel should scroll the page, not move a slider the pointer happens to pass over
+        # (newer CustomTkinter moves sliders with the wheel). Dragging and clicking still work.
+        for w in (self, getattr(self, "_canvas", None)):
+            if w is not None:
+                for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                    try:
+                        w.unbind(seq)
+                    except Exception:
+                        pass
 
 
 # ---------------------------------------------------------------- smooth (anti-aliased) drawing
@@ -290,6 +299,101 @@ class SmoothFrame(ctk.CTkFrame):
 # pass of the whole window, so while pages are being built every new dropdown or scrollbar stalled the app.
 # Tk redraws them at the next idle moment anyway, so the forced pass is switched off.
 ctk.CTkCanvas.update_idletasks = lambda self: None
+
+
+class SmoothButton(tk.Canvas):
+    """Rounded button drawn with Pillow (anti-aliased fill and outline), in place of CustomTkinter buttons
+    whose 1px outlines come out uneven on Windows. Takes the same options this app uses with CTkButton."""
+
+    _cache: dict = {}
+
+    def __init__(self, master, text="", command=None, width=140, height=28, corner_radius=6, font=None,
+                 fg_color=None, hover_color=None, text_color=None, border_width=0, border_color=None, **_ignored):
+        try:
+            self._sc = ctk.ScalingTracker.get_widget_scaling(master)
+        except Exception:
+            self._sc = 1.0
+        self._behind = SmoothFrame._color_behind(master)
+        self._w0, self._h = int(width * self._sc), int(height * self._sc)
+        super().__init__(master, width=self._w0, height=self._h, bg=self._behind, highlightthickness=0, bd=0,
+                         cursor="hand2")
+        self._o = dict(text=text, command=command, corner_radius=corner_radius, font=font or F(13),
+                       fg_color=fg_color or P["BTN"], hover_color=hover_color or fg_color or P["BTN_HOVER"],
+                       text_color=text_color or P["TEXT"], border_width=border_width,
+                       border_color=border_color or P["BTN_LINE"], state="normal")
+        self._hover, self._img = False, None
+        self._bg_item = self.create_image(0, 0, anchor="nw")
+        self._txt = self.create_text(0, 0, text=text)
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<ButtonRelease-1>", self._click)
+        self._draw()
+
+    def _font(self):
+        f = self._o["font"]
+        try:
+            return (f.cget("family"), -max(8, round(abs(f.cget("size")) * self._sc)), f.cget("weight"))
+        except Exception:
+            return f
+
+    @staticmethod
+    def _col(c, fallback):
+        return fallback if (not c or c == "transparent") else c
+
+    def _draw(self):
+        o = self._o
+        w = max(self.winfo_width(), 2) if self.winfo_width() > 2 else self._w0
+        h = self._h
+        fill = self._col(o["hover_color"] if (self._hover and o["state"] == "normal") else o["fg_color"], self._behind)
+        bw = o["border_width"]
+        key = (w, h, round(o["corner_radius"] * self._sc), fill, self._behind, bw, o["border_color"] if bw else None)
+        img = SmoothButton._cache.get(key)
+        if img is None:
+            r = min(h / 2, o["corner_radius"] * self._sc)
+            img = ImageTk.PhotoImage(aa_round_rect(w, h, r, hex2rgb(fill), hex2rgb(self._behind),
+                                                   outline=hex2rgb(self._col(o["border_color"], fill)) if bw else None,
+                                                   width=max(1, bw * self._sc)))
+            if len(SmoothButton._cache) > 400:
+                SmoothButton._cache.clear()
+            SmoothButton._cache[key] = img
+        self._img = img
+        self.itemconfigure(self._bg_item, image=img)
+        col = o["text_color"] if o["state"] == "normal" else P["FAINT"]
+        self.coords(self._txt, w / 2, h / 2)
+        self.itemconfigure(self._txt, text=o["text"], fill=col, font=self._font())
+
+    def _set_hover(self, on):
+        if on != self._hover:
+            self._hover = on
+            self._draw()
+
+    def _click(self, e):
+        if self._o["state"] == "normal" and self._o["command"] and 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height():
+            self._o["command"]()
+
+    def configure(self, require_redraw=False, **kw):
+        changed = False
+        for k in list(kw):
+            if k in self._o:
+                self._o[k] = kw.pop(k)
+                changed = True
+        if "width" in kw:
+            self._w0 = int(kw["width"] * self._sc)
+            super().configure(width=self._w0)
+            kw.pop("width")
+        kw.pop("hover", None)
+        if kw:
+            super().configure(**kw)
+        if changed:
+            self._draw()
+
+    config = configure
+
+    def cget(self, key):
+        if key in self._o:
+            return self._o[key]
+        return super().cget(key)
 
 
 class LightScroll(tk.Frame):
@@ -483,7 +587,7 @@ class NavItem(ctk.CTkFrame):
     """Windows 11 Settings-style navigation item: accent pill, icon, label."""
 
     def __init__(self, master, name, glyph, fallback, command):
-        super().__init__(master, fg_color="transparent", corner_radius=8, height=40, border_width=1, border_color=P["SIDE"])
+        super().__init__(master, fg_color="transparent", corner_radius=8, height=40, border_width=0)
         self.pack_propagate(False)
         self.pill = ctk.CTkFrame(self, width=3, height=16, corner_radius=2, fg_color="transparent")
         self.pill.pack(side="left", padx=(4, 10))
@@ -506,7 +610,7 @@ class NavItem(ctk.CTkFrame):
             return                                   # unchanged: skip CustomTkinter's redraw
         self._style = (on, accent)
         self.on = on
-        self.configure(fg_color=P["SEL"] if on else "transparent", border_color=accent if on else P["SIDE"])
+        self.configure(fg_color=P["SEL"] if on else "transparent")
         self.pill.configure(fg_color=accent if on else "transparent")
 
 
@@ -958,16 +1062,16 @@ class GlowBar(tk.Canvas):
 
 
 class PillSwitcher(ctk.CTkFrame):
-    """Outlined pill selector: the chosen option gets a cyan outline and cyan text (replaces segmented buttons)."""
+    """Pill selector: the chosen option gets a smooth accent outline and accent text (replaces segmented buttons)."""
 
     def __init__(self, master, values, command=None, height=32, font=None, selected_color=None, **_ignored):
-        super().__init__(master, fg_color=P["CARD"], corner_radius=height // 2 + 3, border_width=1, border_color=P["LINE"])
+        super().__init__(master, fg_color="transparent", corner_radius=0, border_width=0)
         self.values, self.command, self.accent = list(values), command, selected_color or DEFAULT_ACCENT
         self.current = self.values[0] if self.values else None
         self.buttons = {}
         for v in self.values:
-            b = ctk.CTkButton(self, text=v, height=height - 6, width=40, corner_radius=(height - 6) // 2, font=font or F(13),
-                              border_width=1, command=lambda x=v: self._click(x))
+            b = SmoothButton(self, text=v, height=height - 6, width=max(40, 8 * len(v) + 26), corner_radius=(height - 6) // 2,
+                             font=font or F(13), border_width=1, command=lambda x=v: self._click(x))
             b.pack(side="left", padx=2, pady=3, fill="x", expand=True)
             self.buttons[v] = b
         self._style()
@@ -980,8 +1084,8 @@ class PillSwitcher(ctk.CTkFrame):
     def _style(self):
         for v, b in self.buttons.items():
             on = v == self.current
-            b.configure(fg_color=P["SEL"] if on else P["CARD"], hover_color=P["HOVER"],
-                        border_color=self.accent if on else P["CARD"], text_color=self.accent if on else P["MUTED"])
+            b.configure(fg_color=P["SEL"] if on else "transparent", hover_color=P["HOVER"], border_width=1 if on else 0,
+                        border_color=self.accent, text_color=self.accent if on else P["MUTED"])
 
     def get(self):
         return self.current
@@ -1153,7 +1257,7 @@ class DeviceCard(SmoothFrame):
         # controls are packed before the text so a long device name can never squeeze them
         self.switch = Switch(top, text="", width=44, command=lambda: on_toggle(key, self.switch.get() == 1))
         self.switch.pack(side="right")
-        self.edit_btn = ctk.CTkButton(top, text="Customize", width=96, height=30, corner_radius=15, font=F(13),
+        self.edit_btn = SmoothButton(top, text="Customize", width=96, height=30, corner_radius=15, font=F(13),
                                       fg_color=P["BTN"], hover_color=P["BTN_HOVER"], text_color=P["TEXT"],
                                       border_width=1, border_color=P["BTN_LINE"], command=lambda: on_edit(key))
         self.edit_btn.pack(side="right", padx=10)
@@ -1181,7 +1285,7 @@ class FanCard(SmoothFrame):
                        for a in (0, 120, 240)]
         self.spin.create_oval(15, 15, 25, 25, fill=P["CARD"], outline="")
         self.angle = 0
-        self.badge = ctk.CTkButton(top, text="", width=78, height=24, corner_radius=12, font=F(10, "bold"),
+        self.badge = SmoothButton(top, text="", width=78, height=24, corner_radius=12, font=F(10, "bold"),
                                    fg_color=P["SEL"], hover_color=P["HOVER"], text_color=CYAN,
                                    border_width=1, border_color=P["BTN_LINE"],
                                    command=lambda: on_reset(self.fid))
@@ -1655,19 +1759,15 @@ class App(ctk.CTk):
         os._exit(0 if ok else 1)
 
     def _on_unmap(self, e):
-        """Minimized: make the window transparent, so when it comes back nothing half-drawn can show."""
+        """Minimized: remember it, so the size changes Windows reports on the way back aren't treated as a
+        resize (pausing drawing then is what caused the black flash). Windows' own animations play as usual."""
         if e.widget is self and self.state() == "iconic":
             self._was_minimized = True
-            try:
-                self.attributes("-alpha", 0.0)
-            except tk.TclError:
-                pass
 
     def _on_map(self, e):
-        """Restored from the taskbar: repaint while still transparent, then fade in (no black flash)."""
         if e.widget is self and self._was_minimized:
             self._was_minimized = False
-            self.after(1, self._repaint_and_show)
+            self._ignore_resize_until = time.time() + 0.6
 
     def _repaint_and_show(self):
         try:
@@ -1682,27 +1782,38 @@ class App(ctk.CTk):
         Pages you aren't looking at leave the layout and are laid out again when next opened."""
         if e.widget is not self:
             return
+        if self._was_minimized or time.time() < getattr(self, "_ignore_resize_until", 0) or self.state() == "iconic":
+            self._size_seen = (e.width, e.height)
+            return
         size = (e.width, e.height)
         if self._size_seen is None or size == self._size_seen:
             self._size_seen = size
             return
         self._size_seen = size
-        if not self._resize_freeze:
-            self._resize_freeze = fx.freeze(self) or -1
+        if not self._resize_job:
+            # resize starting: pin the visible page at its current size so it isn't laid out again for every
+            # pixel of the drag (the window frame follows the mouse freely); other pages leave the layout
+            page = self.pages.get(self.current_page)
+            if page is not None and page.winfo_manager() == "place":
+                page.place_configure(relwidth=0, relheight=0, width=page.winfo_width(), height=page.winfo_height())
             for n, pg in self.pages.items():
                 if n != self.current_page and pg.winfo_manager():
                     pg.place_forget()
-        if self._resize_job:
+        else:
             self.after_cancel(self._resize_job)
-        self._resize_job = self.after(90, self._resize_done)
+        self._resize_job = self.after(140, self._resize_done)
 
     def _resize_done(self):
+        """Resize finished: lay the page out once at the new size, shown in a single repaint."""
         self._resize_job = None
-        self.update_idletasks()
-        h, self._resize_freeze = self._resize_freeze, 0
-        if h and h != -1:
-            fx.thaw(h)
+        page = self.pages.get(self.current_page)
+        h = fx.freeze(self._holder)
+        try:
+            if page is not None:
+                page.place_configure(relwidth=1, relheight=1, width=0, height=0)
             self.update_idletasks()
+        finally:
+            fx.thaw(h)
 
     def _reveal(self):
         """Show the finished window: drawn while fully transparent, then faded in as the logo leaves."""
@@ -1792,9 +1903,9 @@ class App(ctk.CTk):
         return b
 
     def secondary(self, parent, text, cmd, **kw):
-        return ctk.CTkButton(parent, text=text, command=cmd, fg_color=P["BTN"], hover_color=P["BTN_HOVER"],
-                             text_color=P["TEXT"], font=F(14), corner_radius=kw.pop("corner_radius", 6),
-                             border_width=1, border_color=P["BTN_LINE"], **kw)
+        return SmoothButton(parent, text=text, command=cmd, fg_color=P["BTN"], hover_color=P["BTN_HOVER"],
+                            text_color=P["TEXT"], font=kw.pop("font", F(14)), corner_radius=kw.pop("corner_radius", 6),
+                            border_width=1, border_color=P["BTN_LINE"], **kw)
 
     def slider_row(self, parent, label, value, cmd, lo=0, hi=100, unit="%"):
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -2228,7 +2339,8 @@ class App(ctk.CTk):
         if self.light_scope not in dict(items):
             self.light_scope = "All"
         for key, text in items:
-            b = ctk.CTkButton(self.chip_row, text=text, height=32, width=60, corner_radius=16, font=F(13), border_width=1,
+            b = SmoothButton(self.chip_row, text=text, height=32, width=max(60, 9 * len(text) + 22), corner_radius=16,
+                             font=F(13), border_width=1,
                               command=lambda k=key: self._set_scope(k))
             b.pack(side="left", padx=(0, 8))
             self.chips[key] = b
