@@ -24,6 +24,7 @@ import os
 import platform
 import queue
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -221,6 +222,141 @@ class LHMBackend:
 
 
 # ============================================================================ monitor thread
+class ProcBackend:
+    """Runs LibreHardwareMonitor in a separate helper process.
+
+    LibreHardwareMonitor is .NET, reached through pythonnet, which holds Python's interpreter lock for the
+    whole of every .NET call. Loading it (drivers, SMBus scans) can take seconds, and in-process that froze
+    the window even though nothing showed up as CPU use. In its own process it can't block the app.
+    Same interface as LHMBackend. If the app dies, the helper sees its input close and hands every fan
+    back to the BIOS before exiting."""
+
+    def __init__(self, log, ram_temps=False, cmd=None):
+        self.log = log
+        self.ram_temps = ram_temps
+        self.cmd = cmd
+        self.proc = None
+        self.controls: dict[str, float] = {}   # control sensor id -> minimum allowed %
+        self.lock = threading.Lock()
+
+    def _command(self):
+        if self.cmd:
+            return list(self.cmd)
+        if getattr(sys, "frozen", False):
+            return [sys.executable, "--sensor-worker"]
+        return [sys.executable, str(Path(__file__).resolve()), "--sensor-worker"]
+
+    def _send(self, msg: dict) -> dict:
+        with self.lock:
+            if not self.proc or self.proc.poll() is not None:
+                raise RuntimeError("sensor helper is not running")
+            self.proc.stdin.write(json.dumps(msg) + "\n")
+            self.proc.stdin.flush()
+            while True:
+                line = self.proc.stdout.readline()
+                if not line:
+                    raise RuntimeError("sensor helper stopped")
+                reply = json.loads(line)
+                if "log" in reply:
+                    self.log(reply["log"])
+                    continue
+                if "error" in reply:
+                    raise RuntimeError(reply["error"])
+                return reply
+
+    def open(self):
+        if not eng.IS_WIN and not self.cmd:
+            raise RuntimeError("Detailed sensors and fan control are Windows-only.")
+        args = self._command() + (["--ram-temps"] if self.ram_temps else [])
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     text=True, encoding="utf-8", bufsize=1, creationflags=eng.NO_WINDOW)
+        self._send({"cmd": "open"})
+
+    def read(self) -> list[dict]:
+        r = self._send({"cmd": "read"})
+        self.controls = r.get("controls", {})
+        return r.get("sensors", [])
+
+    def control_min(self, sid) -> float:
+        return float(self.controls.get(sid, 0.0))
+
+    def set_fan(self, sid, pct: float):
+        self._send({"cmd": "set", "id": sid, "pct": float(pct)})
+
+    def set_default(self, sid):
+        try:
+            self._send({"cmd": "default", "id": sid})
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._send({"cmd": "close"})
+        except Exception:
+            pass
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=3)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+
+
+def _std_stream(which: int, mode: str):
+    """stdin/stdout for the helper; a windowed exe may start with sys.stdin/stdout set to None."""
+    cur = sys.stdin if which == 0 else sys.stdout
+    if cur is not None:
+        return cur
+    import ctypes, msvcrt
+    h = ctypes.windll.kernel32.GetStdHandle(-10 if which == 0 else -11)
+    fd = msvcrt.open_osfhandle(h, os.O_RDONLY if which == 0 else os.O_WRONLY)
+    return open(fd, mode, encoding="utf-8", buffering=1)
+
+
+def sensor_worker(backend=None):
+    """Entry point of the helper process: answers one JSON request per line on stdin."""
+    inp, out = _std_stream(0, "r"), _std_stream(1, "w")
+
+    def reply(obj):
+        out.write(json.dumps(obj) + "\n")
+        out.flush()
+
+    b = backend or LHMBackend(lambda m: reply({"log": m}), ram_temps="--ram-temps" in sys.argv)
+    touched: set[str] = set()
+    try:
+        for line in inp:
+            try:
+                req = json.loads(line)
+                cmd = req.get("cmd")
+                if cmd == "open":
+                    b.open()
+                    reply({"ok": True})
+                elif cmd == "read":
+                    sensors = b.read()
+                    reply({"sensors": sensors, "controls": {k: b.control_min(k) for k in b.controls}})
+                elif cmd == "set":
+                    b.set_fan(req["id"], req["pct"])
+                    touched.add(req["id"])
+                    reply({"ok": True})
+                elif cmd == "default":
+                    b.set_default(req["id"])
+                    touched.discard(req["id"])
+                    reply({"ok": True})
+                elif cmd == "close":
+                    reply({"ok": True})
+                    break
+                else:
+                    reply({"error": f"unknown command {cmd}"})
+            except Exception as e:
+                reply({"error": str(e)})
+    finally:
+        for sid in touched:                 # app went away: give the fans back to the BIOS
+            b.set_default(sid)
+        b.close()
+
+
 class HardwareMonitor(threading.Thread):
     INTERVAL = 1.0
 
@@ -276,7 +412,7 @@ class HardwareMonitor(threading.Thread):
     def run(self):
         psutil.cpu_percent(None)
         if self.backend is None:
-            self.backend = LHMBackend(self.log, ram_temps=bool(self.settings.data.get("ram_temps", False)))
+            self.backend = ProcBackend(self.log, ram_temps=bool(self.settings.data.get("ram_temps", False)))
         try:
             self.backend.open()
             self.status, self.status_msg = "ok", "Sensors online"
@@ -535,3 +671,7 @@ $r=[ordered]@{
         out.append(("Memory", [("Installed", f"{psutil.virtual_memory().total / 2**30:.1f} GB")]))
     out.append(("Python runtime", [("Central RGB", eng.APP_VERSION), ("Python", platform.python_version())]))
     return out
+
+
+if __name__ == "__main__" and "--sensor-worker" in sys.argv:
+    sensor_worker()

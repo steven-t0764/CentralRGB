@@ -230,6 +230,7 @@ class Splash(tk.Frame):
         """Start the animation (called once the app behind it has finished building)."""
         self.keep_on_top()
         self.started, self.t0 = True, time.time()
+        self.t_start = self.t0
         self._tick()
 
     @staticmethod
@@ -247,7 +248,14 @@ class Splash(tk.Frame):
             t = t_out
         t_dip = t_out + self.T_OUT
         if t >= t_dip:                                   # logo has faded out: reveal the app
-            self.destroy()
+            # freeze drawing while the splash goes, so the app appears in one repaint (no blank flash)
+            root = self.root
+            hnd = fx.freeze(root)
+            try:
+                self.destroy()
+                root.update_idletasks()
+            finally:
+                fx.thaw(hnd)
             if self.on_done:
                 self.on_done()
             return
@@ -257,7 +265,10 @@ class Splash(tk.Frame):
         k_in = 1 - (1 - min(1.0, t / self.T_IN)) ** 3     # ease-out
         k_out = self._smooth((t - t_out) / self.T_OUT)    # 0 until the exit starts
         drift = min(t, t_out) / t_out * 0.04              # slow continuous zoom so it never sits still
-        scale = (0.62 + 0.38 * k_in + drift) * (1 + 0.55 * k_out * k_out)
+        real = time.time() - self.t_start                 # wall clock (t pauses while the app is loading)
+        hold_w = self._smooth((real - t_out) / 0.6) * (1 - k_out)
+        breathe = math.sin((real - t_out) * 2.6) * hold_w  # gentle pulse while waiting for the app
+        scale = (0.62 + 0.38 * k_in + drift + 0.018 * breathe) * (1 + 0.55 * k_out * k_out)
         alpha = self._smooth(t / (self.T_IN * 0.8)) * (1 - k_out)
         px = max(8, int(self.size * scale))
         im = self.icon.resize((px, px), Image.BILINEAR)
@@ -266,7 +277,7 @@ class Splash(tk.Frame):
         cv.coords(self.logo_item, cx, cy)
         cv.itemconfigure(self.logo_item, image=self._logo_img)
         cv.coords(self.glow_item, cx, cy)
-        cv.itemconfigure(self.glow_item, image=self.glow_frames[min(23, int(alpha * 23.99))])
+        cv.itemconfigure(self.glow_item, image=self.glow_frames[max(0, min(23, int(alpha * (0.88 + 0.12 * breathe) * 23.99)))])
         kt = self._smooth((t - 0.35) / 0.6) * (1 - self._smooth((t - t_out) / (self.T_OUT * 0.7)))
         spread = (1 - self._smooth((t - 0.35) / 0.6)) * 8 * sc + k_out * 18 * sc
         cv.coords(self.title, cx, cy + 132 * sc + spread)
@@ -3114,6 +3125,9 @@ class App(ctk.CTk):
 
 
 def main():
+    if "--sensor-worker" in sys.argv:          # helper process that runs the hardware sensors
+        hwm.sensor_worker()
+        return
     if eng.IS_WIN:
         try:
             import ctypes
