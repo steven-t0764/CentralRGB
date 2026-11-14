@@ -448,6 +448,16 @@ class ColorWheel(tk.Canvas):
         self.bind("<B1-Motion>", self._drag)
 
     def _render(self):
+        try:                                     # pre-rendered by tools/make_wheel.py
+            disk = Image.open(resource("presets/wheel.png")).convert("RGBA")
+            d = int(round(self.r * 2))
+            disk = disk.resize((d, d), Image.LANCZOS)
+            bg = Image.new("RGBA", (self.size, self.size), hex2rgb(P["CARD"]) + (255,))
+            off = (self.size - d) // 2
+            bg.alpha_composite(disk, (off, off))
+            return bg.convert("RGB")
+        except Exception:
+            pass
         s = self.size * 2
         c, r = s / 2, self.r * 2
         hue = Image.new("RGB", (s, s))
