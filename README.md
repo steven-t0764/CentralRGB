@@ -20,7 +20,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
 - **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
-- **Simple dark interface**: clean charcoal panels with one accent color, plus a short startup animation with the logo
+- **Windows 11 design**: looks like a built-in Windows app, with Fluent dark styling, your own Windows accent color, a Settings-style layout, a Home dashboard and a short startup animation with the logo
 - **Starts with Windows** (optional) and reapplies your lighting and fan profile at login
 - **Normal Windows installer**: choose where to install it, and get a desktop shortcut and an uninstaller
 
@@ -80,6 +80,8 @@ You can remove it separately from *Settings → Apps*.
 
 ## Screenshots
 
+<p align="center"><img src="assets/screenshots/home.png" alt="Home dashboard" width="860"><br><b>Home</b>: devices, live lighting, fan profile and temperatures at a glance, with quick actions</p>
+
 <table>
   <tr>
     <td width="50%"><img src="assets/screenshots/lighting.png" alt="Lighting page"><br><b>Lighting</b>: color wheel, presets, effect tiles with live previews, brightness and speed</td>
@@ -122,7 +124,7 @@ flowchart LR
 
 A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sidebar and six pages. Pieces like the color wheel, LED strips, fan curve editor, ring gauges and graphs are custom-drawn on canvases, so they can animate smoothly.
 
-- A simple dark palette with one violet accent. Switch **Settings → Accent color** to **Match lighting** and the buttons, sliders and switches take on your lighting color, toned down so text stays readable.
+- Windows 11 Fluent dark palette and Segoe UI Variable type. The accent color is read from your Windows settings. Switch **Settings → Accent color** to **Match lighting** to follow your lighting color instead.
 - Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
 - Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
 
@@ -209,6 +211,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 
 | Page | What you can do |
 |---|---|
+| Home | See your devices, current lighting, fan profile and CPU/GPU temperatures. Quick actions: Rainbow, all lights off, fan profile, game overlay on/off |
 | Lighting | Color wheel, hex code, 9 presets, 5 effects, brightness, speed, apply to all devices, save to hardware |
 | Devices | See every device and its LED count, switch devices on or off, rescan |
 | Fans | Profiles, custom curve, live CPU and GPU temperatures, a manual slider per fan (tap **MANUAL ↺** to go back to the curve) |
@@ -216,7 +219,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
 | Overlay | A small pill that shows your frame rate as a plain number, pinned to a corner of the game window. It stays on the game when you tab out and hides when the game is minimized or closed. Optional extras: 1% low, frame time, CPU and GPU temperature. Works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
 | Profiles | Save the current look under a name, then load or delete it later |
-| Settings | System check, accent color (Central or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
+| Settings | System check, accent color (Windows or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
 
 > [!IMPORTANT]
 > Animated effects and custom fan profiles only run while Central RGB is open. Closing the window offers to **minimize instead**. If you quit, the lights stay on their last frame and the fans go back to BIOS control.
