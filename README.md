@@ -20,7 +20,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
 - **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
-- **Vivid "Aurora" interface**: layered indigo panels with pink, violet and cyan accents, squared corners, a startup animation and a slightly translucent window
+- **Simple dark interface**: clean charcoal panels with one accent color, plus a short startup animation with the logo
 - **Starts with Windows** (optional) and reapplies your lighting and fan profile at login
 - **Normal Windows installer**: choose where to install it, and get a desktop shortcut and an uninstaller
 
@@ -67,7 +67,7 @@ You can remove it separately from *Settings → Apps*.
 
 | Requirement | Why |
 |---|---|
-| Windows 10 (1803+) or Windows 11, 64-bit | Hardware access and the window styling are Windows-only |
+| Windows 10 (1803+) or Windows 11, 64-bit Intel/AMD PC (ARM PCs aren't supported) | Hardware access and the window styling are Windows-only |
 | Administrator rights | Needed for RAM and motherboard lighting, sensors and fan control. The .exe asks for them automatically. |
 | [PawnIO](https://pawnio.eu) driver | Low-level driver used by OpenRGB and LibreHardwareMonitor for RGB RAM, older motherboards, fan control and most temperature sensors. **The installer sets it up for you.** If you use the portable .exe, install it yourself from pawnio.eu. |
 | .NET Framework 4.7.2+ | Already built into Windows 10 and 11. Used to load LibreHardwareMonitor. |
@@ -91,7 +91,7 @@ You can remove it separately from *Settings → Apps*.
   </tr>
   <tr>
     <td><img src="assets/screenshots/advanced.png" alt="Monitor advanced view"><br><b>Monitor → Advanced</b>: every sensor (value / min / max) plus full system details</td>
-    <td><img src="assets/screenshots/settings.png" alt="Settings page"><br><b>Settings</b>: system check, accent color, opacity, sensor and startup options, and an activity log</td>
+    <td><img src="assets/screenshots/settings.png" alt="Settings page"><br><b>Settings</b>: system check, accent color, sensor and startup options, and an activity log</td>
   </tr>
   <tr>
     <td><img src="assets/screenshots/overlay.png" alt="Overlay page"><br><b>Overlay</b>: in-game FPS and temperature readout with position, size and item options</td>
@@ -122,7 +122,7 @@ flowchart LR
 
 A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sidebar and six pages. Pieces like the color wheel, LED strips, fan curve editor, ring gauges and graphs are custom-drawn on canvases, so they can animate smoothly.
 
-- A layered "Aurora" palette with a pink-to-cyan signature gradient. Switch **Settings → Accent color** to **Match lighting** and the buttons, sliders and switches take on your lighting color, toned down so text stays readable.
+- A simple dark palette with one violet accent. Switch **Settings → Accent color** to **Match lighting** and the buttons, sliders and switches take on your lighting color, toned down so text stays readable.
 - Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
 - Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
 
@@ -193,9 +193,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 - Dark title bar on Windows 10 and 11 (`DWMWA_USE_IMMERSIVE_DARK_MODE`).
 - On Windows 11 the title bar, caption text and window border are painted in the app's own colors
   (`DWMWA_CAPTION_COLOR`, `DWMWA_TEXT_COLOR`, `DWMWA_BORDER_COLOR`), so the window looks like one seamless surface.
-- Rounded window corners on Windows 11, and an optional whole-window opacity slider (60–100%).
-- **Frosted glass (experimental, off by default):** acrylic blur behind the window, using the system backdrop on Windows 11 22H2+
-  or the accent policy on Windows 10. Tk can't draw true translucent panels, so it trades contrast and smooth edges for the blur.
+- Rounded window corners on Windows 11.
   That's why the solid theme is the default.
 
 ---
@@ -218,7 +216,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
 | Overlay | Turn on the in-game overlay, choose its corner and size, and pick what it shows (FPS, 1% low, frame time, CPU, GPU). It works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
 | Profiles | Save the current look under a name, then load or delete it later |
-| Settings | System check, accent color (Central or match lighting), opacity, RAM temperature reading, frosted glass (experimental), start with Windows, reapply lighting on launch, activity log |
+| Settings | System check, accent color (Central or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
 
 > [!IMPORTANT]
 > Animated effects and custom fan profiles only run while Central RGB is open. Closing the window offers to **minimize instead**. If you quit, the lights stay on their last frame and the fans go back to BIOS control.
@@ -247,7 +245,7 @@ py -m pip install -r requirements.txt
 py central_rgb.py
 ```
 
-**GitHub Actions**: every push to `main` builds the .exe and the installer on a Windows runner (see `.github/workflows/build.yml`). Publishing a GitHub Release builds both files and attaches them to it, using the release tag as the version number (tag `v2.1` → app and installer show 2.1).
+**GitHub Actions**: every push to `main` builds the .exe, **launches it on a clean Windows machine as a self-test** (it opens every page, runs the system check and fails the build if anything crashes), then builds the installer (see `.github/workflows/build.yml`). Publishing a GitHub Release builds both files and attaches them to it, using the release tag as the version number (tag `v2.1` → app and installer show 2.1).
 
 ---
 
@@ -261,7 +259,6 @@ py central_rgb.py
 | Fans page says no controllable fans | Your motherboard's fan chip may not be supported yet, or its fans are set to a fixed mode in the BIOS |
 | Monitor shows "Basic stats only" | LibreHardwareMonitor couldn't load. Check the Settings → Activity log, and confirm PawnIO is installed and you're running as admin. |
 | RGB RAM blinks or flickers | Leave **Settings → Read RAM temperatures** off (the default). Reading DIMM temperatures uses the same SMBus that controls RAM lighting. Also close other monitoring tools that read RAM temps (HWiNFO, AIDA64, etc.). |
-| The window looks washed out or has rough edges | Turn off **Frosted glass (experimental)** in Settings and restart the app |
 | Antivirus flags the .exe | New PyInstaller builds are sometimes flagged by mistake. Allow the file, or run from source. |
 
 ---
@@ -274,7 +271,7 @@ CentralRGB/
 ├── rgb_engine.py         # OpenRGB setup, lighting effects, system check, settings
 ├── hw_monitor.py         # LibreHardwareMonitor sensors, fan logic, system details
 ├── fps_overlay.py        # in-game FPS overlay (PresentMon)
-├── win_effects.py        # title bar colors, opacity, experimental glass
+├── win_effects.py        # dark, seamless title bar
 ├── central_rgb.ico/.png  # app icon
 ├── central_rgb.iss       # Inno Setup installer script
 ├── build.bat             # one-click build (exe + installer)

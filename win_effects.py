@@ -7,8 +7,8 @@
 # GNU General Public License for more details: <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Windows window effects: frosted-glass (acrylic) blur behind the window, dark title bar,
-and whole-window opacity. Safe no-ops on other systems / older Windows.
+Windows window styling: dark title bar and (Windows 11) title bar colours that match the app.
+The glass and opacity helpers below are no longer used by the app. Safe no-ops on other systems / older Windows.
 
 How the glass works with Tk: DWM blurs whatever is behind the window and the window's
 pure-black (#000000) pixels become see-through, so the app paints its background black

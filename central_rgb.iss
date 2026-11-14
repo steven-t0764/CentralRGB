@@ -37,8 +37,11 @@ WizardStyle=modern
 Compression=lzma2/ultra64
 SolidCompression=yes
 PrivilegesRequired=admin
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 version 1803 or newer, on a real 64-bit Intel/AMD PC. ARM PCs are blocked: they can run the app
+; under emulation, but it can't reach RGB or fan hardware there.
+MinVersion=10.0.17134
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 CloseApplications=yes
 
 [Tasks]
@@ -70,6 +73,10 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN CentralRGB /F"; Flags: 
 ; downloaded engines (OpenRGB / LibreHardwareMonitor). Your settings in %APPDATA%\CentralRGB are kept.
 ; PawnIO is left installed on purpose: other apps (OpenRGB, FanControl, LibreHardwareMonitor...) use it too.
 Type: filesandordirs; Name: "{localappdata}\CentralRGB"
+
+[Messages]
+WindowsVersionNotSupported=Central RGB needs Windows 10 (version 1803 or newer) or Windows 11.
+OnlyOnTheseArchitectures=Central RGB needs a 64-bit Windows PC with an Intel or AMD processor.%n%nARM-based PCs (such as some Surface and Snapdragon laptops) aren't supported, because the app can't reach RGB or fan hardware on them.
 
 [Code]
 var

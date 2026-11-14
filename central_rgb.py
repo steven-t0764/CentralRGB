@@ -11,7 +11,7 @@ Central RGB - RGB lighting, fan control and system monitoring in one sleek app.
 
 Pages: Lighting · Devices · Fans · Monitor (Overview / Advanced) · Profiles · Settings
 Layers: rgb_engine (OpenRGB lighting) · hw_monitor (sensors + fans via LibreHardwareMonitor)
-        win_effects (frosted-glass window on Windows 10/11)
+        win_effects (dark, seamless title bar on Windows 10/11)
 
 Run:  python central_rgb.py               (normal window)
       python central_rgb.py --background  (start minimized, re-apply last lighting)
@@ -43,20 +43,15 @@ APP_VERSION = eng.APP_VERSION
 TASK_NAME = "CentralRGB"
 
 # ----------------------------------------------------------------------------- palette
-# In glass mode the window background is pure black, which Windows turns into the
-# blurred desktop; dark panel colours then read as tinted, frosted glass.
-GLASS = dict(BG="#000000", SIDE="#000000", CARD="#14161c", CARD2="#1c1f27", LINE="#262a35",
-             TEXT="#f2f4f8", MUTED="#8c94a6", FAINT="#4a5061", TRACK="#22252e")
-# Default "Aurora" theme: layered indigo surfaces with vivid pink / violet / cyan accents.
-SOLID = dict(BG="#0b0a1d", SIDE="#070614", CARD="#141332", CARD2="#1e1d48", LINE="#35336e",
-             TEXT="#f5f4ff", MUTED="#a9a7d4", FAINT="#706ea6", TRACK="#2b2959")
+# Simple dark theme: neutral charcoal surfaces, one accent colour.
+SOLID = dict(BG="#0e0e11", SIDE="#0a0a0c", CARD="#16161a", CARD2="#1f1f24", LINE="#26262c",
+             TEXT="#ececf1", MUTED="#8e8e99", FAINT="#5b5b66", TRACK="#2a2a31")
 P = dict(SOLID)
-OK, WARN, BAD, INFO = "#2bf5a0", "#ffc533", "#ff4d6d", "#38bdf8"
+OK, WARN, BAD, INFO = "#3ddc97", "#f5b942", "#f2555a", "#4ea8f5"
 PINK, VIOLET, CYAN = "#ff2d95", "#8b5cff", "#00d4ff"
 GRAD = (PINK, VIOLET, CYAN)          # signature gradient
 RADIUS = 6                           # squared-off corners everywhere
-DEFAULT_OPACITY = 94                 # slightly translucent window
-DEFAULT_ACCENT = "#8b5cff"   # brand accent (vivid violet)
+DEFAULT_ACCENT = "#7c5cff"   # brand accent (violet)
 FONT = "Segoe UI Variable Display" if (eng.IS_WIN and fx.win_build() >= 22000) else ("Segoe UI" if eng.IS_WIN else "DejaVu Sans")
 MONO = "Cascadia Mono" if eng.IS_WIN else "DejaVu Sans Mono"
 
@@ -161,7 +156,8 @@ class GradBar(tk.Canvas):
 
 
 def accent_bar(frame):
-    GradBar(frame).place(x=RADIUS, y=1, relwidth=1, width=-2 * RADIUS)
+    """Cards are plain in the simple theme (kept as a hook)."""
+    return None
 
 
 class Splash(tk.Frame):
@@ -207,15 +203,6 @@ class Splash(tk.Frame):
         self.started, self.t0 = True, time.time()
         self._tick()
 
-    def _target_alpha(self):
-        return max(0.6, min(1.0, int(self.root.settings.data.get("opacity", DEFAULT_OPACITY)) / 100))
-
-    def _set_window_alpha(self, k):
-        try:
-            self.root.attributes("-alpha", self._target_alpha() * k)
-        except tk.TclError:
-            pass
-
     @staticmethod
     def _smooth(k):
         k = max(0.0, min(1.0, k))
@@ -227,8 +214,10 @@ class Splash(tk.Frame):
         t = time.time() - self.t0
         t_out = self.T_IN + self.T_HOLD
         t_dip = t_out + self.T_OUT
-        if t >= t_dip:                                   # logo is gone: cross-fade the window to the app
-            self._fade_to_app()
+        if t >= t_dip:                                   # logo has faded out: reveal the app
+            self.destroy()
+            if self.on_done:
+                self.on_done()
             return
         w, h, sc = max(self.winfo_width(), 200), max(self.winfo_height(), 200), self.sc
         cx, cy = w / 2, h / 2 - 40 * sc
@@ -258,29 +247,6 @@ class Splash(tk.Frame):
         cv.itemconfigure(self.line, fill=hexcol(mix(bg, hex2rgb(lerp_grad((t * 0.5) % 1.0)), kt)))
         self.after(1000 // self.FPS, self._tick)
 
-    def _fade_to_app(self, phase=0, t0=None):
-        """Dip the window's opacity, swap the splash for the app, and fade back up."""
-        if t0 is None:
-            t0 = time.time()
-        t = time.time() - t0
-        if phase == 0:
-            k = min(1.0, t / self.T_DIP)
-            self._set_window_alpha(1 - 0.55 * self._smooth(k))
-            if k >= 1.0:
-                if self.winfo_exists():
-                    self.place_forget()
-                self.root.after(10, lambda: self._fade_to_app(1))
-                return
-        else:
-            k = min(1.0, t / self.T_RISE)
-            self._set_window_alpha(0.45 + 0.55 * self._smooth(k))
-            if k >= 1.0:
-                if self.winfo_exists():
-                    self.destroy()
-                if self.on_done:
-                    self.on_done()
-                return
-        self.root.after(1000 // self.FPS, lambda: self._fade_to_app(phase, t0))
 
 
 def F(size, weight="normal"):
@@ -617,10 +583,11 @@ class FanCard(ctk.CTkFrame):
 class App(ctk.CTk):
     TEST_BACKEND = None   # tests can inject a simulated sensor backend
 
-    def __init__(self, background=False):
+    def __init__(self, background=False, selftest=None):
+        self.selftest = selftest          # path to write the result to, when run with --selftest
+        self.selftest_errors: list[str] = []
         self.settings = eng.Settings()
-        self.glass = bool(self.settings.data.get("glass_experimental", False)) and (fx.glass_supported() or os.environ.get("RGBC_GLASS_PALETTE"))
-        P.update(GLASS if self.glass else SOLID)
+        P.update(SOLID)
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=P["BG"])
         self.title(eng.APP_NAME)
@@ -675,18 +642,48 @@ class App(ctk.CTk):
             self.iconify()
         if self.splash is not None:
             self.splash.begin()
+        if selftest:
+            self.after(2500, self._run_selftest)
+            return
         self.after(300, lambda: self._bg(self._startup))
         self.after(800, lambda: self._bg(self._load_sysinfo))
 
+    # ---------------------------------------------------------------- self-test (used by the CI build)
+    def report_callback_exception(self, exc, val, tb):
+        msg = "".join(traceback.format_exception(exc, val, tb))
+        if self.selftest is not None:
+            self.selftest_errors.append(msg)
+        sys.stderr.write(msg)
+
+    def _run_selftest(self):
+        """Open every page, draw the overlay preview, run the system check, then report and exit."""
+        steps = []
+        try:
+            for name, _ in NAV:
+                self.show_page(name)
+                self.update()
+                steps.append(f"page {name}: ok")
+            self.overlay_preview.render(self.overlay_cfg, {"name": "test", "fps": 144, "low": 110, "ms": 6.9}, {})
+            steps.append("overlay preview: ok")
+            res = eng.system_check()
+            steps.append(f"system check: {len(res)} results")
+            for level, msg in res:
+                steps.append(f"  [{level}] {msg}")
+            steps.append(f"monitor: {self.monitor.snapshot()['status']}")
+        except Exception:
+            self.selftest_errors.append(traceback.format_exc())
+        ok = not self.selftest_errors
+        report = [f"Central RGB {eng.APP_VERSION} self-test: {'PASSED' if ok else 'FAILED'}"] + steps + self.selftest_errors
+        try:
+            Path(self.selftest).write_text("\n".join(report), encoding="utf-8")
+        except Exception:
+            pass
+        self.engine.stop()
+        os._exit(0 if ok else 1)
+
     def _window_effects(self):
         fx.dark_titlebar(self)
-        if not self.glass:
-            fx.titlebar_colors(self, P["BG"], P["LINE"], P["TEXT"])   # seamless title bar on Windows 11
-        if self.glass and fx.glass_supported():
-            fx.apply_glass(self)
-        op = int(self.settings.data.get("opacity", DEFAULT_OPACITY))
-        if op < 100:
-            fx.set_opacity(self, op)
+        fx.titlebar_colors(self, P["BG"], P["LINE"], P["TEXT"])   # seamless title bar on Windows 11
 
     def _set_icon(self):
         try:
@@ -755,7 +752,7 @@ class App(ctk.CTk):
         h.pack(fill="x", pady=(0, 18))
         txt = ctk.CTkFrame(h, fg_color="transparent")
         txt.pack(side="left", fill="x", expand=True)
-        img = grad_text(title)
+        img = None
         if img is not None:
             ctk.CTkLabel(txt, text="", image=img, anchor="w").pack(fill="x")
         else:
@@ -1286,22 +1283,22 @@ class App(ctk.CTk):
         acc = self.accent
         # CPU
         g = self.g_cpu
-        g["ring"].set(m.get("cpu_load"), fmt(m.get("cpu_load"), "%"), "load", PINK)
+        g["ring"].set(m.get("cpu_load"), fmt(m.get("cpu_load"), "%"), "load", acc)
         (l1, v1), (l2, v2), (l3, v3) = g["rows"]["a"], g["rows"]["b"], g["rows"]["c"]
         l1.configure(text="Temperature"); v1.configure(text=fmt(m.get("cpu_temp"), "°C"), text_color=temp_color(m.get("cpu_temp")))
         l2.configure(text="Clock"); v2.configure(text=fmt((m.get("cpu_clock") or 0) / 1000 if m.get("cpu_clock") else None, " GHz", 2))
         l3.configure(text="Power"); v3.configure(text=fmt(m.get("cpu_power"), " W"))
-        g["spark"].set(hist.get("cpu_load", []), 100, PINK)
+        g["spark"].set(hist.get("cpu_load", []), 100, acc)
         # GPU
         g = self.g_gpu
         g["name"].configure(text=(m.get("gpu_name") or "")[:26])
-        g["ring"].set(m.get("gpu_load"), fmt(m.get("gpu_load"), "%"), "load", CYAN)
+        g["ring"].set(m.get("gpu_load"), fmt(m.get("gpu_load"), "%"), "load", acc)
         (l1, v1), (l2, v2), (l3, v3) = g["rows"]["a"], g["rows"]["b"], g["rows"]["c"]
         l1.configure(text="Temperature"); v1.configure(text=fmt(m.get("gpu_temp"), "°C"), text_color=temp_color(m.get("gpu_temp")))
         l2.configure(text="Clock"); v2.configure(text=fmt(m.get("gpu_clock"), " MHz"))
         vu, vt = m.get("vram_used"), m.get("vram_total")
         l3.configure(text="VRAM"); v3.configure(text=f"{vu/1024:.1f} / {vt/1024:.0f} GB" if vu and vt else fmt(vu, " MB"))
-        g["spark"].set(hist.get("gpu_load", []) or [0, 0], 100, CYAN)
+        g["spark"].set(hist.get("gpu_load", []) or [0, 0], 100, acc)
         # RAM
         g = self.g_ram
         g["ring"].set(m.get("ram_pct"), fmt(m.get("ram_pct"), "%"), "used", acc)
@@ -1549,16 +1546,6 @@ class App(ctk.CTk):
         self.anim_sw.pack(anchor="w", padx=20, pady=4)
         if self.settings.data.get("animations", True):
             self.anim_sw.select()
-        self.glass_sw = Switch(opt, text="Frosted glass (experimental)", font=F(12), text_color=P["TEXT"],
-                                      command=self._toggle_glass)
-        self.glass_sw.pack(anchor="w", padx=20, pady=4)
-        if self.settings.data.get("glass_experimental", False):
-            self.glass_sw.select()
-        if not fx.glass_supported():
-            self.glass_sw.configure(text="Frosted glass (Windows 10/11 only)")
-        r, self.opacity = self.slider_row(opt, "Window opacity", int(self.settings.data.get("opacity", DEFAULT_OPACITY)),
-                                          self._set_opacity, lo=60, hi=100)
-        r.pack(fill="x", padx=20, pady=(8, 4))
         self.caption(opt, "Sensors").pack(fill="x", padx=20, pady=(10, 4))
         self.ramtemp_sw = Switch(opt, text="Read RAM temperatures (can make RGB RAM flicker)", font=F(12),
                                         text_color=P["TEXT"], command=self._toggle_ram_temps)
@@ -1605,13 +1592,6 @@ class App(ctk.CTk):
                          font=F(12, "bold")).pack(side="left", padx=10, pady=8)
             self.label(r, msg, 11, anchor="w", justify="left", wraplength=470).pack(side="left", fill="x", expand=True, padx=(0, 10), pady=6)
 
-    def _toggle_glass(self):
-        on = self.glass_sw.get() == 1
-        self.settings["glass_experimental"] = on
-        messagebox.showinfo(eng.APP_NAME, f"Frosted glass will be turned {'on' if on else 'off'} the next time "
-                                          "Central RGB starts." + ("\n\nIt's experimental: panels look lighter and "
-                                          "edges can look rough on some PCs." if on else ""))
-
     def _toggle_ram_temps(self):
         on = self.ramtemp_sw.get() == 1
         self.settings["ram_temps"] = on
@@ -1623,12 +1603,6 @@ class App(ctk.CTk):
         self.settings["accent_mode"] = "match" if choice == "Match lighting" else "central"
         self._update_accent()
 
-    def _set_opacity(self, v):
-        self.settings.data["opacity"] = v
-        self.settings.save()
-        fx.set_opacity(self, v)
-
-    # ---------------------------------------------------------------- navigation / accent / animation
     def show_page(self, name, animate=True):
         self.current_page = name
         page = self.pages[name]
@@ -1662,7 +1636,7 @@ class App(ctk.CTk):
                 pass
         for n, t in self.tiles.items():
             t.select(n == self.effect, acc)
-        for sw in (self.autostart_sw, self.restore_sw, self.glass_sw, self.ramtemp_sw, self.anim_sw):
+        for sw in (self.autostart_sw, self.restore_sw, self.ramtemp_sw, self.anim_sw):
             sw.configure(progress_color=acc)
         for card in self.device_cards:
             card.switch.configure(progress_color=acc)
@@ -2003,6 +1977,16 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CentralRGB.App")
         except Exception:
             pass
+    selftest = None
+    if "--selftest" in sys.argv:
+        i = sys.argv.index("--selftest")
+        selftest = sys.argv[i + 1] if i + 1 < len(sys.argv) else str(Path(eng.settings_dir()) / "selftest.txt")
+        try:
+            App(selftest=selftest).mainloop()
+        except Exception:
+            Path(selftest).write_text("Central RGB self-test: FAILED\n" + traceback.format_exc(), encoding="utf-8")
+            os._exit(1)
+        return
     App(background="--background" in sys.argv).mainloop()
 
 
