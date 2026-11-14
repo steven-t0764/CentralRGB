@@ -1412,14 +1412,14 @@ class App(ctk.CTk):
         self.caption(right, "Preview").pack(fill="x", padx=20, pady=(18, 10))
         stage = tk.Frame(right, bg=P["SIDE"], highlightthickness=1, highlightbackground=P["LINE"])
         stage.pack(fill="x", padx=20)
-        self.overlay_preview = fpo.OverlayPanel(stage, self._overlay_colors(), FONT)
+        self.overlay_preview = fpo.OverlayPanel(stage, self._overlay_colors(), FONT, outer=P["SIDE"])
         self.overlay_preview.pack(padx=24, pady=24, anchor="w")
         self.overlay_preview_note = self.label(right, "", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=360)
         self.overlay_preview_note.pack(fill="x", padx=20, pady=(10, 4))
         self.label(right, "How it works\n"
                           "• FPS is measured with Intel PresentMon, which reads Windows' own graphics events. "
                           "Nothing is injected into the game.\n"
-                          "• The overlay appears over the app you're playing and hides on the desktop.\n"
+                          "• It sticks to the game you're playing, even when you tab out, and hides when the game is minimised or closed.\n"
                           "• It shows over windowed and borderless-fullscreen games. Games in exclusive "
                           "fullscreen can cover it, so switch them to borderless.\n"
                           "• Clicks pass straight through it.",
@@ -1449,30 +1449,48 @@ class App(ctk.CTk):
                 self.overlay_win = None
 
     def _overlay_tick(self):
+        """Follow the game: pick the app you're playing, then keep the overlay on it even after you tab out."""
         try:
             cfg, metrics = self.overlay_cfg, self.snap.get("metrics", {})
-            fps = self.fps.current() if (cfg["enabled"] and self.fps.status == "running") else None
-            if cfg["enabled"]:
+            running = cfg["enabled"] and self.fps.status == "running"
+            fps, stale = None, False
+            if running:
+                fg_hwnd, fg_pid = fpo.foreground_window()
+                if fg_pid and fg_pid != getattr(self, "_game_pid", None) and self.fps.current(fg_pid):
+                    self._game_pid, self._game_hwnd, self._game_last = fg_pid, fg_hwnd, None   # a new game is in front
+                pid = getattr(self, "_game_pid", None)
+                if pid and (not self.fps.alive(pid) or fpo.game_window_state(self._game_hwnd) is None and eng.IS_WIN):
+                    self._game_pid = pid = None                                              # game closed
+                if pid:
+                    fps = self.fps.current(pid)
+                    if fps:
+                        self._game_last = fps
+                    else:                         # backgrounded games often pause drawing: keep the last number, dimmed
+                        fps, stale = self._game_last, True
+            if cfg["enabled"] and running and getattr(self, "_game_pid", None):
                 if self.overlay_win is None:
                     self.overlay_win = fpo.OverlayWindow(self, self._overlay_colors(), FONT)
-                self.overlay_win.update_overlay(cfg, fps, metrics)
+                in_front = fpo.foreground_window()[1] == self._game_pid
+                self.overlay_win.update_overlay(cfg, fps, metrics, self._game_hwnd, in_front, stale)
+            elif self.overlay_win is not None:
+                self.overlay_win.hide()
             if self.current_page == "Overlay":
                 sample = fps or {"name": "", "fps": 144, "low": 112, "ms": 6.9}
                 self.overlay_preview.render(cfg, sample, metrics)
                 self.overlay_preview_note.configure(
-                    text=f"Live: {fps['name']}" if fps else "Sample numbers. Live FPS shows here while a game is in front.")
+                    text=f"Live: {fps['name']}" if fps else "Sample numbers. Live numbers show here while a game is running.")
                 st = self.fps.status
                 self.overlay_status.configure(
                     text={"off": "Off", "starting": "Starting the FPS counter (first time downloads PresentMon)…",
                           "running": (f"Tracking {fps['name']}: {fps['fps']:.0f} FPS" if fps else
-                                      "Running. Waiting for a game or app in the foreground."),
+                                      "Running. Open a game and it will appear on it."),
                           "error": self.fps.message}.get(st, ""),
                     text_color=BAD if st == "error" else OK if st == "running" else P["MUTED"])
         except tk.TclError:
             pass
         except Exception:
             traceback.print_exc()
-        self.after(300, self._overlay_tick)
+        self.after(250, self._overlay_tick)
 
     # ---------------------------------------------------------------- Profiles
     def _page_profiles(self, p):

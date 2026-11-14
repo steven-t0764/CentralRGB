@@ -214,7 +214,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Fans | Profiles, custom curve, live CPU and GPU temperatures, a manual slider per fan (tap **MANUAL ↺** to go back to the curve) |
 | Monitor → Overview | CPU / GPU / RAM gauges and graphs, network up/down, drive usage, uptime, power draw |
 | Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
-| Overlay | Turn on the in-game overlay, choose its corner and size, and pick what it shows (FPS, 1% low, frame time, CPU, GPU). It works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
+| Overlay | A small pill that shows your frame rate as a plain number, pinned to a corner of the game window. It stays on the game when you tab out and hides when the game is minimized or closed. Optional extras: 1% low, frame time, CPU and GPU temperature. Works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
 | Profiles | Save the current look under a name, then load or delete it later |
 | Settings | System check, accent color (Central or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
 

@@ -42,17 +42,19 @@ IGNORED = {"dwm.exe", "explorer.exe", "central rgb.exe", "searchhost.exe", "shel
 
 CORNERS = ["Top left", "Top right", "Bottom left", "Bottom right"]
 SIZES = {"Small": 0.8, "Medium": 1.0, "Large": 1.3}
-ITEMS = [("fps", "FPS"), ("low", "1% low"), ("frametime", "Frame time"),
+ITEMS = [("fps", "Frame rate (the number)"), ("low", "1% low"), ("frametime", "Frame time"),
          ("cpu", "CPU temperature and load"), ("gpu", "GPU temperature and load")]
 DEFAULTS = {"enabled": False, "corner": "Top left", "size": "Medium",
-            "items": {"fps": True, "low": True, "frametime": False, "cpu": True, "gpu": True}}
+            "items": {"fps": True, "low": False, "frametime": False, "cpu": False, "gpu": False}, "style": 2}
 
 
 def overlay_settings(settings) -> dict:
     cfg = json.loads(json.dumps(DEFAULTS))
     saved = settings.data.get("overlay") or {}
     cfg.update({k: v for k, v in saved.items() if k != "items"})
-    cfg["items"].update(saved.get("items") or {})
+    if saved.get("style") == 2:          # older settings switch to the new number-only default once
+        cfg["items"].update(saved.get("items") or {})
+    cfg["style"] = 2
     return cfg
 
 
@@ -66,6 +68,45 @@ def foreground_pid() -> int:
         return int(pid.value)
     except Exception:
         return 0
+
+
+def foreground_window() -> tuple[int, int]:
+    """(window handle, process id) of the window in front."""
+    if not eng.IS_WIN:
+        return 0, 0
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        pid = ctypes.c_ulong(0)
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(hwnd), int(pid.value)
+    except Exception:
+        return 0, 0
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+def game_window_state(hwnd: int):
+    """Screen rectangle (x, y, w, h) of the game's drawing area, 'minimized', or None if the window is gone."""
+    if not eng.IS_WIN or not hwnd:
+        return None
+    u = ctypes.windll.user32
+    try:
+        if not u.IsWindow(hwnd):
+            return None
+        if u.IsIconic(hwnd):
+            return "minimized"
+        r = _RECT()
+        u.GetClientRect(hwnd, ctypes.byref(r))
+        pt = (ctypes.c_long * 2)(0, 0)
+        u.ClientToScreen(hwnd, ctypes.byref(pt))
+        w, h = r.right - r.left, r.bottom - r.top
+        if w < 200 or h < 150:
+            return None
+        return pt[0], pt[1], w, h
+    except Exception:
+        return None
 
 
 def frame_stats(frames, now, window=1.0, low_window=10.0):
@@ -200,6 +241,13 @@ class FpsCounter:
                 dq.append((now, ms))
 
     # ---------------- reading
+    def alive(self, pid) -> bool:
+        """True while this process has drawn a frame in the last 15 seconds."""
+        now = time.monotonic()
+        with self.lock:
+            dq = self.frames.get(pid)
+            return bool(dq) and now - dq[-1][0] <= 15
+
     def current(self, pid=None):
         """Stats for the foreground app: {'name', 'fps', 'low', 'ms'} or None when it isn't rendering."""
         pid = foreground_pid() if pid is None else pid
@@ -221,18 +269,30 @@ class FpsCounter:
 
 # ============================================================================ visuals
 class OverlayPanel(tk.Canvas):
-    """Compact stats panel. `colors` = dict(bg, line, text, muted, grad=(c1, c2, c3), ok, warn, bad)."""
+    """Small, sleek pill: the frame rate as a bare number, optional extras in small text beside it.
+    `colors` = dict(bg, line, text, muted, ok, warn, bad); `outer` is the colour around the pill."""
 
-    def __init__(self, master, colors, font, scale=1.0):
-        super().__init__(master, bg=colors["bg"], highlightthickness=1, highlightbackground=colors["line"])
+    def __init__(self, master, colors, font, scale=1.0, outer=None):
+        self.outer = outer or colors["bg"]
+        super().__init__(master, bg=self.outer, highlightthickness=0)
         self.c, self.font, self.scale = colors, font, scale
-        self.rows = []
+        self._fonts = {}
 
-    def render(self, cfg, fps=None, metrics=None):
-        """fps: dict from FpsCounter.current() (or None); metrics: hardware monitor metrics dict."""
+    def _font(self, size, weight):
+        import tkinter.font as tkfont
+        key = (size, weight)
+        if key not in self._fonts:
+            self._fonts[key] = tkfont.Font(root=self, family=self.font, size=size, weight=weight)
+        return self._fonts[key]
+
+    def _pill(self, w, h, r, fill, outline):
+        pts = [r, 0, w - r, 0, w, 0, w, r, w, h - r, w, h, w - r, h, r, h, 0, h, 0, h - r, 0, r, 0, 0]
+        self.create_polygon(pts, smooth=True, fill=fill, outline=outline)
+
+    def render(self, cfg, fps=None, metrics=None, stale=False):
+        """fps: dict from FpsCounter.current() (or None); metrics: hardware monitor metrics."""
         c, s, m = self.c, self.scale * SIZES.get(cfg.get("size"), 1.0), metrics or {}
         items = cfg.get("items", {})
-        rows = []   # (label, value, value_color, big)
 
         def tcol(t):
             return c["text"] if t is None else c["ok"] if t < 65 else c["warn"] if t < 82 else c["bad"]
@@ -240,91 +300,122 @@ class OverlayPanel(tk.Canvas):
         def num(v, unit="", nd=0):
             return "—" if v is None else f"{v:.{nd}f}{unit}"
 
-        if items.get("fps"):
-            rows.append(("FPS", num(fps["fps"]) if fps else "—", c["text"], True))
+        extras = []   # list of [(text, colour), ...] segments
         if items.get("low"):
-            rows.append(("1% LOW", num(fps["low"]) if fps else "—", c["muted"] if not fps else c["text"], False))
+            extras.append([(num(fps["low"]) if fps else "—", c["text"]), (" low", c["muted"])])
         if items.get("frametime"):
-            rows.append(("FRAME", num(fps["ms"], " ms", 1) if fps else "—", c["text"], False))
+            extras.append([(num(fps["ms"], "", 1) if fps else "—", c["text"]), (" ms", c["muted"])])
         if items.get("cpu"):
-            rows.append(("CPU", f"{num(m.get('cpu_temp'), '°')}  {num(m.get('cpu_load'), '%')}", tcol(m.get("cpu_temp")), False))
+            extras.append([("CPU ", c["muted"]), (num(m.get("cpu_temp"), "°"), tcol(m.get("cpu_temp")))])
         if items.get("gpu"):
-            rows.append(("GPU", f"{num(m.get('gpu_temp'), '°')}  {num(m.get('gpu_load'), '%')}", tcol(m.get("gpu_temp")), False))
-        if not rows:
-            rows.append(("FPS", "—", c["text"], True))
+            extras.append([("GPU ", c["muted"]), (num(m.get("gpu_temp"), "°"), tcol(m.get("gpu_temp")))])
+        show_fps = items.get("fps") or not extras
 
+        big = self._font(max(10, int(18 * s)), "bold")
+        small = self._font(max(7, int(9 * s)), "bold")
+        padx, gap = int(11 * s), int(9 * s)
+        h = int(big.metrics("linespace") * 0.92) + int(8 * s)
+        x = padx
         self.delete("all")
-        pad, w = int(12 * s), int(168 * s)
-        y = int(4 * s) + pad
-        n = 24
-        for i in range(n):   # gradient strip along the top
-            t = i / (n - 1) * (len(c["grad"]) - 1)
-            a, b = c["grad"][min(int(t), len(c["grad"]) - 2)], c["grad"][min(int(t), len(c["grad"]) - 2) + 1]
-            k = t - min(int(t), len(c["grad"]) - 2)
-            col = "#%02x%02x%02x" % tuple(int(int(a[j:j + 2], 16) + (int(b[j:j + 2], 16) - int(a[j:j + 2], 16)) * k) for j in (1, 3, 5))
-            self.create_rectangle(i * w / n, 0, (i + 1) * w / n + 1, int(3 * s), width=0, fill=col)
-        for label, value, col, big in rows:
-            size = int((26 if big else 13) * s)
-            h = int(size * 1.45)
-            self.create_text(pad, y + h / 2, text=label, anchor="w", fill=c["muted"], font=(self.font, max(7, int(9 * s)), "bold"))
-            self.create_text(w - pad, y + h / 2, text=value, anchor="e", fill=col, font=(self.font, size, "bold"))
-            y += h + int(2 * s)
-        height = y + pad - int(2 * s)
-        self.configure(width=w, height=height)
-        return w + 2, height + 2
+        parts = []
+        if show_fps:
+            value = num(fps["fps"]) if fps else "—"
+            parts.append((x, value, big, c["muted"] if stale else c["text"]))
+            x += big.measure(value) + gap
+        for segs in extras:
+            for text, col in segs:
+                parts.append((x, text, small, col))
+                x += small.measure(text)
+            x += gap
+        w = max(x - gap + padx, h)
+        self._pill(w, h, min(h // 2, int(10 * s)), c["bg"], c["line"])
+        for px, text, f, col in parts:
+            self.create_text(px, h / 2, text=text, anchor="w", fill=col, font=f)
+        self.configure(width=w + 1, height=h + 1)
+        return w + 1, h + 1
 
 
 class OverlayWindow(tk.Toplevel):
-    """Always-on-top, click-through window. Works over windowed and borderless-fullscreen games."""
-    MARGIN = 18
+    """Click-through window pinned to a corner of the game's window.
+    In front of the game while you play; when you tab out it stays on the game (just above it,
+    not on top of every other app) and hides when the game is minimised or closed."""
+    MARGIN = 12
+    KEY = "#010102"          # transparent colour around the rounded pill (Windows)
 
     def __init__(self, root, colors, font):
         super().__init__(root)
         self.withdraw()
         self.overrideredirect(True)
-        self.configure(bg=colors["bg"])
-        self.panel = OverlayPanel(self, colors, font)
+        outer = self.KEY if eng.IS_WIN else colors["bg"]
+        self.configure(bg=outer)
+        self.panel = OverlayPanel(self, colors, font, outer=outer)
         self.panel.pack()
         try:
-            self.attributes("-topmost", True)
-            self.attributes("-alpha", 0.88)
+            if eng.IS_WIN:
+                self.attributes("-transparentcolor", self.KEY)
+            self.attributes("-alpha", 0.9)
         except tk.TclError:
             pass
         self._styled = False
         self.shown = False
+        self.hwnd = 0
 
     def _click_through(self):
         if self._styled or not eng.IS_WIN:
             return
         try:
             user32 = ctypes.windll.user32
-            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            self.hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
             GWL_EXSTYLE = -20
-            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
             # layered + transparent (clicks pass through) + tool window (no taskbar button) + never takes focus
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
+            user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
             self._styled = True
         except Exception:
             pass
 
-    def update_overlay(self, cfg, fps, metrics, always_show=False):
-        if fps is None and not always_show:
-            if self.shown:
-                self.withdraw()
-                self.shown = False
+    def hide(self):
+        if self.shown:
+            self.withdraw()
+            self.shown = False
+
+    def _stack(self, game_hwnd, game_in_front):
+        """Keep the overlay directly above the game window."""
+        if not eng.IS_WIN or not self.hwnd:
+            try:
+                self.attributes("-topmost", True)
+            except tk.TclError:
+                pass
             return
-        w, h = self.panel.render(cfg, fps, metrics)
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        u = ctypes.windll.user32
+        flags = 0x0001 | 0x0002 | 0x0010   # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        try:
+            if game_in_front:
+                u.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, flags)               # HWND_TOPMOST
+            else:
+                u.SetWindowPos(self.hwnd, -2, 0, 0, 0, 0, flags)               # HWND_NOTOPMOST
+                above = u.GetWindow(game_hwnd, 3)                              # GW_HWNDPREV: window just above the game
+                if above and above != self.hwnd:
+                    u.SetWindowPos(self.hwnd, above, 0, 0, 0, 0, flags)        # slot in just below it = just above the game
+                elif not above:
+                    u.SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, flags)            # game is on top: go above it
+        except Exception:
+            pass
+
+    def update_overlay(self, cfg, fps, metrics, game_hwnd=0, game_in_front=True, stale=False):
+        rect = game_window_state(game_hwnd) if eng.IS_WIN else (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
+        if rect is None or rect == "minimized":
+            self.hide()
+            return
+        gx, gy, gw, gh = rect
+        w, h = self.panel.render(cfg, fps, metrics, stale=stale)
         corner = cfg.get("corner", "Top left")
-        x = self.MARGIN if "left" in corner else sw - w - self.MARGIN
-        y = self.MARGIN if "Top" in corner else sh - h - self.MARGIN - 48
+        x = gx + self.MARGIN if "left" in corner else gx + gw - w - self.MARGIN
+        y = gy + self.MARGIN if "Top" in corner else gy + gh - h - self.MARGIN
         self.geometry(f"{w}x{h}+{x}+{y}")
         if not self.shown:
             self.deiconify()
             self.shown = True
             self.update_idletasks()
             self._click_through()
-        try:
-            self.attributes("-topmost", True)     # games can push other windows down; keep re-asserting
-        except tk.TclError:
-            pass
+        self._stack(game_hwnd, game_in_front)
