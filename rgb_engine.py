@@ -51,8 +51,11 @@ PAWNIO_PAGE = "https://pawnio.eu"
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW for helper commands
 
-EFFECTS = ["Static", "Breathing", "Color Cycle", "Rainbow Wave", "Off"]
-ANIMATED = {"Breathing", "Color Cycle", "Rainbow Wave"}
+BASIC_EFFECTS = ["Static", "Breathing", "Color Cycle", "Rainbow Wave", "Off"]
+PRESET_EFFECTS = ["Calm Water", "Rain", "Side to Side", "Crimson", "RGBarz", "Gradient Wave", "Neon Storm", "Black Ice"]
+EFFECTS = BASIC_EFFECTS[:4] + PRESET_EFFECTS + ["Off"]
+ANIMATED = set(EFFECTS) - {"Static", "Off"}
+USES_COLOR = {"Static", "Breathing"}        # effects that use the colour you pick
 
 TYPE_NAMES = {
     DeviceType.MOTHERBOARD: "Motherboard", DeviceType.DRAM: "RAM", DeviceType.GPU: "GPU",
@@ -150,6 +153,7 @@ class Settings:
         "openrgb_path": "",
         "state": {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50},
         "excluded": [],
+        "device_overrides": {},
         "profiles": {
             "Ocean": {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50},
             "Rainbow": {"color": [255, 0, 0], "effect": "Rainbow Wave", "brightness": 100, "speed": 40},
@@ -371,7 +375,80 @@ def compute_colors(effect: str, color, brightness: int, speed: int, n: int, t: f
         base = t * f * 0.25 + offset
         return [scale([c * 255 for c in colorsys.hsv_to_rgb((base + i / n) % 1.0, 1, 1)])
                 for i in range(n)]
+    if effect in PRESET_EFFECTS:
+        return [scale(c) for c in _preset(effect, n, t * (0.35 + f), offset)]
     return [scale(color)] * n  # Static
+
+
+def _rnd(a: float, b: float = 0.0) -> float:
+    """Repeatable pseudo-random number 0..1 (same inputs, same result), so effects need no stored state."""
+    return (math.sin(a * 127.1 + b * 311.7) * 43758.5453) % 1.0
+
+
+def _mix(a, b, k):
+    k = max(0.0, min(1.0, k))
+    return tuple(a[i] + (b[i] - a[i]) * k for i in range(3))
+
+
+def _palette(stops, x):
+    x = (x % 1.0) * len(stops)
+    i = int(x) % len(stops)
+    return _mix(stops[i], stops[(i + 1) % len(stops)], x - int(x))
+
+
+def _preset(effect, n, t, offset=0.0):
+    """Colours for the preset effects. t is already scaled by the speed setting."""
+    out = []
+    if effect == "Calm Water":            # slow overlapping blue-teal waves
+        for i in range(n):
+            x = i / n
+            w = 0.5 + 0.25 * math.sin(x * 9 + t * 0.9 + offset * 6) + 0.25 * math.sin(x * 4 - t * 0.6)
+            out.append(_mix((0, 25, 90), (70, 210, 255), w))
+    elif effect == "Rain":                # colourful drops that flash and fade on a dark background
+        for i in range(n):
+            period = 1.2 + 2.2 * _rnd(i, 1 + offset)
+            tt = t * 1.3 + _rnd(i, 2) * period
+            x, cycle = tt % period, int(tt / period)
+            hue = _rnd(i, 10 + cycle)
+            drop = [c * 255 for c in colorsys.hsv_to_rgb(hue, 0.9, 1)]
+            out.append(_mix((0, 4, 14), drop, math.exp(-x * 3.5)))
+    elif effect == "Side to Side":        # a rainbow bar sweeping left and right
+        pos = 0.5 + 0.5 * math.sin(t * 1.6 + offset * 6)
+        for i in range(n):
+            x = (i + 0.5) / n
+            col = [c * 255 for c in colorsys.hsv_to_rgb((x * 0.9 + t * 0.05) % 1.0, 1, 1)]
+            k = max(0.0, 1 - abs(x - pos) * 3.2) if n > 1 else 1.0
+            out.append(_mix(_mix((0, 0, 0), col, 0.12), col, k))
+    elif effect == "Crimson":             # deep red embers that glow at their own pace
+        for i in range(n):
+            v = 0.5 + 0.5 * math.sin(t * (1.0 + 2.2 * _rnd(i, 3)) + _rnd(i, 4 + offset) * 6.28)
+            out.append(_mix((70, 0, 4), (255, 38, 20), v * v))
+    elif effect == "RGBarz":              # equaliser bar bouncing green to yellow to red
+        level = 0.12 + 0.88 * abs(math.sin(t * 2.3 + offset * 9) * math.sin(t * 0.9 + 1.3) + 0.25 * math.sin(t * 5.1)) / 1.25
+        for i in range(n):
+            x = (i + 0.5) / n
+            col = _palette([(0, 255, 60), (0, 255, 60), (255, 230, 0), (255, 40, 0)], x * 0.749)
+            if n == 1:
+                out.append(_mix((0, 40, 10), _palette([(0, 255, 60), (255, 230, 0), (255, 40, 0)], level * 0.66), 1))
+            else:
+                out.append(col if x <= level else _mix((0, 0, 0), col, 0.06))
+    elif effect == "Gradient Wave":       # smooth cyan, blue, violet, pink gradient drifting along
+        stops = [(0, 220, 255), (40, 90, 255), (170, 60, 255), (255, 60, 190)]
+        out = [_palette(stops, i / n * 0.8 + t * 0.12 + offset) for i in range(n)]
+    elif effect == "Neon Storm":          # purple-blue clouds with lightning flashes
+        slot, x = int(t * 1.4), (t * 1.4) % 1.0
+        strike = _rnd(slot, 7) < 0.45
+        centre, flash = _rnd(slot, 8), math.exp(-x * 7) * (0.6 + 0.4 * math.sin(x * 60))
+        for i in range(n):
+            p = i / n
+            base = _mix((70, 0, 160), (20, 40, 220), 0.5 + 0.5 * math.sin(p * 5 + t * 0.7 + offset * 6))
+            k = flash * max(0.0, 1 - abs(p - centre) * 2.5) if (strike and n > 1) else (flash if strike else 0)
+            out.append(_mix(base, (230, 240, 255), k))
+    elif effect == "Black Ice":           # near-black with cold glints
+        for i in range(n):
+            v = (0.5 + 0.5 * math.sin(t * (0.6 + 1.5 * _rnd(i, 5)) + _rnd(i, 6 + offset) * 6.28)) ** 6
+            out.append(_mix((0, 10, 22), (150, 235, 255), v))
+    return out or [(0, 0, 0)] * n
 
 
 # --------------------------------------------------------------------------- engine
@@ -386,6 +463,7 @@ class LightingEngine(threading.Thread):
         self.client: OpenRGBClient | None = None
         self.state = {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50}
         self.excluded: set[str] = set()
+        self.overrides: dict[str, dict] = {}   # device key -> its own lighting state
         self.broken: set[str] = set()      # devices that errored; skipped until next rescan
         self.dirty = True
         self.prepared: dict[str, bool] = {}   # device key -> True if per-LED capable
@@ -426,6 +504,24 @@ class LightingEngine(threading.Thread):
         with self.lock:
             self.state.update(kw)
             self.dirty = True
+
+    def set_overrides(self, overrides):
+        with self.lock:
+            self.overrides = {k: dict(v) for k, v in overrides.items()}
+            self.dirty = True
+
+    def device_info(self, key) -> dict | None:
+        """Details OpenRGB reports for one device (exact model, vendor, zones...)."""
+        with self.lock:
+            for d in self.devices():
+                if device_key(d) == key:
+                    md = d.metadata
+                    return {"name": d.name, "type": type_name(d), "vendor": getattr(md, "vendor", "") or "",
+                            "description": getattr(md, "description", "") or "", "version": getattr(md, "version", "") or "",
+                            "serial": getattr(md, "serial", "") or "", "location": getattr(md, "location", "") or "",
+                            "leds": len(d.leds), "zones": [(z.name, len(z.leds)) for z in d.zones],
+                            "modes": [m.name for m in d.modes]}
+        return None
 
     def set_excluded(self, keys):
         with self.lock:
@@ -498,15 +594,20 @@ class LightingEngine(threading.Thread):
         while not self._stop_evt.is_set():
             try:
                 with self.lock:
-                    st = dict(self.state)
+                    base = dict(self.state)
+                    ov = self.overrides
                     client = self.client
                     dirty = self.dirty
-                    animated = st["effect"] in ANIMATED
-                    if client and not self.paused and (animated or dirty):
+                    any_animated = base["effect"] in ANIMATED or any(o.get("effect") in ANIMATED for o in ov.values())
+                    if client and not self.paused and (any_animated or dirty):
                         self.dirty = False
                         now = time.time()
                         for idx, dev in enumerate(self.targets()):
                             key = device_key(dev)
+                            st = ov.get(key) or base            # a device can have its own lighting
+                            animated = st["effect"] in ANIMATED
+                            if not animated and not dirty:
+                                continue
                             if key not in self.prepared:
                                 self.prepared[key] = self._prepare(dev)
                             per_led = self.prepared[key]

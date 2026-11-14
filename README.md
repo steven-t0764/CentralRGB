@@ -15,7 +15,8 @@
 A free and open-source Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
-- **Sets every device at once** with a color wheel, presets, brightness and speed, plus five effects: Static, Breathing, Color Cycle, Rainbow Wave and Off
+- **Sets every device at once** with a color wheel, presets, brightness and speed, and a gallery of 13 effects: Static, Breathing, Color Cycle, Rainbow Wave, Calm Water, Rain, Side to Side, Crimson, RGBarz, Gradient Wave, Neon Storm, Black Ice and Off
+- **Per-device lighting**: click Customize on a device to see a drawing of it with live LEDs and its exact model details, and give it its own effect, color and brightness
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
@@ -81,6 +82,8 @@ You can remove it separately from *Settings → Apps*.
 ## Screenshots
 
 <p align="center"><img src="assets/screenshots/home.png" alt="Home dashboard" width="860"><br><b>Home</b>: devices, live lighting, fan profile and temperatures at a glance, with quick actions</p>
+
+<p align="center"><img src="assets/screenshots/device-editor.png" alt="Device editor showing a RAM stick" width="860"><br><b>Device editor</b>: the device drawn with live LEDs, its exact model details, and its own lighting</p>
 
 <table>
   <tr>

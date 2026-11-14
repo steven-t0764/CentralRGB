@@ -543,25 +543,159 @@ class CurveEditor(tk.Canvas):
 
 
 # ----------------------------------------------------------------------------- composite widgets
-class EffectTile(ctk.CTkFrame):
-    def __init__(self, master, name, on_click):
-        super().__init__(master, fg_color=P["CARD2"], corner_radius=6, border_width=1, border_color=P["CARD2"])
-        self.strip = LedStrip(self, n=12, height=22, bg=P["CARD2"], pill=True)
-        self.strip.pack(fill="x", padx=14, pady=(14, 6))
-        self.t = ctk.CTkLabel(self, text=name, font=F(14, "bold"), text_color=P["TEXT"], anchor="w")
-        self.t.pack(fill="x", padx=14)
-        self.s = ctk.CTkLabel(self, text=EFFECT_INFO[name], font=F(11), text_color=P["MUTED"], anchor="w")
-        self.s.pack(fill="x", padx=14, pady=(0, 12))
-        for w in (self, self.strip, self.t, self.s):
-            w.bind("<Button-1>", lambda e: on_click(name))
-            w.configure(cursor="hand2")
+class EffectTile(tk.Canvas):
+    """Gallery tile: the effect plays across the whole tile with its name on top."""
+    COLS = 18
+
+    def __init__(self, master, name, on_click, height=64):
+        super().__init__(master, height=height, bg=P["CARD"], highlightthickness=2, highlightbackground=P["CARD"], cursor="hand2")
+        self.name, self.h, self.bars, self.strip = name, height, [], self
+        self.n = self.COLS
+        self.bind("<Configure>", lambda e: self._layout())
+        self.bind("<Button-1>", lambda e: on_click(name))
+
+    def _layout(self):
+        self.delete("all")
+        w = max(self.winfo_width(), 40)
+        step = w / self.COLS
+        self.bars = [self.create_rectangle(i * step, 0, (i + 1) * step + 1, self.h, width=0, fill=P["CARD2"])
+                     for i in range(self.COLS)]
+        for dx, dy, col in ((1, 1, "#000000"), (0, 0, "#ffffff")):
+            self.create_text(w / 2 + dx, self.h / 2 + dy, text=self.name.upper(), fill=col, font=(FONT, 9, "bold"))
+
+    def show(self, colors):
+        dark = (16, 16, 16)
+        for i, it in enumerate(self.bars):
+            c = colors[int(i * len(colors) / len(self.bars))]
+            self.itemconfigure(it, fill=hexcol(mix(dark, c, 0.62)))
 
     def select(self, on, accent):
-        self.configure(border_color=accent if on else P["CARD2"], border_width=2 if on else 1)
+        self.configure(highlightbackground=accent if on else P["CARD"])
+
+
+class DeviceArt(tk.Canvas):
+    """Simple drawing of a device type with its LEDs lit live."""
+    W, H = 560, 230
+
+    def __init__(self, master, kind, leds):
+        super().__init__(master, width=self.W, height=self.H, bg=P["CARD"], highlightthickness=0)
+        self.leds, self.glow = [], []
+        self.body, self.edge, self.dark = "#1c1c1c", "#4a4a4a", "#111111"
+        n = max(1, min(leds, 40))
+        getattr(self, "_draw_" + {"RAM": "ram", "GPU": "gpu", "Motherboard": "board", "Cooler": "fan", "LED strip": "strip",
+                                  "Keyboard": "keyboard", "Mouse": "mouse", "Mousepad": "strip", "Case": "fan"}.get(kind, "generic"))(n)
+
+    def _led(self, x0, y0, x1, y1, oval=False):
+        make = self.create_oval if oval else self.create_rectangle
+        self.leds.append(make(x0, y0, x1, y1, width=0, fill=self.dark))
+
+    def _draw_ram(self, n):
+        x0, x1 = 60, 500
+        self.create_rectangle(x0, 80, x1, 190, fill="#0f2a1c", outline="#1d4a33")                       # circuit board
+        self.create_polygon(x0 + 8, 62, x1 - 8, 62, x1 - 2, 80, x1 - 2, 168, x0 + 2, 168, x0 + 2, 80, fill=self.body, outline=self.edge)
+        for i in range(6):                                                                               # heat-spreader fins
+            x = x0 + 40 + i * 72
+            self.create_line(x, 96, x + 30, 150, fill="#2e2e2e", width=3)
+        step = (x1 - x0 - 24) / n                                                                        # light bar
+        for i in range(n):
+            self._led(x0 + 12 + i * step, 40, x0 + 12 + (i + 1) * step + 1, 62)
+        self.create_rectangle(x0 + 12, 40, x1 - 12, 62, outline=self.edge)
+        for i in range(52):                                                                              # gold contacts
+            x = x0 + 10 + i * 8.2
+            if 250 < x < 268:
+                continue                                                                                 # notch
+            self.create_rectangle(x, 174, x + 5, 190, fill="#c9a227", width=0)
+        self.create_rectangle(252, 180, 268, 191, fill=P["CARD"], width=0)
+
+    def _draw_gpu(self, n):
+        self.create_rectangle(40, 60, 520, 190, fill=self.body, outline=self.edge)
+        self.create_rectangle(26, 54, 40, 196, fill="#3a3a3a", outline=self.edge)                        # bracket
+        for cx in (130, 280, 430):                                                                       # fans
+            self.create_oval(cx - 56, 69, cx + 56, 181, fill=self.dark, outline=self.edge)
+            for a in range(0, 360, 40):
+                self.create_arc(cx - 46, 79, cx + 46, 171, start=a, extent=22, style="pieslice", fill="#2b2b2b", outline="")
+            self.create_oval(cx - 12, 113, cx + 12, 137, fill="#333333", outline="")
+        step = 460 / n                                                                                   # light strip on the top edge
+        for i in range(n):
+            self._led(50 + i * step, 44, 50 + (i + 1) * step + 1, 56)
+        self.create_rectangle(120, 196, 400, 206, fill="#c9a227", width=0)                               # PCIe connector
+
+    def _draw_board(self, n):
+        self.create_rectangle(150, 14, 420, 216, fill="#161616", outline=self.edge)
+        self.create_rectangle(215, 50, 285, 120, fill="#2a2a2a", outline="#666666")                      # CPU socket
+        self.create_rectangle(165, 30, 200, 130, fill="#242424", outline=self.edge)                      # VRM heatsink
+        self.create_rectangle(210, 24, 300, 42, fill="#242424", outline=self.edge)
+        for i in range(4):                                                                               # RAM slots
+            self.create_rectangle(305 + i * 14, 40, 313 + i * 14, 132, fill="#0d0d0d", outline="#3a3a3a")
+        for i in range(3):                                                                               # PCIe slots
+            self.create_rectangle(170, 148 + i * 22, 330, 156 + i * 22, fill="#0d0d0d", outline="#3a3a3a")
+        self.create_rectangle(345, 150, 405, 200, fill="#242424", outline=self.edge)                     # chipset
+        a = max(1, n // 2)
+        for i in range(a):                                                                               # right-edge lighting
+            self._led(424, 20 + i * 190 / a, 434, 20 + (i + 1) * 190 / a - 2)
+        m = max(1, n - a)
+        for i in range(n - a):                                                                           # left-edge lighting
+            self._led(138, 20 + i * 110 / m, 147, 20 + (i + 1) * 110 / m - 2)
+
+    def _draw_fan(self, n):
+        cx, cy, r = 280, 115, 96
+        self.create_rectangle(cx - 106, cy - 106, cx + 106, cy + 106, fill=self.body, outline=self.edge)
+        for i in range(n):                                                                               # LED ring
+            a = 2 * math.pi * i / n
+            x, y = cx + math.cos(a) * r, cy + math.sin(a) * r
+            self._led(x - 7, y - 7, x + 7, y + 7, oval=True)
+        self.create_oval(cx - 82, cy - 82, cx + 82, cy + 82, fill=self.dark, outline=self.edge)
+        for a in range(0, 360, 51):
+            self.create_arc(cx - 76, cy - 76, cx + 76, cy + 76, start=a, extent=30, style="pieslice", fill="#2b2b2b", outline="")
+        self.create_oval(cx - 20, cy - 20, cx + 20, cy + 20, fill="#333333", outline="")
+
+    def _draw_strip(self, n):
+        self.create_rectangle(30, 96, 530, 134, fill="#e8e8e8", outline="#bdbdbd")
+        step = 490 / n
+        for i in range(n):
+            x = 35 + i * step + step / 2
+            r = min(11, step / 2 - 1.5)
+            self._led(x - r, 115 - r, x + r, 115 + r)
+            self.create_rectangle(x - r, 115 - r, x + r, 115 + r, outline="#9a9a9a")
+
+    def _draw_keyboard(self, n):
+        self.create_rectangle(40, 46, 520, 186, fill=self.body, outline=self.edge)
+        rows, cols = 5, 15
+        kw, kh = 30, 24
+        for r in range(rows):
+            for c in range(cols):
+                x, y = 50 + c * 31, 56 + r * 25
+                self._led(x, y, x + kw - 3, y + kh - 3)
+        self.rowwise = (rows, cols)
+
+    def _draw_mouse(self, n):
+        self.create_polygon(230, 40, 330, 40, 356, 100, 350, 170, 320, 204, 240, 204, 210, 170, 204, 100,
+                            smooth=True, fill=self.body, outline=self.edge)
+        self.create_line(280, 42, 280, 110, fill=self.edge)
+        self._led(273, 60, 287, 92)                                                                      # wheel
+        if n > 1:
+            self._led(262, 140, 298, 176, oval=True)                                                     # logo
+        for i in range(max(0, n - 2)):                                                                   # underglow
+            k = i / max(1, n - 3)
+            self._led(216 + k * 120, 206, 216 + k * 120 + 8, 212)
+
+    def _draw_generic(self, n):
+        self.create_rectangle(120, 60, 440, 170, fill=self.body, outline=self.edge)
+        step = 300 / n
+        for i in range(n):
+            self._led(130 + i * step, 100, 130 + (i + 1) * step - 2, 130)
+
+    def show(self, colors):
+        n = len(self.leds)
+        rw = getattr(self, "rowwise", None)
+        for i, it in enumerate(self.leds):
+            k = (i % rw[1]) / rw[1] if rw else i / n          # keyboards: colour by column so waves sweep across
+            c = colors[min(len(colors) - 1, int(k * len(colors)))]
+            self.itemconfigure(it, fill=hexcol(c) if max(c) > 12 else self.dark)
 
 
 class DeviceCard(ctk.CTkFrame):
-    def __init__(self, master, key, tname, name, leds, enabled, on_toggle):
+    def __init__(self, master, key, tname, name, leds, enabled, on_toggle, on_edit):
         super().__init__(master, fg_color=P["CARD"], corner_radius=6, border_width=1, border_color=P["LINE"])
         accent_bar(self)
         self.key = key
@@ -575,6 +709,10 @@ class DeviceCard(ctk.CTkFrame):
         ctk.CTkLabel(info, text=f"{tname} · {leds} LEDs", font=F(11), text_color=P["MUTED"], anchor="w").pack(fill="x")
         self.switch = Switch(top, text="", width=44, command=lambda: on_toggle(key, self.switch.get() == 1))
         self.switch.pack(side="right")
+        self.edit_btn = ctk.CTkButton(top, text="Customize", width=92, height=30, corner_radius=6, font=F(13),
+                                      fg_color=P["CARD2"], hover_color="#444444", text_color=P["TEXT"],
+                                      border_width=1, border_color="#3f3f3f", command=lambda: on_edit(key))
+        self.edit_btn.pack(side="right", padx=10)
         if enabled:
             self.switch.select()
         self.strip = LedStrip(self, n=max(1, min(leds, 20)), height=26, pill=True)
@@ -660,6 +798,8 @@ class App(ctk.CTk):
         self.manager = eng.OpenRGBManager(self.settings, self.log)
         self.engine = eng.LightingEngine(self.log, on_disconnect=lambda: self.q.put(("disconnected",)))
         self.engine.set_excluded(self.settings["excluded"])
+        self.engine.set_overrides(self.settings.data.get("device_overrides", {}))
+        self.editor, self.editor_key, self.sysinfo = None, None, []
         self.engine.state.update(self.settings["state"])
         self.engine.paused = True
         self.engine.start()
@@ -1050,8 +1190,8 @@ class App(ctk.CTk):
         self.tiles = {}
         for i, name in enumerate(eng.EFFECTS):
             t = EffectTile(grid, name, self._set_effect)
-            t.grid(row=i // 3, column=i % 3, sticky="nsew", padx=6, pady=6)
-            grid.grid_columnconfigure(i % 3, weight=1, uniform="e")
+            t.grid(row=i // 5, column=i % 5, sticky="nsew", padx=4, pady=4)
+            grid.grid_columnconfigure(i % 5, weight=1, uniform="e")
             self.tiles[name] = t
 
         ctl = self.card(right)
@@ -1095,11 +1235,137 @@ class App(ctk.CTk):
             self.dev_empty.configure(text="No RGB devices found yet. Settings → System check shows what's needed.")
             self.dev_empty.grid()
         for i, (key, t, name, leds) in enumerate(rows):
-            c = DeviceCard(self.dev_area, key, t, name, leds, key not in excluded, self._toggle_device)
+            c = DeviceCard(self.dev_area, key, t, name, leds, key not in excluded, self._toggle_device, self._open_device)
+            if key in self.settings.data.get("device_overrides", {}):
+                c.edit_btn.configure(text="Custom ✓")
             c.switch.configure(progress_color=self.accent)
             c.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=6)
             self.device_cards.append(c)
         self._update_dev_summary()
+
+    # ---------------------------------------------------------------- device editor
+    def _state_for(self, key, base):
+        return self.settings.data.get("device_overrides", {}).get(key) or base
+
+    def _save_override(self, key, state):
+        ov = dict(self.settings.data.get("device_overrides", {}))
+        if state is None:
+            ov.pop(key, None)
+        else:
+            ov[key] = state
+        self.settings["device_overrides"] = ov
+        self.engine.set_overrides(ov)
+        if self.connected:
+            self.engine.paused = False
+        for c in self.device_cards:
+            if c.key == key:
+                c.edit_btn.configure(text="Custom ✓" if state else "Customize")
+
+    def _close_device(self):
+        if self.editor is not None:
+            self.editor.destroy()
+            self.editor = None
+
+    def _open_device(self, key):
+        """Pop up one device: a drawing of it with live LEDs, its exact model details, and its own lighting."""
+        self._close_device()
+        info = self.engine.device_info(key)
+        row = next((r for r in self.device_rows if r[0] == key), None)
+        if info is None and row is None:
+            return
+        info = info or {"name": row[2], "type": row[1], "leds": row[3], "vendor": "", "description": "", "version": "",
+                        "serial": "", "location": "", "zones": [], "modes": []}
+        self.editor_key = key
+        ed = ctk.CTkFrame(self.pages["Devices"], fg_color=P["BG"], corner_radius=0)
+        ed.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.editor = ed
+        head = ctk.CTkFrame(ed, fg_color="transparent")
+        head.pack(fill="x", pady=(4, 14))
+        self.secondary(head, "←  Devices", self._close_device, height=32, width=110).pack(side="left")
+        tt = ctk.CTkFrame(head, fg_color="transparent")
+        tt.pack(side="left", padx=16)
+        ctk.CTkLabel(tt, text=info["name"], font=F(22, "bold", display=True), text_color=P["TEXT"], anchor="w").pack(fill="x")
+        self.label(tt, f"{info['type']} · {info['leds']} LEDs", 13, color=P["MUTED"], anchor="w").pack(fill="x")
+
+        body = ctk.CTkFrame(ed, fg_color="transparent")
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=3, uniform="de")
+        body.grid_columnconfigure(1, weight=2, uniform="de")
+        body.grid_rowconfigure(0, weight=1)
+        left = ctk.CTkFrame(body, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+
+        art_card = self.card(left)
+        art_card.pack(fill="x")
+        self.editor_art = DeviceArt(art_card, info["type"], info["leds"])
+        self.editor_art.pack(pady=14)
+
+        det = self.card(left)
+        det.pack(fill="both", expand=True, pady=(14, 0))
+        self.caption(det, "About this device").pack(fill="x", padx=20, pady=(14, 6))
+        rows = [("Model", info["name"]), ("Vendor", info["vendor"]), ("Description", info["description"]),
+                ("Firmware / version", info["version"]), ("Serial", info["serial"]), ("Connection", info["location"]),
+                ("Zones", ", ".join(f"{z} ({n})" for z, n in info["zones"]))]
+        # exact hardware details from Windows for this kind of device
+        section = {"RAM": "Memory", "GPU": "Graphics", "Motherboard": "Motherboard"}.get(info["type"])
+        for sec, items in self.sysinfo:
+            if sec == section:
+                rows += [(k, v) for k, v in items]
+        box = ctk.CTkScrollableFrame(det, fg_color=P["CARD"], corner_radius=0)
+        box.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        for k, v in rows:
+            if not str(v).strip():
+                continue
+            r = ctk.CTkFrame(box, fg_color="transparent")
+            r.pack(fill="x", padx=10, pady=2)
+            self.label(r, k, 12, color=P["MUTED"], anchor="w", width=130).pack(side="left", anchor="n")
+            self.label(r, str(v), 13, anchor="w", justify="left", wraplength=360).pack(side="left", fill="x", expand=True)
+
+        right = self.card(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        cur = self.settings.data.get("device_overrides", {}).get(key)
+        state = dict(cur or self._current_state())
+        self.caption(right, "Lighting for this device").pack(fill="x", padx=20, pady=(14, 8))
+        mode = ctk.CTkSegmentedButton(right, values=["Follow all devices", "Custom"], height=32, font=F(13), corner_radius=6,
+                                      fg_color=P["CARD2"], unselected_color=P["CARD2"], unselected_hover_color="#444444",
+                                      selected_color=self.accent, selected_hover_color=self.accent, text_color=P["TEXT"])
+        mode.pack(fill="x", padx=20)
+        mode.set("Custom" if cur else "Follow all devices")
+        controls = ctk.CTkFrame(right, fg_color="transparent")
+        controls.pack(fill="both", expand=True, padx=20, pady=(14, 14))
+
+        def commit():
+            self._save_override(key, dict(state) if mode.get() == "Custom" else None)
+
+        def choose(**kw):
+            state.update(kw)
+            mode.set("Custom")
+            swatch.configure(fg_color=hexcol(state["color"]))
+            commit()
+
+        self.label(controls, "Effect", 13, color=P["MUTED"], anchor="w").pack(fill="x")
+        fxm = ctk.CTkOptionMenu(controls, values=eng.EFFECTS, height=32, corner_radius=6, font=F(13), fg_color=P["CARD2"],
+                                button_color=P["CARD2"], button_hover_color="#444444", dropdown_fg_color=P["CARD2"],
+                                text_color=P["TEXT"], command=lambda v: choose(effect=v))
+        fxm.set(state["effect"])
+        fxm.pack(fill="x", pady=(4, 12))
+        crow = ctk.CTkFrame(controls, fg_color="transparent")
+        crow.pack(fill="x")
+        self.label(crow, "Color", 13, color=P["MUTED"], anchor="w").pack(side="left")
+        swatch = ctk.CTkFrame(crow, width=26, height=26, corner_radius=6, fg_color=hexcol(state["color"]))
+        swatch.pack(side="right")
+        sw = tk.Canvas(controls, height=30, bg=P["CARD"], highlightthickness=0)
+        sw.pack(fill="x", pady=(6, 4))
+        for i, c in enumerate(SWATCHES):
+            it = sw.create_rectangle(i * 34, 3, i * 34 + 26, 27, fill=hexcol(c), outline=P["CARD"], width=2)
+            sw.tag_bind(it, "<Button-1>", lambda e, col=c: (choose(color=list(col)) if state["effect"] in eng.USES_COLOR
+                                                            else (fxm.set("Static"), choose(color=list(col), effect="Static"))))
+        self.label(controls, "Colors apply to the Static and Breathing effects.", 12, color=P["FAINT"], anchor="w").pack(fill="x", pady=(0, 10))
+        r1, _b = self.slider_row(controls, "Brightness", int(state["brightness"]), lambda v: choose(brightness=v))
+        r1.pack(fill="x", pady=4)
+        r2, _s = self.slider_row(controls, "Speed", int(state["speed"]), lambda v: choose(speed=v))
+        r2.pack(fill="x", pady=4)
+        mode.configure(command=lambda v: commit())
 
     def _update_dev_summary(self):
         ex = set(self.settings["excluded"])
@@ -1426,6 +1692,7 @@ class App(ctk.CTk):
         self.q.put(("call", lambda: self._show_sysinfo(info)))
 
     def _show_sysinfo(self, info):
+        self.sysinfo = info
         for w in self.info_box.winfo_children():
             w.destroy()
         lines = []
@@ -1848,12 +2115,17 @@ class App(ctk.CTk):
                 self.home_light_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 14, t))
             elif self.current_page == "Lighting":
                 for name, tile in self.tiles.items():
-                    tile.strip.show(eng.compute_colors(name, self.color, 100, 50, 12, t))
+                    tile.show(eng.compute_colors(name, self.color, 100, 50, tile.n, t))
             elif self.current_page == "Devices":
                 ex = set(self.settings["excluded"])
                 for i, card in enumerate(self.device_cards):
+                    ds = self._state_for(card.key, st)
                     card.strip.show([(0, 0, 0)] if card.key in ex else eng.compute_colors(
-                        st["effect"], st["color"], max(st["brightness"], 8), st["speed"], card.strip.n, t, offset=i * 0.07))
+                        ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"], card.strip.n, t, offset=i * 0.07))
+                if self.editor is not None:
+                    ds = self._state_for(self.editor_key, st)
+                    self.editor_art.show(eng.compute_colors(ds["effect"], ds["color"], max(ds["brightness"], 8),
+                                                            ds["speed"], max(1, len(self.editor_art.leds)), t))
         except tk.TclError:
             pass
         self.after(40, self._animate)
@@ -2039,7 +2311,7 @@ class App(ctk.CTk):
 
     def _set_color(self, rgb, from_wheel=False):
         self.color = tuple(int(c) for c in rgb)
-        if self.effect in ("Off", "Color Cycle", "Rainbow Wave"):
+        if self.effect not in eng.USES_COLOR:
             self.effect = "Static"
         if not from_wheel:
             self.wheel.set_rgb(self.color)
