@@ -1430,11 +1430,11 @@ class App(ctk.CTk):
         self.bind("<Unmap>", self._on_unmap, add="+")
         self.bind("<Map>", self._on_map, add="+")
         self._steps = self._page_steps()
-        if selftest:
-            self._last_tick = time.perf_counter()
-            self._stall_samples = []
-            self.after(16, self._stall_tick)
-            threading.Thread(target=self._watchdog, daemon=True).start()
+        self._last_tick = time.perf_counter()
+        self._hidden_flag = True
+        self._stall_samples = []
+        self.after(16, self._stall_tick)
+        threading.Thread(target=self._watchdog, daemon=True).start()
         for _ in self._steps:                   # window is hidden, so build everything in one go
             pass
         self._finish_startup()
@@ -1479,12 +1479,13 @@ class App(ctk.CTk):
         sys.stderr.write(msg)
 
     def _watchdog(self):
-        """Self-test only: when the window stops responding for 200 ms, note what every thread is doing."""
+        """When the window stops responding for 150 ms, note what every thread was doing. The self-test
+        prints these; normal runs write them to activity.log, so slowdowns on real hardware can be traced."""
         sampled = None
-        while len(self._stall_samples) < 8:
+        while len(self._stall_samples) < 40:
             time.sleep(0.05)
             last = self._last_tick
-            if time.perf_counter() - last > 0.2 and sampled != last:
+            if time.perf_counter() - last > 0.15 and sampled != last and not self._hidden_flag:
                 sampled = last
                 names = {t.ident: t.name for t in threading.enumerate()}
                 lines = []
@@ -1495,12 +1496,21 @@ class App(ctk.CTk):
                     lines.append(f"    {names.get(tid, tid)}: " + " <- ".join(
                         f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in reversed(st)))
                 self._stall_samples.append((time.perf_counter() - self._t_start, lines))
+                if self.selftest is None:
+                    self._stall_pending = (time.perf_counter() - self._t_start, lines, last)
 
     def _stall_tick(self):
         now = time.perf_counter()
-        self._gaps.append((now - self._t_start, now - self._last_tick))
+        pend = getattr(self, "_stall_pending", None)
+        if pend is not None and pend[2] == self._last_tick:     # the stall just ended: log how long it was
+            self._stall_pending = None
+            self.log(f"UI paused {(now - pend[2]) * 1000:.0f} ms on {self.current_page} page "
+                     f"({pend[0]:.1f} s after start). Threads were in:\n" + "\n".join(pend[1]))
+        self._hidden_flag = self._hidden()
+        if self.selftest is not None:
+            self._gaps.append((now - self._t_start, now - self._last_tick))
         self._last_tick = now
-        self.after(16, self._stall_tick)
+        self.after(16 if self.selftest is not None else 50, self._stall_tick)
 
     def _run_selftest(self):
         """Open every page, draw the overlay preview, run the system check, then report and exit."""
