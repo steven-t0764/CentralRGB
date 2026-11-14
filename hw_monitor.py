@@ -271,7 +271,8 @@ class ProcBackend:
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                      text=True, encoding="utf-8", bufsize=1,
                                      # below-normal priority: the helper can never starve the window
-                                     creationflags=eng.NO_WINDOW | (0x00004000 if eng.IS_WIN else 0))
+                                     creationflags=eng.NO_WINDOW | (0x00004000 if eng.IS_WIN else 0),
+                                     env=eng.child_env())
         self._send({"cmd": "open"})
 
     def read(self) -> list[dict]:
