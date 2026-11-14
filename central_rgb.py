@@ -1051,8 +1051,18 @@ class App(ctk.CTk):
                         from PIL import ImageGrab
                         self.update()
                         x, y = self.winfo_rootx(), self.winfo_rooty()
-                        ImageGrab.grab((x, y, x + self.winfo_width(), y + self.winfo_height())).save(
-                            os.path.join(shots, f"{name}.png"))
+                        from PIL import ImageStat
+                        g = ImageGrab.grab((x, y, x + self.winfo_width(), y + self.winfo_height()))
+                        g.save(os.path.join(shots, f"{name}.png"))
+                        hx, hy = self._holder.winfo_rootx() - x, self._holder.winfo_rooty() - y
+                        area = g.crop((hx, hy, hx + self._holder.winfo_width(), hy + self._holder.winfo_height())).convert("L")
+                        sd = ImageStat.Stat(area).stddev[0]
+                        prev = getattr(self, "_shot_prev", None)
+                        diff = ImageStat.Stat(ImageChops.difference(area, prev)).mean[0] if prev is not None and prev.size == area.size else -1
+                        self._shot_prev = area
+                        steps.append(f"  screen check: content contrast {sd:.1f}, change from previous page {diff:.1f}")
+                        if sd < 3:
+                            self.selftest_errors.append(f"Page {name} looks blank after switching")
                     except Exception as e:
                         steps.append(f"  screenshot failed: {e}")
             missing = [f for f in PRESET_FILES.values() if not resource(f).exists()]
