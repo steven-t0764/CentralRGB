@@ -302,14 +302,15 @@ class LightScroll(tk.Frame):
         super().__init__(master, bg=bg, height=height)
         self.h = height
         self.cv = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, height=height)
-        self.bar = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, width=8)
+        self.bar = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, width=8, height=1)   # stretches to fit
         self.bar.pack(side="right", fill="y", padx=(4, 2))
         self.cv.pack(side="left", fill="both", expand=True)
         self.inner = tk.Frame(self.cv, bg=bg)
         self.win = self.cv.create_window(0, 0, anchor="nw", window=self.inner)
         self.thumb = self.bar.create_rectangle(2, 0, 6, 0, fill=P["TRACK"], width=0)
         self.inner.bind("<Configure>", lambda e: self._sync())
-        self.cv.bind("<Configure>", lambda e: (self.cv.itemconfigure(self.win, width=e.width), self._sync()))
+        self.cv.bind("<Configure>", lambda e: self._fit(e.width))
+        self.cv.bind("<Map>", lambda e: self.after_idle(lambda: self._fit(self.cv.winfo_width())), add="+")
         self.cv.configure(yscrollcommand=self._on_scroll)
         for w in (self, self.cv, self.inner, self.bar):
             w.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self._wheel), add="+")
@@ -328,6 +329,15 @@ class LightScroll(tk.Frame):
                 return
             w = w.master
         self.unbind_all("<MouseWheel>")
+
+    def _fit(self, width):
+        """Make the inner frame exactly as wide as the visible area (re-applied when shown: Tk doesn't
+        resize an embedded window while its page is hidden)."""
+        if width > 1:
+            self.cv.itemconfigure(self.win, width=width)
+            self.inner.configure(width=width)
+            self.cv.coords(self.win, 0, 0)
+        self._sync()
 
     def _sync(self):
         self.cv.configure(scrollregion=(0, 0, self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()))
@@ -1573,6 +1583,8 @@ class App(ctk.CTk):
                 yield
                 _t = time.perf_counter()
             self.timings[f"page {name}"] = self.timings.get(f"page {name}", 0) + time.perf_counter() - _t
+            if name != "Home":
+                f.place_forget()        # only the visible page takes part in layout; others join when opened
             if self.splash is not None:
                 self.splash.keep_on_top()
 
@@ -3034,6 +3046,10 @@ class App(ctk.CTk):
         # out and filled in, then it appears in a single repaint (no half-drawn frames).
         h = fx.freeze(self._holder)
         try:
+            for n, pg in self.pages.items():
+                if n != name and pg.winfo_ismapped():
+                    pg.place_forget()
+            page.place(relx=0, rely=0, relwidth=1, relheight=1)
             page.tkraise()
             if name == "Home":
                 self._refresh_home(self.snap)
