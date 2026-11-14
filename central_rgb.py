@@ -34,6 +34,7 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageTk
 
+import device_models as dm
 import fps_overlay as fpo
 import hw_monitor as hwm
 import rgb_engine as eng
@@ -219,7 +220,7 @@ class Splash(tk.Frame):
         self.title = self.cv.create_text(-4000, 0, text="Central RGB", fill=P["BG"], font=(FONT, int(30 * self.sc), "bold"))
         self.sub = self.cv.create_text(-4000, 0, text="LIGHTING  ·  FANS  ·  MONITOR", fill=P["BG"], font=(FONT, int(10 * self.sc), "bold"))
         self._logo_img = None
-        self.started = False
+        self.started, self.ready = False, False
 
     def keep_on_top(self):
         if self.winfo_exists():
@@ -241,6 +242,9 @@ class Splash(tk.Frame):
             return
         t = time.time() - self.t0
         t_out = self.T_IN + self.T_HOLD
+        if not self.ready and t > t_out:          # app still building: hold on the logo
+            self.t0 += t - t_out
+            t = t_out
         t_dip = t_out + self.T_OUT
         if t >= t_dip:                                   # logo has faded out: reveal the app
             self.destroy()
@@ -347,17 +351,19 @@ class ColorWheel(tk.Canvas):
 
     def _render(self):
         s = self.size * 2
-        img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-        px = img.load()
         c, r = s / 2, self.r * 2
-        for y in range(s):
-            dy = y - c
-            for x in range(s):
-                dx = x - c
-                d = math.hypot(dx, dy)
-                if d <= r:
-                    rr, gg, bb = colorsys.hsv_to_rgb((math.atan2(-dy, dx) / (2 * math.pi)) % 1, min(1, d / r) ** 0.9, 1)
-                    px[x, y] = (int(rr * 255), int(gg * 255), int(bb * 255), 255)
+        hue = Image.new("RGB", (s, s))
+        d = ImageDraw.Draw(hue)
+        for k in range(720):                     # hue slices (0 deg = right, counter-clockwise)
+            rr, gg, bb = colorsys.hsv_to_rgb(k / 720, 1, 1)
+            d.pieslice((0, 0, s, s), -(k + 1) / 2 - 0.3, -k / 2 + 0.3, fill=(int(rr * 255), int(gg * 255), int(bb * 255)))
+        hue = hue.filter(ImageFilter.GaussianBlur(0.8))
+        # saturation: blend toward white near the centre (radial_gradient is 0 at centre, 255 at the edge)
+        rad = Image.radial_gradient("L").resize((int(2 * r), int(2 * r)), Image.BILINEAR)
+        sat = Image.new("L", (s, s), 255)
+        sat.paste(rad, (int(c - r), int(c - r)))
+        sat = sat.point(lambda v: int(255 * min(1.0, v * 1.41421 / 255) ** 0.9))   # gradient hits 255 at the corner
+        img = Image.composite(hue, Image.new("RGB", (s, s), (255, 255, 255)), sat).convert("RGBA")
         mask = Image.new("L", (s, s), 0)
         ImageDraw.Draw(mask).ellipse((c - r, c - r, c + r, c + r), fill=255)
         img.putalpha(mask)
@@ -816,124 +822,23 @@ class EffectTile(tk.Canvas):
 
 
 class DeviceArt(tk.Canvas):
-    """Simple drawing of a device type with its LEDs lit live."""
-    W, H = 560, 230
+    """A model of the device (RAM stick, graphics card, fans...) lit live with its real LED colors."""
 
     def __init__(self, master, kind, leds):
-        super().__init__(master, width=self.W, height=self.H, bg=P["CARD"], highlightthickness=0)
-        self.leds, self.glow = [], []
-        self.body, self.edge, self.dark = "#1c1c1c", "#4a4a4a", "#111111"
-        n = max(1, min(leds, 40))
-        getattr(self, "_draw_" + {"RAM": "ram", "GPU": "gpu", "Motherboard": "board", "Cooler": "fan", "LED strip": "strip",
-                                  "Keyboard": "keyboard", "Mouse": "mouse", "Mousepad": "strip", "Case": "fan"}.get(kind, "generic"))(n)
-
-    def _led(self, x0, y0, x1, y1, oval=False):
-        make = self.create_oval if oval else self.create_rectangle
-        self.leds.append(make(x0, y0, x1, y1, width=0, fill=self.dark))
-
-    def _draw_ram(self, n):
-        x0, x1 = 60, 500
-        self.create_rectangle(x0, 80, x1, 190, fill="#0f2a1c", outline="#1d4a33")                       # circuit board
-        self.create_polygon(x0 + 8, 62, x1 - 8, 62, x1 - 2, 80, x1 - 2, 168, x0 + 2, 168, x0 + 2, 80, fill=self.body, outline=self.edge)
-        for i in range(6):                                                                               # heat-spreader fins
-            x = x0 + 40 + i * 72
-            self.create_line(x, 96, x + 30, 150, fill="#2e2e2e", width=3)
-        step = (x1 - x0 - 24) / n                                                                        # light bar
-        for i in range(n):
-            self._led(x0 + 12 + i * step, 40, x0 + 12 + (i + 1) * step + 1, 62)
-        self.create_rectangle(x0 + 12, 40, x1 - 12, 62, outline=self.edge)
-        for i in range(52):                                                                              # gold contacts
-            x = x0 + 10 + i * 8.2
-            if 250 < x < 268:
-                continue                                                                                 # notch
-            self.create_rectangle(x, 174, x + 5, 190, fill="#c9a227", width=0)
-        self.create_rectangle(252, 180, 268, 191, fill=P["CARD"], width=0)
-
-    def _draw_gpu(self, n):
-        self.create_rectangle(40, 60, 520, 190, fill=self.body, outline=self.edge)
-        self.create_rectangle(26, 54, 40, 196, fill="#3a3a3a", outline=self.edge)                        # bracket
-        for cx in (130, 280, 430):                                                                       # fans
-            self.create_oval(cx - 56, 69, cx + 56, 181, fill=self.dark, outline=self.edge)
-            for a in range(0, 360, 40):
-                self.create_arc(cx - 46, 79, cx + 46, 171, start=a, extent=22, style="pieslice", fill="#2b2b2b", outline="")
-            self.create_oval(cx - 12, 113, cx + 12, 137, fill="#333333", outline="")
-        step = 460 / n                                                                                   # light strip on the top edge
-        for i in range(n):
-            self._led(50 + i * step, 44, 50 + (i + 1) * step + 1, 56)
-        self.create_rectangle(120, 196, 400, 206, fill="#c9a227", width=0)                               # PCIe connector
-
-    def _draw_board(self, n):
-        self.create_rectangle(150, 14, 420, 216, fill="#161616", outline=self.edge)
-        self.create_rectangle(215, 50, 285, 120, fill="#2a2a2a", outline="#666666")                      # CPU socket
-        self.create_rectangle(165, 30, 200, 130, fill="#242424", outline=self.edge)                      # VRM heatsink
-        self.create_rectangle(210, 24, 300, 42, fill="#242424", outline=self.edge)
-        for i in range(4):                                                                               # RAM slots
-            self.create_rectangle(305 + i * 14, 40, 313 + i * 14, 132, fill="#0d0d0d", outline="#3a3a3a")
-        for i in range(3):                                                                               # PCIe slots
-            self.create_rectangle(170, 148 + i * 22, 330, 156 + i * 22, fill="#0d0d0d", outline="#3a3a3a")
-        self.create_rectangle(345, 150, 405, 200, fill="#242424", outline=self.edge)                     # chipset
-        a = max(1, n // 2)
-        for i in range(a):                                                                               # right-edge lighting
-            self._led(424, 20 + i * 190 / a, 434, 20 + (i + 1) * 190 / a - 2)
-        m = max(1, n - a)
-        for i in range(n - a):                                                                           # left-edge lighting
-            self._led(138, 20 + i * 110 / m, 147, 20 + (i + 1) * 110 / m - 2)
-
-    def _draw_fan(self, n):
-        cx, cy, r = 280, 115, 96
-        self.create_rectangle(cx - 106, cy - 106, cx + 106, cy + 106, fill=self.body, outline=self.edge)
-        for i in range(n):                                                                               # LED ring
-            a = 2 * math.pi * i / n
-            x, y = cx + math.cos(a) * r, cy + math.sin(a) * r
-            self._led(x - 7, y - 7, x + 7, y + 7, oval=True)
-        self.create_oval(cx - 82, cy - 82, cx + 82, cy + 82, fill=self.dark, outline=self.edge)
-        for a in range(0, 360, 51):
-            self.create_arc(cx - 76, cy - 76, cx + 76, cy + 76, start=a, extent=30, style="pieslice", fill="#2b2b2b", outline="")
-        self.create_oval(cx - 20, cy - 20, cx + 20, cy + 20, fill="#333333", outline="")
-
-    def _draw_strip(self, n):
-        self.create_rectangle(30, 96, 530, 134, fill="#e8e8e8", outline="#bdbdbd")
-        step = 490 / n
-        for i in range(n):
-            x = 35 + i * step + step / 2
-            r = min(11, step / 2 - 1.5)
-            self._led(x - r, 115 - r, x + r, 115 + r)
-            self.create_rectangle(x - r, 115 - r, x + r, 115 + r, outline="#9a9a9a")
-
-    def _draw_keyboard(self, n):
-        self.create_rectangle(40, 46, 520, 186, fill=self.body, outline=self.edge)
-        rows, cols = 5, 15
-        kw, kh = 30, 24
-        for r in range(rows):
-            for c in range(cols):
-                x, y = 50 + c * 31, 56 + r * 25
-                self._led(x, y, x + kw - 3, y + kh - 3)
-        self.rowwise = (rows, cols)
-
-    def _draw_mouse(self, n):
-        self.create_polygon(230, 40, 330, 40, 356, 100, 350, 170, 320, 204, 240, 204, 210, 170, 204, 100,
-                            smooth=True, fill=self.body, outline=self.edge)
-        self.create_line(280, 42, 280, 110, fill=self.edge)
-        self._led(273, 60, 287, 92)                                                                      # wheel
-        if n > 1:
-            self._led(262, 140, 298, 176, oval=True)                                                     # logo
-        for i in range(max(0, n - 2)):                                                                   # underglow
-            k = i / max(1, n - 3)
-            self._led(216 + k * 120, 206, 216 + k * 120 + 8, 212)
-
-    def _draw_generic(self, n):
-        self.create_rectangle(120, 60, 440, 170, fill=self.body, outline=self.edge)
-        step = 300 / n
-        for i in range(n):
-            self._led(130 + i * step, 100, 130 + (i + 1) * step - 2, 130)
+        self.model = dm.model_for(kind, max(1, min(leds, 120)), hex2rgb(P["CARD"]))
+        super().__init__(master, width=self.model.W, height=self.model.H, bg=P["CARD"], highlightthickness=0)
+        self.leds = [None] * max(1, min(leds, 120))     # one slot per LED, so callers can ask how many to compute
+        self._last = None
+        self._img = ImageTk.PhotoImage(self.model.body)
+        self._item = self.create_image(0, 0, anchor="nw", image=self._img)
 
     def show(self, colors):
-        n = len(self.leds)
-        rw = getattr(self, "rowwise", None)
-        for i, it in enumerate(self.leds):
-            k = (i % rw[1]) / rw[1] if rw else i / n          # keyboards: colour by column so waves sweep across
-            c = colors[min(len(colors) - 1, int(k * len(colors)))]
-            self.itemconfigure(it, fill=hexcol(c) if max(c) > 12 else self.dark)
+        colors = [tuple(c) for c in colors]
+        if colors == self._last:                         # nothing changed: skip the redraw
+            return
+        self._last = colors
+        self._img = ImageTk.PhotoImage(self.model.render(colors))
+        self.itemconfigure(self._item, image=self._img)
 
 
 class DeviceCard(ctk.CTkFrame):
@@ -1076,9 +981,25 @@ class App(ctk.CTk):
             self.update()
         self._ttk_style()
         self._build()
+        self.background = background
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._steps = self._page_steps()
+        if selftest:
+            self._last_tick = time.perf_counter()
+            self.after(16, self._stall_tick)
+        if self.splash is not None:
+            self.splash.begin()                 # animate straight away; pages build between frames
+            self.after(1, self._build_slice)
+        else:
+            for _ in self._steps:
+                pass
+            self._finish_startup()
+
+    def _finish_startup(self):
+        background, selftest = self.background, self.selftest
         self._sync_ui_from_state()
         self.show_page("Home", animate=False)
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        threading.Thread(target=self._check_autostart, daemon=True).start()
         self.after(100, self._poll_queue)
         self.after(40, self._animate)
         self.after(500, self._refresh_hw)
@@ -1088,12 +1009,10 @@ class App(ctk.CTk):
         self.after(60, self._window_effects)
         if background:
             self.iconify()
-        if self.splash is not None:
-            self.splash.begin()
+        if self.splash is not None and self.splash.winfo_exists():
+            self.splash.ready = True            # let the logo fade out now the app is ready
         self.timings["window built"] = time.perf_counter() - self._t_start
         if selftest:
-            self._last_tick = time.perf_counter()
-            self.after(16, self._stall_tick)
             self.after(9000, self._run_selftest)
             return
         self.after(300, lambda: self._bg(self._startup))
@@ -1124,6 +1043,9 @@ class App(ctk.CTk):
             if missing:
                 raise RuntimeError(f"Preset pictures missing from the build: {missing}")
             steps.append(f"preset pictures: {len(PRESET_FILES)} found")
+            for kind in ("RAM", "GPU", "Cooler", "Case", "Keyboard", "Mouse", "Motherboard", "LED strip", "Other"):
+                dm.model_for(kind, 24, hex2rgb(P["CARD"])).render(dm.rainbow(24))
+            steps.append("device models: ok")
             self.overlay_preview.render(self.overlay_cfg, {"name": "test", "fps": 144, "low": 110, "ms": 6.9}, {})
             steps.append("overlay preview: ok")
             res = eng.system_check()
@@ -1295,44 +1217,82 @@ class App(ctk.CTk):
         holder.grid_rowconfigure(0, weight=1)
         holder.grid_columnconfigure(0, weight=1)
         self.pages = {}
+        self._holder = holder
+
+    def _page_steps(self):
+        """Build every page, pausing between pieces (each page builder is a generator)."""
         for name, *_ in NAV:
-            f = ctk.CTkFrame(holder, fg_color=P["BG"], corner_radius=0)
+            f = ctk.CTkFrame(self._holder, fg_color=P["BG"], corner_radius=0)
             f.place(relx=0, rely=0, relwidth=1, relheight=1)
-            _t = time.perf_counter()
-            getattr(self, f"_page_{name.lower()}")(f)
-            self.timings[f"page {name}"] = time.perf_counter() - _t
             self.pages[name] = f
+            _t = time.perf_counter()
+            for _ in getattr(self, f"_page_{name.lower()}")(f):
+                self.timings[f"page {name}"] = self.timings.get(f"page {name}", 0) + time.perf_counter() - _t
+                yield
+                _t = time.perf_counter()
+            self.timings[f"page {name}"] = self.timings.get(f"page {name}", 0) + time.perf_counter() - _t
             if self.splash is not None:
                 self.splash.keep_on_top()
+
+    def _build_slice(self):
+        """Run page building for ~12 ms, then let the splash draw a frame."""
+        end = time.perf_counter() + 0.012
+        try:
+            while time.perf_counter() < end:
+                next(self._steps)
+        except StopIteration:
+            self._finish_startup()
+            return
+        self.after(1, self._build_slice)
 
     # ---------------------------------------------------------------- Home
     def _page_home(self, p):
         self.header(p, "Home", "")
         # hero: logo, name, live status and the current lighting
+        yield
         hero = self.card(p)
+        yield
         hero.pack(fill="x")
+        yield
         top = ctk.CTkFrame(hero, fg_color="transparent")
+        yield
         top.pack(fill="x", padx=22, pady=(20, 6))
+        yield
         logo = tk.Canvas(top, width=64, height=64, bg=P["CARD"], highlightthickness=0)
+        yield
         logo.pack(side="left")
+        yield
         if self._icon_img is not None:
             self._home_logo = ImageTk.PhotoImage(self._icon_img.resize((64, 64), Image.LANCZOS))
             logo.create_image(32, 32, image=self._home_logo)
+        yield
         txt = ctk.CTkFrame(top, fg_color="transparent")
+        yield
         txt.pack(side="left", padx=18, fill="x", expand=True)
+        yield
         ctk.CTkLabel(txt, text="Central RGB", font=F(22, "bold", display=True), text_color=P["TEXT"], anchor="w").pack(fill="x")
+        yield
         self.home_status = self.label(txt, "Starting…", 13, color=P["MUTED"], anchor="w")
+        yield
         self.home_status.pack(fill="x")
+        yield
         self.primary(top, "Apply lighting", self._apply_all, height=34, width=140).pack(side="right")
+        yield
         self.home_strip = GlowBar(hero, height=22, thickness=8)
+        yield
         self.home_strip.pack(fill="x", padx=22, pady=(6, 18))
 
         # tiles
+        yield
         grid = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         grid.pack(fill="x", pady=(14, 0))
+        yield
         self.home_tiles = {}
+        yield
         specs = [("Lighting", "\uea80", "✦", "Lighting"), ("Fans", "\uec4a", "✺", "Fans"),
                  ("Processor", "\ue950", "◔", "Monitor"), ("Graphics", "\ue7f4", "▣", "Monitor")]
+        yield
         for i, (title, glyph, fb, page) in enumerate(specs):
             c = self.card(grid, height=132)
             c.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0 if i == 3 else 6))
@@ -1350,20 +1310,27 @@ class App(ctk.CTk):
             for w in (c, hdr, big, sub):
                 w.bind("<Button-1>", lambda e, pg=page: self.show_page(pg))
                 w.configure(cursor="hand2")
+        yield
         self.home_light_strip = GlowBar(self.home_tiles["Lighting"][1].master, height=12, thickness=4)
+        yield
         self.home_light_strip.pack(fill="x", padx=18, pady=(6, 0))
 
         # quick actions
+        yield
         self.caption(p, "Quick actions").pack(fill="x", pady=(22, 8))
+        yield
         self.home_switches = []
 
+        yield
         def lights(row):
             f = ctk.CTkFrame(row, fg_color="transparent")
             self.secondary(f, "All lights off", lambda: self._set_effect("Off"), height=32, width=120).pack(side="right", padx=(8, 0))
             self.secondary(f, "Rainbow", lambda: self._set_effect("Rainbow Wave"), height=32, width=100).pack(side="right")
             return f
+        yield
         self.setting_row(p, "\uea80", "✦", "Lighting", "Quick effects for every RGB device", lights)
 
+        yield
         def fans(row):
             self.home_fan_seg = PillSwitcher(row, values=hwm.PROFILES[:5], height=32, font=F(13), corner_radius=6,
                                                        fg_color=P["CARD2"], unselected_color=P["CARD2"],
@@ -1373,14 +1340,17 @@ class App(ctk.CTk):
             self.home_fan_seg.set(self.monitor.profile if self.monitor.profile in hwm.PROFILES[:5] else "Auto")
             self.accent_widgets.append(("seg", self.home_fan_seg))
             return self.home_fan_seg
+        yield
         self.setting_row(p, "\uec4a", "✺", "Fan profile", "How your fans respond to temperature", fans)
 
+        yield
         def overlay(row):
             self.home_overlay_sw = Switch(row, text="", width=46, command=self._home_overlay)
             if self.overlay_cfg["enabled"]:
                 self.home_overlay_sw.select()
             self.home_switches.append(self.home_overlay_sw)
             return self.home_overlay_sw
+        yield
         self.setting_row(p, "\ue7fc", "▤", "Game overlay", "Show your frame rate on top of games", overlay)
 
     def _home_overlay(self):
@@ -1410,48 +1380,86 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Lighting
     def _page_lighting(self, p):
         self.header(p, "Lighting", "Pick a color and an effect. Changes go live on every selected device.")
+        yield
         self.light_scope = "All"
+        yield
         self.chip_row = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         self.chip_row.pack(fill="x", pady=(0, 12))
+        yield
         self.chips = {}
+        yield
         self._build_chips()
 
+        yield
         prev = self.card(p, height=58)
+        yield
         prev.pack(fill="x", pady=(0, 14))
+        yield
         prev.pack_propagate(False)
+        yield
         self.preview_label = self.label(prev, "", 14, anchor="w", width=250)
+        yield
         self.preview_label.pack(side="left", padx=(18, 10))
+        yield
         pv = ctk.CTkFrame(prev, fg_color="transparent")
+        yield
         pv.pack(side="left", fill="both", expand=True, padx=(0, 12), pady=8)
+        yield
         self.preview = LedStrip(pv, n=36, height=28)
+        yield
         self.preview.pack(fill="x")
+        yield
         self.preview_track = tk.Canvas(pv, height=4, bg=P["CARD"], highlightthickness=0)
+        yield
         self.preview_track.pack(fill="x", pady=(2, 0))
 
+        yield
         body = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         body.pack(fill="both", expand=True)
+        yield
         body.grid_columnconfigure(1, weight=1)
+        yield
         body.grid_rowconfigure(0, weight=1)
 
+        yield
         cc = self.card(body)
+        yield
         cc.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        yield
         self.caption(cc, "Color").pack(fill="x", padx=18, pady=(14, 8))
+        yield
         self.wheel = ColorWheel(cc, size=196, command=lambda rgb: self._set_color(rgb, from_wheel=True))
+        yield
         self.wheel.pack(padx=18)
+        yield
         hexrow = ctk.CTkFrame(cc, fg_color="transparent")
+        yield
         hexrow.pack(fill="x", padx=18, pady=(12, 6))
+        yield
         self.swatch = tk.Canvas(hexrow, width=28, height=28, bg=P["CARD"], highlightthickness=0)
+        yield
         self.swatch.pack(side="left")
+        yield
         self.swatch_item = self.swatch.create_rectangle(1, 1, 27, 27, fill="#000", width=0)
+        yield
         self.hex_entry = ctk.CTkEntry(hexrow, width=104, height=30, corner_radius=6, font=F(13),
                                       fg_color=P["CARD2"], border_width=1, border_color=P["LINE"], text_color=P["TEXT"],
                                       justify="center")
+        yield
         self.hex_entry.pack(side="left", padx=10)
+        yield
         self.hex_entry.bind("<Return>", self._hex_entered)
+        yield
         self.hex_entry.bind("<FocusOut>", self._hex_entered)
+        yield
         sw = tk.Canvas(cc, height=48, width=200, bg=P["CARD"], highlightthickness=0)
+        yield
         sw.pack(padx=18, pady=(4, 4), anchor="w")
+        yield
         step = 200 / len(SWATCHES)
+        yield
         for row, k in ((0, 0.0), (1, 0.42)):                       # vivid row, then a softer row
             for i, c in enumerate(SWATCHES):
                 col = tuple(int(v) for v in mix(c, (230, 230, 240), k)) if k else c
@@ -1460,9 +1468,13 @@ class App(ctk.CTk):
                 sw.tag_bind(it, "<Button-1>", lambda e, cl=col: self._set_color(cl))
                 sw.tag_bind(it, "<Enter>", lambda e, i2=it: sw.itemconfigure(i2, outline="white"))
                 sw.tag_bind(it, "<Leave>", lambda e, i2=it: sw.itemconfigure(i2, outline=P["CARD"]))
+        yield
         rgbrow = ctk.CTkFrame(cc, fg_color="transparent")
+        yield
         rgbrow.pack(fill="x", padx=18, pady=(6, 14))
+        yield
         self.rgb_entries = []
+        yield
         for ch in "RGB":
             self.label(rgbrow, ch, 12, color=P["MUTED"]).pack(side="left", padx=(0, 5))
             e = ctk.CTkEntry(rgbrow, width=46, height=28, corner_radius=6, font=F(12), fg_color=P["CARD2"],
@@ -1472,40 +1484,66 @@ class App(ctk.CTk):
             e.bind("<FocusOut>", self._rgb_entered)
             self.rgb_entries.append(e)
 
+        yield
         right = ctk.CTkFrame(body, fg_color="transparent")
+        yield
         right.grid(row=0, column=1, sticky="nsew")
+        yield
         ec = self.card(right)
+        yield
         ec.pack(fill="x")
+        yield
         self.caption(ec, "Effect").pack(fill="x", padx=18, pady=(14, 6))
+        yield
         grid = ctk.CTkFrame(ec, fg_color="transparent")
+        yield
         grid.pack(fill="x", padx=12, pady=(0, 12))
+        yield
         self.tiles = {}
+        yield
         for i, name in enumerate(eng.BASIC_EFFECTS):
             t = EffectTile(grid, name, self._set_effect)
             t.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
             grid.grid_columnconfigure(i, weight=1, uniform="e")
             self.tiles[name] = t
+        yield
         self.caption(ec, "Presets").pack(fill="x", padx=18, pady=(4, 6))
+        yield
         pg = ctk.CTkFrame(ec, fg_color="transparent")
+        yield
         pg.pack(fill="x", padx=12, pady=(0, 12))
+        yield
         for i, name in enumerate(eng.PRESET_EFFECTS):
             t = PresetTile(pg, name, self._set_effect)
             t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
             pg.grid_columnconfigure(i % 4, weight=1, uniform="p")
             self.tiles[name] = t
 
+        yield
         ctl = self.card(right)
+        yield
         ctl.pack(fill="x", pady=(14, 0))
+        yield
         st = self.settings["state"]
+        yield
         r1, self.bright = self.slider_row(ctl, "Brightness", st.get("brightness", 100), lambda v: self._state_changed())
+        yield
         r1.pack(fill="x", padx=18, pady=(14, 4))
+        yield
         r2, self.speed = self.slider_row(ctl, "Speed", st.get("speed", 50), lambda v: self._state_changed())
+        yield
         r2.pack(fill="x", padx=18, pady=4)
+        yield
         btns = ctk.CTkFrame(ctl, fg_color="transparent")
+        yield
         btns.pack(fill="x", padx=18, pady=(10, 16))
+        yield
         self.apply_btn = self.primary(btns, "Apply to all devices", self._apply_all, height=40)
+        yield
         self.apply_btn.pack(side="left", fill="x", expand=True)
+        yield
         self.secondary(btns, "Save to hardware", lambda: self._bg(self._save_hw), height=40, width=140).pack(side="right", padx=(10, 0))
+        yield
         self.secondary(btns, "⏻  Off", lambda: self._set_effect("Off"), height=40, width=80).pack(side="right", padx=(10, 0))
 
     # ---- device chips: edit all devices at once, or one kind of device
@@ -1569,17 +1607,29 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Devices
     def _page_devices(self, p):
         h = self.header(p, "Devices", "Every RGB device OpenRGB found. Switch one off to leave it out.")
+        yield
         bar = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         bar.pack(fill="x", pady=(0, 14))
+        yield
         self.primary(bar, "⟳  Rescan", lambda: self._bg(self._rescan), height=38, width=120).pack(side="left")
+        yield
         self.secondary(bar, "All on", lambda: self._set_all_devices(True), height=38, width=90).pack(side="left", padx=8)
+        yield
         self.secondary(bar, "All off", lambda: self._set_all_devices(False), height=38, width=90).pack(side="left")
+        yield
         self.dev_summary = self.label(bar, "", 12, color=P["MUTED"])
+        yield
         self.dev_summary.pack(side="right")
+        yield
         self.dev_area = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        yield
         self.dev_area.pack(fill="both", expand=True)
+        yield
         self.dev_area.grid_columnconfigure((0, 1), weight=1, uniform="d")
+        yield
         self.dev_empty = self.label(self.dev_area, "Scanning for devices…", 14, color=P["MUTED"])
+        yield
         self.dev_empty.grid(row=0, column=0, columnspan=2, pady=50)
 
     def _fill_devices(self, rows):
@@ -1736,31 +1786,51 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Fans
     def _page_fans(self, p):
         h = self.header(p, "Fans", "Pick a profile or draw your own curve. Fans always speed up if things get too hot.")
+        yield
         self.fan_seg = PillSwitcher(p, values=hwm.PROFILES, command=self._set_fan_profile, height=36,
                                               font=F(12, "bold"), corner_radius=6, fg_color=P["CARD"],
                                               unselected_color=P["CARD"], unselected_hover_color=P["CARD2"],
                                               selected_color=self.accent, selected_hover_color=self.accent,
                                               text_color=P["TEXT"])
+        yield
         self.fan_seg.pack(fill="x", pady=(0, 14))
+        yield
         self.accent_widgets.append(("seg", self.fan_seg))
 
+        yield
         top = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         top.pack(fill="x")
+        yield
         top.grid_columnconfigure(0, weight=1)
+        yield
         cc = self.card(top)
+        yield
         cc.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        yield
         row = ctk.CTkFrame(cc, fg_color="transparent")
+        yield
         row.pack(fill="x", padx=20, pady=(16, 0))
+        yield
         self.caption(row, "Fan curve · CPU temperature").pack(side="left")
+        yield
         self.curve_hint = self.label(row, "", 10, color=P["MUTED"])
+        yield
         self.curve_hint.pack(side="right")
+        yield
         self.curve = CurveEditor(cc, self._curve_changed, height=232)
+        yield
         self.curve.pack(fill="x", padx=12, pady=(6, 12))
 
+        yield
         tc = self.card(top, width=270)
+        yield
         tc.grid(row=0, column=1, sticky="nsew")
+        yield
         self.caption(tc, "Temperatures").pack(fill="x", padx=20, pady=(16, 6))
+        yield
         self.fan_temp_labels = {}
+        yield
         for key, name in (("cpu_temp", "CPU"), ("gpu_temp", "GPU")):
             r = ctk.CTkFrame(tc, fg_color="transparent")
             r.pack(fill="x", padx=20, pady=6)
@@ -1768,15 +1838,24 @@ class App(ctk.CTk):
             v = self.label(r, "—", 30, "bold")
             v.pack(side="right")
             self.fan_temp_labels[key] = v
+        yield
         self.fan_note = self.label(tc, "", 11, color=P["MUTED"], wraplength=230, justify="left", anchor="w")
+        yield
         self.fan_note.pack(fill="x", padx=20, pady=(10, 16))
 
+        yield
         self.fan_area = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        yield
         self.fan_area.pack(fill="both", expand=True, pady=(14, 0))
+        yield
         self.fan_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="f")
+        yield
         self.fan_empty = ctk.CTkFrame(self.fan_area, fg_color="transparent")
+        yield
         self.fan_empty.grid(row=0, column=0, columnspan=3, pady=30)
+        yield
         self.fan_empty_lbl = self.label(self.fan_empty, "Loading fan controllers…", 13, color=P["MUTED"], wraplength=640)
+        yield
         self.fan_empty_lbl.pack()
 
     def _set_fan_profile(self, name):
@@ -1842,24 +1921,38 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Monitor
     def _page_monitor(self, p):
         h = self.header(p, "Monitor", "Live view of your system. Advanced shows every sensor and full hardware details.")
+        yield
         self.mon_seg = PillSwitcher(h, values=["Overview", "Advanced"], command=self._mon_tab, height=34,
                                               width=220, font=F(12, "bold"), corner_radius=6, fg_color=P["CARD"],
                                               unselected_color=P["CARD"], unselected_hover_color=P["CARD2"],
                                               selected_color=self.accent, selected_hover_color=self.accent,
                                               text_color=P["TEXT"])
+        yield
         self.mon_seg.pack(side="right")
+        yield
         self.mon_seg.set("Overview")
+        yield
         self.accent_widgets.append(("seg", self.mon_seg))
+        yield
         stack = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         stack.pack(fill="both", expand=True)
+        yield
         stack.grid_rowconfigure(0, weight=1)
+        yield
         stack.grid_columnconfigure(0, weight=1)
+        yield
         self.mon_over = ctk.CTkFrame(stack, fg_color="transparent")
+        yield
         self.mon_adv = ctk.CTkFrame(stack, fg_color="transparent")
+        yield
         for f in (self.mon_over, self.mon_adv):
             f.grid(row=0, column=0, sticky="nsew")
-        self._build_overview(self.mon_over)
-        self._build_advanced(self.mon_adv)
+        yield
+        yield from self._build_overview(self.mon_over)
+        yield
+        yield from self._build_advanced(self.mon_adv)
+        yield
         self.mon_over.tkraise()
 
     def _mon_tab(self, name):
@@ -1893,49 +1986,88 @@ class App(ctk.CTk):
 
     def _build_overview(self, p):
         g = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         g.pack(fill="both", expand=True)
+        yield
         for i in range(3):
             g.grid_columnconfigure(i, weight=1, uniform="o")
+        yield
         self.g_cpu = self._gauge_card(g, "Processor")
+        yield
         self.g_gpu = self._gauge_card(g, "Graphics")
+        yield
         self.g_ram = self._gauge_card(g, "Memory")
+        yield
         for i, gc in enumerate((self.g_cpu, self.g_gpu, self.g_ram)):
             gc["card"].grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0 if i == 2 else 8))
 
+        yield
         net = self.card(g)
+        yield
         net.grid(row=1, column=0, sticky="nsew", pady=(16, 0), padx=(0, 8))
+        yield
         self.caption(net, "Network").pack(fill="x", padx=18, pady=(16, 4))
+        yield
         nr = ctk.CTkFrame(net, fg_color="transparent")
+        yield
         nr.pack(fill="x", padx=18)
+        yield
         self.net_down = self.label(nr, "—", 20, color=CYAN)
+        yield
         self.net_down.pack(side="left")
+        yield
         self.net_up = self.label(nr, "—", 20, color=PURPLE)
+        yield
         self.net_up.pack(side="right")
+        yield
         self.net_spark = Sparkline(net, height=150, color=CYAN)
+        yield
         self.net_spark.pack(fill="both", expand=True, padx=12, pady=(8, 14))
 
+        yield
         dk = self.card(g)
+        yield
         dk.grid(row=1, column=1, sticky="nsew", pady=(16, 0), padx=8)
+        yield
         top = ctk.CTkFrame(dk, fg_color="transparent")
+        yield
         top.pack(fill="x", padx=18, pady=(16, 4))
+        yield
         self.caption(top, "Storage").pack(side="left")
+        yield
         self.disk_box = ctk.CTkFrame(dk, fg_color="transparent")
+        yield
         self.disk_box.pack(fill="x", padx=18, pady=(4, 4))
+        yield
         self.disk_rows = {}
+        yield
         self.disk_chart = Sparkline(dk, height=80, color=CYAN)
+        yield
         self.disk_chart.pack(fill="both", expand=True, padx=12, pady=(4, 0))
+        yield
         io = ctk.CTkFrame(dk, fg_color="transparent")
+        yield
         io.pack(pady=(2, 12))
+        yield
         self.disk_r = self.label(io, "R —", 13, color=CYAN)
+        yield
         self.disk_r.pack(side="left")
+        yield
         self.label(io, "  ·  ", 13, color=P["FAINT"]).pack(side="left")
+        yield
         self.disk_w = self.label(io, "W —", 13, color=PURPLE)
+        yield
         self.disk_w.pack(side="left")
 
+        yield
         sy = self.card(g)
+        yield
         sy.grid(row=1, column=2, sticky="nsew", pady=(16, 0), padx=(8, 0))
+        yield
         self.caption(sy, "System").pack(fill="x", padx=18, pady=(16, 4))
+        yield
         self.sys_rows = {}
+        yield
         for k, lab in (("uptime", "Uptime"), ("procs", "Processes"), ("cpu_power", "CPU power"),
                        ("gpu_power", "GPU power"), ("fans", "Fans"), ("os", "OS")):
             r = ctk.CTkFrame(sy, fg_color="transparent")
@@ -1947,56 +2079,95 @@ class App(ctk.CTk):
                 v = self.label(r, "—", 13)
             v.pack(side="right")
             self.sys_rows[k] = v
+        yield
         g.grid_rowconfigure(1, weight=1)
 
     def _build_advanced(self, p):
         p.grid_columnconfigure(0, weight=2, uniform="a")
+        yield
         p.grid_columnconfigure(1, weight=3, uniform="a")
+        yield
         p.grid_rowconfigure(0, weight=1)
+        yield
         left = self.card(p)
+        yield
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        yield
         top = ctk.CTkFrame(left, fg_color="transparent")
+        yield
         top.pack(fill="x", padx=18, pady=(16, 6))
+        yield
         self.caption(top, "System details").pack(side="left")
+        yield
         self.secondary(top, "Copy", self._copy_sysinfo, height=26, width=64, corner_radius=6).pack(side="right")
+        yield
         self.info_box = ctk.CTkScrollableFrame(left, fg_color=P["CARD"], corner_radius=0)
+        yield
         self.info_box.pack(fill="both", expand=True, padx=6, pady=(0, 10))
+        yield
         self.label(self.info_box, "Gathering hardware details…", 12, color=P["MUTED"]).pack(pady=20)
+        yield
         self.sysinfo_text = ""
 
+        yield
         right = self.card(p)
+        yield
         right.grid(row=0, column=1, sticky="nsew")
+        yield
         top = ctk.CTkFrame(right, fg_color="transparent")
+        yield
         top.pack(fill="x", padx=18, pady=(14, 8))
+        yield
         self.caption(top, "All sensors").pack(side="left")
+        yield
         self.sensor_count = self.label(top, "", 10, color=P["MUTED"])
+        yield
         self.sensor_count.pack(side="left", padx=10)
+        yield
         self.sensor_filter = ctk.CTkOptionMenu(top, values=["All types", "Temperature", "Load", "Clock", "Power", "Fan",
                                                             "Control", "Voltage", "Data", "SmallData", "Throughput"],
                                                width=130, height=28, corner_radius=6, fg_color=P["CARD2"],
                                                button_color=P["CARD2"], button_hover_color=P["LINE"],
                                                dropdown_fg_color=P["CARD2"], text_color=P["TEXT"], font=F(11),
                                                command=lambda _v: self._rebuild_sensors())
+        yield
         self.sensor_filter.pack(side="right")
+        yield
         self.sensor_search = ctk.CTkEntry(top, placeholder_text="Search sensors…", width=180, height=28,
                                           corner_radius=6, fg_color=P["CARD2"], border_width=0, text_color=P["TEXT"], font=F(11))
+        yield
         self.sensor_search.pack(side="right", padx=8)
+        yield
         self.sensor_search.bind("<KeyRelease>", lambda e: self._rebuild_sensors())
+        yield
         wrap = ctk.CTkFrame(right, fg_color=P["CARD"])
+        yield
         wrap.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        yield
         cols = ("value", "min", "max")
+        yield
         self.tree = ttk.Treeview(wrap, columns=cols, style="Dark.Treeview", show="tree headings")
+        yield
         self.tree.heading("#0", text="Sensor", anchor="w")
+        yield
         self.tree.column("#0", width=260, stretch=True)
+        yield
         for c, t in zip(cols, ("Value", "Min", "Max")):
             self.tree.heading(c, text=t, anchor="e")
             self.tree.column(c, width=90, anchor="e", stretch=False)
+        yield
         self.tree.tag_configure("group", foreground=P["MUTED"], font=(FONT, 10, "bold"))
+        yield
         self.tree.tag_configure("hw", foreground=P["TEXT"], font=(FONT, 11, "bold"))
+        yield
         sb = ctk.CTkScrollbar(wrap, command=self.tree.yview, button_color=P["CARD2"], button_hover_color=P["LINE"])
+        yield
         self.tree.configure(yscrollcommand=sb.set)
+        yield
         self.tree.pack(side="left", fill="both", expand=True)
+        yield
         sb.pack(side="right", fill="y")
+        yield
         self.sensor_sig = None
 
     UNITS = {"Temperature": "°C", "Load": "%", "Clock": " MHz", "Power": " W", "Fan": " RPM", "Control": "%",
@@ -2173,24 +2344,39 @@ class App(ctk.CTk):
 
     def _page_overlay(self, p):
         self.header(p, "Overlay", "A small FPS and temperature readout that sits on top of your games.")
+        yield
         body = ctk.CTkFrame(p, fg_color="transparent")
+        yield
         body.pack(fill="both", expand=True)
+        yield
         body.grid_columnconfigure(0, weight=3, uniform="ov")
+        yield
         body.grid_columnconfigure(1, weight=2, uniform="ov")
+        yield
         body.grid_rowconfigure(0, weight=1)
+        yield
         cfg = self.overlay_cfg
 
+        yield
         left = self.card(body)
+        yield
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        yield
         self.caption(left, "FPS overlay").pack(fill="x", padx=20, pady=(18, 6))
+        yield
         self.overlay_sw = Switch(left, text="Show the overlay in games", font=F(13, "bold"), text_color=P["TEXT"],
                                  command=self._overlay_toggle)
+        yield
         self.overlay_sw.pack(anchor="w", padx=20, pady=4)
+        yield
         if cfg["enabled"]:
             self.overlay_sw.select()
+        yield
         self.overlay_status = self.label(left, "Off", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=560)
+        yield
         self.overlay_status.pack(fill="x", padx=20, pady=(2, 10))
 
+        yield
         def seg(parent, values, current, cmd):
             sb = PillSwitcher(parent, values=values, command=cmd, height=34, font=F(12, "bold"),
                                         corner_radius=RADIUS, fg_color=P["CARD2"], unselected_color=P["CARD2"],
@@ -2200,12 +2386,19 @@ class App(ctk.CTk):
             self.accent_widgets.append(("seg", sb))
             return sb
 
+        yield
         self.caption(left, "Position").pack(fill="x", padx=20, pady=(10, 6))
+        yield
         seg(left, fpo.CORNERS, cfg["corner"], lambda v: self._overlay_set("corner", v)).pack(fill="x", padx=20)
+        yield
         self.caption(left, "Size").pack(fill="x", padx=20, pady=(16, 6))
+        yield
         seg(left, list(fpo.SIZES), cfg["size"], lambda v: self._overlay_set("size", v)).pack(fill="x", padx=20)
+        yield
         self.caption(left, "Show").pack(fill="x", padx=20, pady=(16, 6))
+        yield
         self.overlay_item_sw = {}
+        yield
         for key, label in fpo.ITEMS:
             sw = Switch(left, text=label, font=F(12), text_color=P["TEXT"], command=lambda k=key: self._overlay_item(k))
             sw.pack(anchor="w", padx=20, pady=4)
@@ -2213,15 +2406,25 @@ class App(ctk.CTk):
                 sw.select()
             self.overlay_item_sw[key] = sw
 
+        yield
         right = self.card(body)
+        yield
         right.grid(row=0, column=1, sticky="nsew")
+        yield
         self.caption(right, "Preview").pack(fill="x", padx=20, pady=(18, 10))
+        yield
         stage = tk.Frame(right, bg=P["SIDE"], highlightthickness=1, highlightbackground=P["LINE"])
+        yield
         stage.pack(fill="x", padx=20)
+        yield
         self.overlay_preview = fpo.OverlayPanel(stage, self._overlay_colors(), FONT, outer=P["SIDE"])
+        yield
         self.overlay_preview.pack(padx=24, pady=24, anchor="w")
+        yield
         self.overlay_preview_note = self.label(right, "", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=360)
+        yield
         self.overlay_preview_note.pack(fill="x", padx=20, pady=(10, 4))
+        yield
         self.label(right, "How it works\n"
                           "• FPS is measured with Intel PresentMon, which reads Windows' own graphics events. "
                           "Nothing is injected into the game.\n"
@@ -2303,18 +2506,30 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Profiles
     def _page_profiles(self, p):
         self.header(p, "Profiles", "Save looks you like and switch between them in one click.")
+        yield
         save = self.card(p)
+        yield
         save.pack(fill="x", pady=(0, 14))
+        yield
         row = ctk.CTkFrame(save, fg_color="transparent")
+        yield
         row.pack(fill="x", padx=16, pady=14)
+        yield
         self.profile_name = ctk.CTkEntry(row, placeholder_text="Name this look…", height=40, corner_radius=6,
                                          font=F(13), fg_color=P["CARD2"], border_width=0, text_color=P["TEXT"])
+        yield
         self.profile_name.pack(side="left", fill="x", expand=True)
+        yield
         self.profile_name.bind("<Return>", lambda e: self._save_profile())
+        yield
         self.primary(row, "Save current", self._save_profile, height=40, width=140).pack(side="left", padx=(10, 0))
+        yield
         self.prof_area = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        yield
         self.prof_area.pack(fill="both", expand=True)
+        yield
         self.prof_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="p")
+        yield
         self._refresh_profiles()
 
     def _refresh_profiles(self):
@@ -2340,16 +2555,25 @@ class App(ctk.CTk):
     # ---------------------------------------------------------------- Settings
     def _page_settings(self, p):
         self.header(p, "Settings", "")
+        yield
         body = ctk.CTkScrollableFrame(p, fg_color=P["BG"], corner_radius=0)
+        yield
         body.pack(fill="both", expand=True)
 
+        yield
         hr = ctk.CTkFrame(body, fg_color="transparent")
+        yield
         hr.pack(fill="x", pady=(0, 8))
+        yield
         self.caption(hr, "System check").pack(side="left")
+        yield
         self.secondary(hr, "Run again", lambda: self._bg(self._run_check), height=30, width=100).pack(side="right")
+        yield
         self.check_list = ctk.CTkFrame(body, fg_color="transparent")
+        yield
         self.check_list.pack(fill="x")
 
+        yield
         def switch(attr, on, cmd):
             def make(row):
                 sw = Switch(row, text="", width=46, command=cmd)
@@ -2359,8 +2583,10 @@ class App(ctk.CTk):
                 return sw
             return make
 
+        yield
         self.caption(body, "Appearance").pack(fill="x", pady=(22, 8))
 
+        yield
         def accent(row):
             self.accent_seg = PillSwitcher(row, values=["Cyan", "Windows", "Match lighting"], command=self._set_accent_mode,
                                                      height=32, font=F(13), corner_radius=6, fg_color=P["CARD2"],
@@ -2370,24 +2596,33 @@ class App(ctk.CTk):
             self.accent_seg.set({"match": "Match lighting", "windows": "Windows"}.get(self.settings.data.get("accent_mode"), "Cyan"))
             self.accent_widgets.append(("seg", self.accent_seg))
             return self.accent_seg
+        yield
         self.setting_row(body, "\ue790", "◐", "Accent color", "Cyan, your Windows accent color, or follow your lighting color", accent)
+        yield
         self.setting_row(body, "\ue768", "▶", "Startup animation", "Show the logo animation when the app opens",
                          switch("anim_sw", self.settings.data.get("animations", True),
                                 lambda: self.settings.__setitem__("animations", self.anim_sw.get() == 1)))
 
+        yield
         self.caption(body, "Sensors").pack(fill="x", pady=(22, 8))
+        yield
         self.setting_row(body, "\ue9d9", "◔", "Read RAM temperatures",
                          "Off by default: reading them can make RGB RAM flicker", 
                          switch("ramtemp_sw", self.settings.data.get("ram_temps", False), self._toggle_ram_temps))
 
+        yield
         self.caption(body, "Startup").pack(fill="x", pady=(22, 8))
+        yield
         self.setting_row(body, "\ue7e8", "⏻", "Start with Windows", "Open minimized at sign-in and apply your lighting",
-                         switch("autostart_sw", self._autostart_enabled(), self._toggle_autostart))
+                         switch("autostart_sw", False, self._toggle_autostart))
+        yield
         self.setting_row(body, "\ue72c", "↻", "Re-apply lighting on launch", "Restore your last lighting when the app opens",
                          switch("restore_sw", self.settings["restore_on_start"],
                                 lambda: self.settings.__setitem__("restore_on_start", self.restore_sw.get() == 1)))
 
+        yield
         self.caption(body, "Help").pack(fill="x", pady=(22, 8))
+        yield
         for glyph, fb, title, desc, btn, cmd in (
                 ("\ue7ef", "⚑", "PawnIO driver", "Needed for RGB RAM, fan control and most sensors", "Get driver",
                  lambda: webbrowser.open(eng.PAWNIO_PAGE)),
@@ -2397,14 +2632,21 @@ class App(ctk.CTk):
             self.setting_row(body, glyph, fb, title, desc,
                              lambda row, b=btn, c=cmd: self.secondary(row, b, c, height=32, width=110))
 
+        yield
         self.caption(body, "Activity").pack(fill="x", pady=(22, 8))
+        yield
         logc = self.card(body)
+        yield
         logc.pack(fill="x", pady=(0, 10))
+        yield
         self.logbox = ctk.CTkTextbox(logc, height=220, fg_color=P["CARD"], text_color=P["MUTED"],
                                      font=ctk.CTkFont(family=MONO, size=12), corner_radius=0, border_width=0, wrap="word")
+        yield
         self.logbox.pack(fill="both", expand=True, padx=14, pady=12)
+        yield
         for tag, col in (("ok", OK), ("warn", WARN), ("bad", BAD), ("info", INFO)):
             self.logbox.tag_config(tag, foreground=col)
+        yield
         self.logbox.configure(state="disabled")
 
     def _show_checks(self, results):
@@ -2431,6 +2673,8 @@ class App(ctk.CTk):
         self._update_accent()
 
     def show_page(self, name, animate=True):
+        if name not in self.pages:
+            return
         self.current_page = name
         page = self.pages[name]
         page.tkraise()
@@ -2784,6 +3028,11 @@ class App(ctk.CTk):
             return False
         r = eng.run_quiet(["schtasks", "/Query", "/TN", TASK_NAME])
         return bool(r and r.returncode == 0)
+
+    def _check_autostart(self):
+        on = self._autostart_enabled()
+        if on:
+            self.after(0, lambda: self.autostart_sw.select() if self.autostart_sw.winfo_exists() else None)
 
     def _toggle_autostart(self):
         if not eng.IS_WIN:

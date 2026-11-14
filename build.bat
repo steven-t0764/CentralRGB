@@ -22,7 +22,11 @@ echo [1/3] Installing build tools...
 
 echo.
 echo [2/3] Packaging "Central RGB.exe"...
-%PY% -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin ^
+%PY% -m PyInstaller --noconfirm --clean --onedir --windowed --uac-admin --distpath dist_app ^
+    --collect-all customtkinter --collect-all pythonnet --collect-all clr_loader --hidden-import clr ^
+    --hidden-import PIL._tkinter_finder --icon central_rgb.ico ^
+    --add-data "central_rgb.ico;." --add-data "central_rgb.png;." --add-data "presets;presets" --name "Central RGB" central_rgb.py || goto fail
+%PY% -m PyInstaller --noconfirm --onefile --windowed --uac-admin ^
     --collect-all customtkinter --collect-all pythonnet --collect-all clr_loader --hidden-import clr ^
     --hidden-import PIL._tkinter_finder --icon central_rgb.ico ^
     --add-data "central_rgb.ico;." --add-data "central_rgb.png;." --add-data "presets;presets" --name "Central RGB" central_rgb.py || goto fail

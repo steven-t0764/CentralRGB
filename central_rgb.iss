@@ -50,7 +50,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startup"; Description: "Start Central RGB when I sign in (re-applies my lighting and fan profile)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; folder build: starts without unpacking itself on every launch
+Source: "dist_app\{#AppName}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "central_rgb.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
@@ -70,6 +71,7 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/IM ""{#AppExe}"" /F"; Flags: runhi
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN CentralRGB /F"; Flags: runhidden; RunOnceId: "RemoveStartupTask"
 
 [UninstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
 ; downloaded engines (OpenRGB / LibreHardwareMonitor). Your settings in %APPDATA%\CentralRGB are kept.
 ; PawnIO is left installed on purpose: other apps (OpenRGB, FanControl, LibreHardwareMonitor...) use it too.
 Type: filesandordirs; Name: "{localappdata}\CentralRGB"

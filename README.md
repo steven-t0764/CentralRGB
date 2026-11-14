@@ -16,7 +16,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
 - **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** with picture previews: Tide, Drizzle, Sweep, Ember, Pulse, Drift, Volt and Frost
-- **Per-device lighting**: click Customize on a device to see a drawing of it with live LEDs and its exact model details, and give it its own effect, color and brightness
+- **Per-device lighting**: click Customize on a device to see a model of it (RAM stick, graphics card, fans, cooler, keyboard, mouse, board) lit with its live colors, plus its exact model details, and give it its own effect, color and brightness
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
@@ -84,7 +84,7 @@ You can remove it separately from *Settings → Apps*.
 
 <p align="center"><img src="assets/screenshots/home.png" alt="Home dashboard" width="860"><br><b>Home</b>: devices, live lighting, fan profile and temperatures at a glance, with quick actions</p>
 
-<p align="center"><img src="assets/screenshots/device-editor.png" alt="Device editor showing a RAM stick" width="860"><br><b>Device editor</b>: the device drawn with live LEDs, its exact model details, and its own lighting</p>
+<p align="center"><img src="assets/screenshots/device-editor.png" alt="Device editor showing a RAM stick" width="860"><br><b>Device editor</b>: a model of the device lit with its live colors, its exact model details, and its own lighting</p>
 
 <table>
   <tr>
@@ -142,7 +142,7 @@ A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sid
 4. Starts it hidden in the tray with the SDK server turned on:
 
 ```text
-OpenRGB.exe --server --startminimized
+OpenRGB.exe --server --noautoconnect
 ```
 
 5. Waits for the server, connects with [openrgb-python](https://github.com/jath03/openrgb-python), then rescans after 4 s and again after 12 s, because OpenRGB keeps detecting devices for a while after it starts.

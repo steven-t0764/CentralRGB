@@ -288,7 +288,16 @@ class OpenRGBManager:
     def launch(self, exe: Path, wait=45) -> bool:
         self.log(f"Starting OpenRGB SDK server ({exe}) ...")
         try:
-            self.proc = subprocess.Popen([str(exe), "--server", "--startminimized"], cwd=str(exe.parent))
+            # --server alone runs OpenRGB headless: no window, no tray icon, no taskbar entry
+            # (--startminimized would load its GUI into the tray). The console is hidden too.
+            si = None
+            if IS_WIN:
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = 0                       # SW_HIDE
+            self.proc = subprocess.Popen([str(exe), "--server", "--noautoconnect"], cwd=str(exe.parent),
+                                         creationflags=NO_WINDOW, startupinfo=si,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
         except OSError as e:
             self.log(f"Could not start OpenRGB: {e}")
             return False
@@ -550,28 +559,51 @@ class LightingEngine(threading.Thread):
         self._stop_evt.set()
 
     # ---- device handling
-    def _prepare(self, dev) -> bool:
-        """Put device into the most controllable mode. Returns True if it accepts per-LED colors."""
+    @staticmethod
+    def _hw_static(dev):
+        """The device's own 'Static' mode, if it has one that takes a color."""
+        return next((m for m in dev.modes if m.name.lower() == "static"
+                     and m.color_mode in (ModeColors.MODE_SPECIFIC, ModeColors.PER_LED)), None)
+
+    def _prepare(self, dev, animated: bool) -> str:
+        """Pick a mode for the device. Returns 'per_led', 'slow' or 'hw_static'.
+
+        A still color goes into the device's own Static mode, so the hardware holds it. Direct mode is
+        only used for animations: many controllers (RGB RAM especially) blink when switched into it and
+        dim or drop the color when the software stops streaming frames."""
         names = [m.name.lower() for m in dev.modes]
         try:
+            if not animated and self._hw_static(dev) is not None:
+                return "hw_static"
             for want in ("direct", "custom", "static"):
                 if want in names:
-                    dev.set_mode(want)
+                    if dev.modes[dev.active_mode].name.lower() != want:
+                        dev.set_mode(want)
                     break
             else:
                 dev.set_custom_mode()
         except Exception as e:
             self.log(f"  {dev.name}: couldn't switch mode ({e})")
         try:
-            return dev.modes[dev.active_mode].color_mode == ModeColors.PER_LED
+            return "per_led" if dev.modes[dev.active_mode].color_mode == ModeColors.PER_LED else "slow"
         except Exception:
-            return False
+            return "slow"
 
-    def _push(self, dev, colors, per_led: bool):
+    def _push(self, dev, colors, how: str):
         if not dev.leds:
             return
         rgb = [RGBColor(*c) for c in colors]
-        if per_led:
+        if how == "hw_static":
+            m = self._hw_static(dev)
+            if m.color_mode == ModeColors.MODE_SPECIFIC:
+                m.colors = [rgb[0]] * max(1, m.colors_max or 1)
+                dev.set_mode(m)                      # one write; the controller keeps the color itself
+            else:
+                if dev.modes[dev.active_mode].name.lower() != "static":
+                    dev.set_mode(m)
+                dev._set_device_colors(rgb, fast=False)
+            return
+        if how == "per_led":
             dev._set_device_colors(rgb, fast=True)
         else:
             dev.set_color(rgb[0])
@@ -621,10 +653,12 @@ class LightingEngine(threading.Thread):
                             animated = st["effect"] in ANIMATED
                             if not animated and not dirty:
                                 continue
-                            if key not in self.prepared:
-                                self.prepared[key] = self._prepare(dev)
-                            per_led = self.prepared[key]
-                            if not per_led and animated:
+                            pkey = (key, animated)
+                            if pkey not in self.prepared:
+                                self.prepared = {k: v for k, v in self.prepared.items() if k[0] != key}
+                                self.prepared[pkey] = self._prepare(dev, animated)
+                            how = self.prepared[pkey]
+                            if how == "slow" and animated:
                                 # mode-specific devices are slow to update; ~2 updates/second
                                 if now - self.last_slow_push.get(key, 0) < 0.5:
                                     continue
@@ -632,7 +666,7 @@ class LightingEngine(threading.Thread):
                             cols = compute_colors(st["effect"], st["color"], st["brightness"],
                                                   st["speed"], len(dev.leds), now, offset=idx * 0.07)
                             try:
-                                self._push(dev, cols, per_led)
+                                self._push(dev, cols, how)
                             except (ConnectionError, OSError):
                                 raise
                             except Exception as e:
