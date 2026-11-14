@@ -169,6 +169,34 @@ class Slider(ctk.CTkSlider):
         super().__init__(*a, **kw)
 
 
+# ---------------------------------------------------------------- smooth (anti-aliased) drawing
+# Tk's canvas draws curves and thick lines with no anti-aliasing on Windows, so they look jagged.
+# Widgets with curves are drawn with Pillow at AA x size and scaled down, which gives smooth edges.
+AA = 4
+
+
+def imix(a, b, t):
+    """mix() rounded to whole numbers, for Pillow colours."""
+    return tuple(int(round(v)) for v in mix(a, b, t))
+
+
+def aa_image(w, h, bg, draw_fn):
+    """Draw at AA x size with draw_fn(draw, k), then scale down smoothly. Returns an RGB image."""
+    w, h = max(1, int(w)), max(1, int(h))
+    big = Image.new("RGB", (w * AA, h * AA), bg if isinstance(bg, tuple) else hex2rgb(bg))
+    draw_fn(ImageDraw.Draw(big), AA, big)
+    return big.resize((w, h), Image.LANCZOS)
+
+
+def aa_round_rect(w, h, r, fill, bg, outline=None, width=1):
+    def d(dr, k, _img):
+        dr.rounded_rectangle((0, 0, w * k - 1, h * k - 1), r * k, fill=fill if isinstance(fill, tuple) else hex2rgb(fill),
+                             outline=(outline if isinstance(outline, tuple) else hex2rgb(outline)) if outline else None,
+                             width=int(width * k))
+    return aa_image(w, h, bg, d)
+
+
+
 class GradBar(tk.Canvas):
     """Thin pink → violet → cyan strip that sits on the top edge of a card."""
 
@@ -187,6 +215,64 @@ class GradBar(tk.Canvas):
 def accent_bar(frame):
     """Cards are plain in the simple theme (kept as a hook)."""
     return None
+
+
+class SmoothFrame(ctk.CTkFrame):
+    """A rounded card with smooth corners.
+
+    CustomTkinter draws rounded corners from font glyphs, which come out uneven on Windows (especially
+    with a 1px outline). This frame is square underneath, with four small corner pieces drawn by Pillow
+    at 4x and scaled down, so the curve is properly anti-aliased against whatever is behind the card."""
+
+    def __init__(self, master, fg_color=None, corner_radius=RADIUS, border_width=0, border_color=None, **kw):
+        fg = fg_color or P["CARD"]
+        super().__init__(master, fg_color=fg, corner_radius=0, border_width=0, **kw)
+        self._r = max(2, int(corner_radius))
+        self._fill = fg
+        self._corners, self._imgs = [], []
+        self.after_idle(self._make_corners)
+
+    @staticmethod
+    def _color_behind(w):
+        while w is not None:
+            try:
+                c = w.cget("fg_color")
+            except Exception:
+                try:
+                    c = w.cget("bg")
+                except Exception:
+                    c = None
+            if isinstance(c, (tuple, list)):
+                c = c[1]
+            if c and c != "transparent" and str(c).startswith("#"):
+                return c
+            w = w.master
+        return P["BG"]
+
+    def _make_corners(self):
+        if not self.winfo_exists():
+            return
+        r = self._r
+        bg = self._color_behind(self.master)
+        sc = ctk.ScalingTracker.get_widget_scaling(self) if hasattr(ctk, "ScalingTracker") else 1.0
+        px = max(2, int(round(r * sc)))
+        big = Image.new("RGB", (2 * px * AA, 2 * px * AA), hex2rgb(bg))
+        ImageDraw.Draw(big).ellipse((0, 0, 2 * px * AA - 1, 2 * px * AA - 1), fill=hex2rgb(self._fill))
+        circle = big.resize((2 * px, 2 * px), Image.LANCZOS)
+        spots = ((0, 0, "nw", 0, 0), (px, 0, "ne", 1, 0), (0, px, "sw", 0, 1), (px, px, "se", 1, 1))
+        for c in self._corners:
+            c.destroy()
+        self._corners, self._imgs = [], []
+        for ox, oy, anchor, rx, ry in spots:
+            img = ImageTk.PhotoImage(circle.crop((ox, oy, ox + px, oy + px)))
+            cv = tk.Canvas(self, width=px, height=px, highlightthickness=0, bd=0, bg=self._fill)
+            cv.create_image(0, 0, anchor="nw", image=img)
+            cv.place(relx=rx, rely=ry, anchor=anchor)
+            self._corners.append(cv)
+            self._imgs.append(img)
+        self.bind("<Map>", lambda e: [tk.Misc.lift(c) for c in self._corners], add="+")
+        for c in self._corners:
+            tk.Misc.lift(c)
 
 
 class Splash(tk.Frame):
@@ -438,81 +524,130 @@ class LedStrip(tk.Canvas):
 
 
 class Sparkline(tk.Canvas):
-    """Line chart with a soft glow and a fading fill; can draw several series on one chart."""
+    """Smooth line chart with a soft glow and a fading fill; can draw several series on one chart."""
 
     def __init__(self, master, height=54, color=DEFAULT_ACCENT, bg=None):
         super().__init__(master, height=height, bg=bg or P["CARD"], highlightthickness=0)
         self.h, self.color, self.bgc = height, color, hex2rgb(bg or P["CARD"])
+        self._img = None
+        self.img_item = self.create_image(0, 0, anchor="nw")
 
     def set(self, values, vmax=None, color=None):
         self.set_multi([(values, color or self.color)], vmax)
 
     def set_multi(self, series, vmax=None):
-        self.delete("all")
-        self.h = max(self.winfo_height(), 20) if self.winfo_height() > 20 else self.h
+        h = self.winfo_height() if self.winfo_height() > 20 else self.h
         w = max(self.winfo_width(), 40)
         series = [(list(v)[-60:], c) for v, c in series if len(list(v)) >= 2]
         if not series:
             return
         top = vmax if vmax else max(max(max(v) for v, _ in series) * 1.2, 1e-6)
         step = w / 59
-        for vals, color in series:
-            x0 = w - step * (len(vals) - 1)
-            pts = [(x0 + i * step, self.h - 3 - (self.h - 10) * min(v, top) / top) for i, v in enumerate(vals)]
-            rgb = hex2rgb(color)
-            bands = 6                                         # fill fades towards the bottom
-            for k in range(bands):
-                poly = [(x, y + (self.h - y) * k / bands) for x, y in pts]
-                self.create_polygon([(pts[0][0], self.h)] + poly + [(pts[-1][0], self.h)],
-                                    fill=hexcol(mix(self.bgc, rgb, 0.04 + 0.03 * (bands - k))), outline="")
-            self.create_line(pts, fill=hexcol(mix(self.bgc, rgb, 0.32)), width=6, smooth=True)   # glow
-            self.create_line(pts, fill=color, width=2, smooth=True)
+        bgc = self.bgc
+
+        def draw(d, k, img):
+            for vals, color in series:
+                rgb = hex2rgb(color)
+                x0 = w - step * (len(vals) - 1)
+                pts = [((x0 + i * step) * k, (h - 3 - (h - 10) * min(v, top) / top) * k) for i, v in enumerate(vals)]
+                fill = Image.new("RGB", img.size, imix(bgc, rgb, 0.30))
+                grad = Image.linear_gradient("L").resize(img.size).point(lambda v: int((255 - v) * 0.55))
+                m = Image.new("L", img.size, 0)
+                ImageDraw.Draw(m).polygon([(pts[0][0], h * k)] + pts + [(pts[-1][0], h * k)], fill=255)
+                img.paste(fill, (0, 0), ImageChops.multiply(m, grad))
+                d.line(pts, fill=imix(bgc, rgb, 0.30), width=int(6 * k), joint="curve")   # glow
+                d.line(pts, fill=rgb, width=int(2 * k), joint="curve")
+
+        self._img = ImageTk.PhotoImage(aa_image(w, h, bgc, draw))
+        self.itemconfigure(self.img_item, image=self._img)
 
 
 class Ring(tk.Canvas):
-    """Circular gauge with a two-colour gradient arc."""
-    SEGS = 48
+    """Circular gauge: a smooth 270-degree arc with a two-colour gradient and rounded ends."""
 
     def __init__(self, master, size=112, width=9):
         super().__init__(master, width=size, height=size, bg=P["CARD"], highlightthickness=0)
         self.s, self.w = size, width
-        pad = width / 2 + 3
-        self.box = (pad, pad, size - pad, size - pad)
-        self.create_arc(*self.box, start=-225, extent=-270, style="arc", outline=P["TRACK"], width=width)
-        self.segs = [self.create_arc(*self.box, start=225, extent=0, style="arc", outline=CYAN, width=width)
-                     for _ in range(self.SEGS)]
+        self._key, self._img = None, None
+        self.img_item = self.create_image(0, 0, anchor="nw")
         self.val = self.create_text(size / 2, size / 2 - 7, text="—", fill=P["TEXT"], font=(FONT, 20))
         self.sub = self.create_text(size / 2, size / 2 + 17, text="", fill=P["MUTED"], font=(FONT, 9))
+        self._draw(0, TEAL, CYAN)
+
+    def _draw(self, pct, c1, c2):
+        key = (round(pct * 2) / 2, c1, c2)
+        if key == self._key:
+            return
+        self._key = key
+        s, wd = self.s, self.w
+        a1, a2 = hex2rgb(c1), hex2rgb(c2)
+
+        def draw(d, k, _img):
+            pad = 3 * k                                      # outer edge of the stroke
+            box = (pad, pad, s * k - pad, s * k - pad)
+            cx = cy = s * k / 2
+            lw = int(wd * k)
+            r = (s * k - 2 * pad) / 2 - lw / 2               # Pillow strokes inward: caps go on the centre line
+            track = hex2rgb(P["TRACK"])
+            # PIL angles: 0 = 3 o'clock, clockwise. Gauge runs from 135 (bottom left) round to 405.
+            d.arc(box, 135, 405, fill=track, width=lw)
+            for ang in (135, 405):                                   # rounded ends of the track
+                x, y = cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))
+                d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=track)
+            if pct <= 0:
+                return
+            sweep = 270 * pct / 100
+            steps = max(2, int(sweep / 1.5))
+            for i in range(steps):                                   # gradient along the arc
+                t0, t1 = i / steps, (i + 1) / steps
+                col = imix(a1, a2, (t0 + t1) / 2)
+                d.arc(box, 135 + sweep * t0, 135 + sweep * t1 + 0.8, fill=col, width=lw)
+            for ang, col in ((135, a1), (135 + sweep, imix(a1, a2, 1.0))):
+                x, y = cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))
+                d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=col)
+
+        self._img = ImageTk.PhotoImage(aa_image(s, s, P["CARD"], draw))
+        self.itemconfigure(self.img_item, image=self._img)
 
     def set(self, pct, text, sub="", color=(TEAL, CYAN)):
         c1, c2 = color if isinstance(color, (tuple, list)) else (color, color)
         pct = 0 if pct is None else max(0, min(100, pct))
-        seg = 270 * pct / 100 / self.SEGS
-        for i, it in enumerate(self.segs):
-            k = i / max(1, self.SEGS - 1)
-            self.itemconfigure(it, start=225 - i * seg, extent=-(seg + 0.6) if seg else 0,
-                               outline=hexcol(mix(hex2rgb(c1), hex2rgb(c2), k)))
+        self._draw(pct, c1, c2)
         self.itemconfigure(self.val, text=text)
         self.itemconfigure(self.sub, text=sub)
 
 
 class GradientBar(tk.Canvas):
-    """Thin progress bar filled with a cyan to purple gradient."""
+    """Thin rounded progress bar filled with a cyan to purple gradient."""
 
     def __init__(self, master, height=8):
         super().__init__(master, height=height, bg=P["CARD"], highlightthickness=0)
         self.h, self.pct, self.cols = height, 0, (CYAN, PURPLE)
+        self._img, self._key = None, None
+        self.img_item = self.create_image(0, 0, anchor="nw")
         self.bind("<Configure>", lambda e: self.set(self.pct, *self.cols))
 
     def set(self, pct, c1=CYAN, c2=PURPLE):
         self.pct, self.cols = pct, (c1, c2)
-        self.delete("all")
-        w = max(self.winfo_width(), 20)
-        self.create_rectangle(0, 0, w, self.h, fill=P["TRACK"], width=0)
-        fw, n = w * max(0, min(1, pct)), 40
-        for i in range(n):
-            self.create_rectangle(fw * i / n, 0, fw * (i + 1) / n + 1, self.h, width=0,
-                                  fill=hexcol(mix(hex2rgb(c1), hex2rgb(c2), i / n)))
+        w, h = max(self.winfo_width(), 20), self.h
+        p = max(0.0, min(1.0, pct or 0))
+        key = (w, round(p, 3), c1, c2)
+        if key == self._key:
+            return
+        self._key = key
+
+        def draw(d, k, img):
+            d.rounded_rectangle((0, 0, w * k - 1, h * k - 1), h * k / 2, fill=hex2rgb(P["TRACK"]))
+            fw = int(w * k * p)
+            if fw >= h * k * 0.6:
+                g = Image.linear_gradient("L").rotate(90, expand=True).transpose(Image.FLIP_LEFT_RIGHT).resize((fw, h * k))
+                bar = Image.composite(Image.new("RGB", (fw, h * k), hex2rgb(c2)), Image.new("RGB", (fw, h * k), hex2rgb(c1)), g)
+                m = Image.new("L", (fw, h * k), 0)
+                ImageDraw.Draw(m).rounded_rectangle((0, 0, fw - 1, h * k - 1), h * k / 2, fill=255)
+                img.paste(bar, (0, 0), m)
+
+        self._img = ImageTk.PhotoImage(aa_image(w, h, P["CARD"], draw))
+        self.itemconfigure(self.img_item, image=self._img)
 
 
 class CurveEditor(tk.Canvas):
@@ -739,9 +874,9 @@ class PresetTile(tk.Canvas):
     """Picture tile for a preset effect, with its name on top (like the effect gallery mockup)."""
 
     def __init__(self, master, name, on_click, height=104):
-        super().__init__(master, height=height, bg=P["CARD"], highlightthickness=2, highlightbackground=P["CARD"],
-                         cursor="hand2")
+        super().__init__(master, height=height, bg=P["CARD"], highlightthickness=0, cursor="hand2")
         self.name, self.h, self._img, self._size, self.selected = name, height, None, None, False
+        self.accent = CYAN
         try:
             self.src = Image.open(resource(PRESET_FILES[name])).convert("RGB")
         except Exception:
@@ -751,9 +886,9 @@ class PresetTile(tk.Canvas):
 
     def _render(self):
         w, h = max(self.winfo_width() - 4, 40), self.h - 4
-        if (w, h) == self._size:
+        if (w, h, self.selected, self.accent) == self._size:
             return
-        self._size = (w, h)
+        self._size = (w, h, self.selected, self.accent)
         if self.src is not None:                               # cover-crop the artwork to the tile
             sw, sh = self.src.size
             k = max(w / sw, h / sh)
@@ -767,13 +902,22 @@ class PresetTile(tk.Canvas):
             im = im.resize((w, h), Image.BILINEAR)
         shade = Image.new("RGB", (w, h), (0, 0, 0))            # darken slightly so the title reads well
         im = Image.blend(im, shade, 0.22)
-        mask = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), 8, fill=255)
-        bg = Image.new("RGB", (w, h), hex2rgb(P["CARD"]))
-        bg.paste(im, (0, 0), mask)
+        W, H = w + 4, h + 4
+        big_mask = Image.new("L", (W * AA, H * AA), 0)                # smooth rounded corners
+        ImageDraw.Draw(big_mask).rounded_rectangle((2 * AA, 2 * AA, (W - 2) * AA - 1, (H - 2) * AA - 1), 9 * AA, fill=255)
+        mask = big_mask.resize((W, H), Image.LANCZOS)
+        bg = Image.new("RGB", (W, H), hex2rgb(P["CARD"]))
+        full = Image.new("RGB", (W, H))
+        full.paste(im, (2, 2))
+        bg.paste(full, (0, 0), mask)
+        if self.selected:                                             # smooth accent ring
+            ring = Image.new("L", (W * AA, H * AA), 0)
+            ImageDraw.Draw(ring).rounded_rectangle((AA, AA, W * AA - AA - 1, H * AA - AA - 1), 10 * AA,
+                                                   outline=255, width=2 * AA)
+            bg.paste(Image.new("RGB", (W, H), hex2rgb(self.accent)), (0, 0), ring.resize((W, H), Image.LANCZOS))
         self._img = ImageTk.PhotoImage(bg)
         self.delete("all")
-        self.create_image(2, 2, image=self._img, anchor="nw")
+        self.create_image(0, 0, image=self._img, anchor="nw")
         words = self.name.upper().split(" ")
         text = "\n".join([" ".join(words[:len(words) // 2 or 1]), " ".join(words[len(words) // 2 or 1:])]) \
             if len(words) > 1 else words[0]
@@ -782,8 +926,9 @@ class PresetTile(tk.Canvas):
                              font=(FONT, 12, "bold"))
 
     def select(self, on, accent):
-        self.selected = on
-        self.configure(highlightbackground=accent if on else P["CARD"])
+        if (on, accent) != (self.selected, self.accent):
+            self.selected, self.accent = on, accent
+            self._render()
 
 
 class EffectTile(tk.Canvas):
@@ -792,9 +937,9 @@ class EffectTile(tk.Canvas):
 
     def __init__(self, master, name, on_click, big=False):
         self.h = 84 if big else 44
-        super().__init__(master, height=self.h, bg=P["CARD2"], highlightthickness=1, highlightbackground=P["LINE"],
-                         cursor="hand2")
+        super().__init__(master, height=self.h, bg=P["CARD"], highlightthickness=0, cursor="hand2")
         self.name, self.big, self.bars, self.selected = name, big, [], False
+        self.accent, self._bg = CYAN, None
         self.n = self.COLS
         self.bind("<Configure>", lambda e: self._layout())
         self.bind("<Button-1>", lambda e: on_click(name))
@@ -802,8 +947,13 @@ class EffectTile(tk.Canvas):
     def _layout(self):
         self.delete("all")
         w = max(self.winfo_width(), 40)
-        step = w / self.COLS
-        self.bars = [self.create_rectangle(i * step, 0, (i + 1) * step + 1, 4, width=0, fill=P["TRACK"])
+        on = self.selected
+        self._bg = ImageTk.PhotoImage(aa_round_rect(w, self.h, 8, P["SEL"] if on else P["CARD2"], P["CARD"],
+                                                    outline=self.accent if on else P["LINE"], width=2 if on else 1))
+        self.create_image(0, 0, image=self._bg, anchor="nw")
+        x0, x1 = 10, w - 10                                         # live strip, inset from the corners
+        step = (x1 - x0) / self.COLS
+        self.bars = [self.create_rectangle(x0 + i * step, 4, x0 + (i + 1) * step + 1, 7, width=0, fill=P["TRACK"])
                      for i in range(self.COLS)]
         y = self.h - 30 if self.big else self.h / 2 + 2
         icon = EFFECT_ICONS.get(self.name, "•")
@@ -826,10 +976,9 @@ class EffectTile(tk.Canvas):
             self.itemconfigure(it, fill=hexcol(c) if max(c) > 10 else P["TRACK"])
 
     def select(self, on, accent):
-        self.selected = on
-        self.configure(highlightbackground=accent if on else P["LINE"], highlightthickness=2 if on else 1,
-                       bg=P["SEL"] if on else P["CARD2"])
-        self._sub()
+        if (on, accent) != (self.selected, self.accent):
+            self.selected, self.accent = on, accent
+            self._layout()
 
 
 class DeviceArt(tk.Canvas):
@@ -852,9 +1001,9 @@ class DeviceArt(tk.Canvas):
         self.itemconfigure(self._item, image=self._img)
 
 
-class DeviceCard(ctk.CTkFrame):
+class DeviceCard(SmoothFrame):
     def __init__(self, master, key, tname, name, leds, enabled, on_toggle, on_edit):
-        super().__init__(master, fg_color=P["CARD"], corner_radius=6, border_width=1, border_color=P["LINE"])
+        super().__init__(master, fg_color=P["CARD"], corner_radius=6)
         accent_bar(self)
         self.key = key
         top = ctk.CTkFrame(self, fg_color="transparent")
@@ -879,9 +1028,9 @@ class DeviceCard(ctk.CTkFrame):
         self.strip.pack(fill="x", padx=12, pady=(4, 14))
 
 
-class FanCard(ctk.CTkFrame):
+class FanCard(SmoothFrame):
     def __init__(self, master, fan, on_manual, on_reset):
-        super().__init__(master, fg_color=P["CARD"], corner_radius=6, border_width=1, border_color=P["LINE"])
+        super().__init__(master, fg_color=P["CARD"], corner_radius=6)
         accent_bar(self)
         self.fid, self.on_manual, self.touched = fan["id"], on_manual, 0
         top = ctk.CTkFrame(self, fg_color="transparent")
@@ -1137,7 +1286,7 @@ class App(ctk.CTk):
 
     # ---------------------------------------------------------------- layout helpers
     def card(self, parent, **kw):
-        c = ctk.CTkFrame(parent, fg_color=P["CARD"], corner_radius=RADIUS, border_width=1, border_color=P["LINE"], **kw)
+        c = SmoothFrame(parent, fg_color=P["CARD"], corner_radius=RADIUS, **kw)
         accent_bar(c)
         return c
 
@@ -1150,7 +1299,7 @@ class App(ctk.CTk):
 
     def setting_row(self, parent, glyph, fallback, title, desc, make_control):
         """Windows 11 Settings row: icon, title and description on the left, a control on the right."""
-        row = ctk.CTkFrame(parent, fg_color=P["CARD"], corner_radius=6, border_width=1, border_color=P["LINE"], height=68)
+        row = SmoothFrame(parent, fg_color=P["CARD"], corner_radius=6, height=68)
         row.pack(fill="x", pady=2)
         row.pack_propagate(False)
         icon_label(row, glyph, fallback, size=18, width=24, color=P["TEXT"]).pack(side="left", padx=(18, 14))
@@ -2692,7 +2841,7 @@ class App(ctk.CTk):
         icons = {"ok": ("✓", OK), "warn": ("!", WARN), "bad": ("✕", BAD), "info": ("i", INFO)}
         for level, msg in results:
             g, col = icons.get(level, ("•", P["MUTED"]))
-            r = ctk.CTkFrame(self.check_list, fg_color=P["CARD"], corner_radius=6, border_width=1, border_color=P["LINE"])
+            r = SmoothFrame(self.check_list, fg_color=P["CARD"], corner_radius=6)
             r.pack(fill="x", pady=2)
             ctk.CTkLabel(r, text=g, width=22, height=22, corner_radius=11, fg_color=col, text_color="#1a1a1a",
                          font=F(12, "bold")).pack(side="left", padx=(18, 14), pady=12)
