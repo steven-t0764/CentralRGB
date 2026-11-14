@@ -4,6 +4,14 @@
 
 # Central RGB
 
+<p align="center">
+  <a href="https://github.com/steven-t0764/CentralRGB/releases/latest/download/CentralRGB-Setup.exe"><img src="https://img.shields.io/badge/Download-CentralRGB--Setup.exe-8b5cff?style=for-the-badge&logo=windows&logoColor=white" alt="Download CentralRGB-Setup.exe"></a>
+  <a href="https://github.com/steven-t0764/CentralRGB/releases/latest"><img src="https://img.shields.io/github/v/release/steven-t0764/CentralRGB?style=for-the-badge&color=ff2d95&label=Latest" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-00d4ff?style=for-the-badge" alt="Windows 10 and 11">
+  <img src="https://img.shields.io/github/license/steven-t0764/CentralRGB?style=for-the-badge&color=2bf5a0" alt="License">
+</p>
+
+
 A free and open-source Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
