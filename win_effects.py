@@ -117,3 +117,33 @@ def set_opacity(root, pct: int):
         root.attributes("-alpha", max(0.6, min(1.0, pct / 100)))
     except Exception:
         pass
+
+
+# ---- flicker-free page switching
+WM_SETREDRAW = 0x000B
+RDW_INVALIDATE, RDW_ERASE, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_FRAME = 0x1, 0x4, 0x80, 0x100, 0x400
+
+
+def freeze(widget) -> int:
+    """Stop Windows drawing a widget (and its children) until thaw(). Returns the handle to pass to thaw."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        h = widget.winfo_id()
+        ctypes.windll.user32.SendMessageW(wintypes.HWND(h), WM_SETREDRAW, 0, 0)
+        return h
+    except Exception:
+        return 0
+
+
+def thaw(h: int):
+    """Turn drawing back on and repaint the whole area in one go."""
+    if not h:
+        return
+    try:
+        u = ctypes.windll.user32
+        u.SendMessageW(wintypes.HWND(h), WM_SETREDRAW, 1, 0)
+        u.RedrawWindow(wintypes.HWND(h), None, None,
+                       RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME)
+    except Exception:
+        pass

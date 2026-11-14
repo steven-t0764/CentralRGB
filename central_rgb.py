@@ -1035,10 +1035,26 @@ class App(ctk.CTk):
         """Open every page, draw the overlay preview, run the system check, then report and exit."""
         steps = []
         try:
+            shots = os.environ.get("CENTRALRGB_SHOTS")
             for name, *_ in NAV:
+                t0 = time.perf_counter()
                 self.show_page(name)
                 self.update()
-                steps.append(f"page {name}: ok")
+                steps.append(f"page {name}: ok, switch took {(time.perf_counter() - t0) * 1000:.0f} ms")
+            for name, *_ in NAV:                      # second pass: what switching feels like once warm
+                t0 = time.perf_counter()
+                self.show_page(name)
+                self.update()
+                steps.append(f"page {name} again: {(time.perf_counter() - t0) * 1000:.0f} ms")
+                if shots and eng.IS_WIN:
+                    try:
+                        from PIL import ImageGrab
+                        self.update()
+                        x, y = self.winfo_rootx(), self.winfo_rooty()
+                        ImageGrab.grab((x, y, x + self.winfo_width(), y + self.winfo_height())).save(
+                            os.path.join(shots, f"{name}.png"))
+                    except Exception as e:
+                        steps.append(f"  screenshot failed: {e}")
             missing = [f for f in PRESET_FILES.values() if not resource(f).exists()]
             if missing:
                 raise RuntimeError(f"Preset pictures missing from the build: {missing}")
@@ -2677,13 +2693,24 @@ class App(ctk.CTk):
             return
         self.current_page = name
         page = self.pages[name]
-        page.tkraise()
         for n, item in self.nav.items():
             item.set(n == name, self.accent)
-        if name == "Home":
-            self.after(10, lambda: self._refresh_home(self.snap))
-        if name in ("Monitor", "Fans"):
-            self.after(10, lambda: (self._refresh_monitor(self.snap) if name == "Monitor" else self._refresh_fans(self.snap)))
+        # Swap pages with drawing frozen, so the old page stays on screen until the new one is fully laid
+        # out and filled in, then it appears in a single repaint (no half-drawn frames).
+        h = fx.freeze(self._holder)
+        try:
+            page.tkraise()
+            if name == "Home":
+                self._refresh_home(self.snap)
+            elif name == "Monitor":
+                self._refresh_monitor(self.snap)
+            elif name == "Fans":
+                self._refresh_fans(self.snap)
+            self.update_idletasks()
+        finally:
+            fx.thaw(h)
+        if h:
+            self.update_idletasks()
 
     def _update_accent(self):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))

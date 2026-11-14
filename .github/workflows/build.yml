@@ -55,6 +55,8 @@ jobs:
       - name: Self-test (launch the app on this clean Windows machine)
         shell: pwsh
         run: |
+          $env:CENTRALRGB_SHOTS = Join-Path $env:RUNNER_TEMP "shots"
+          New-Item -ItemType Directory -Force -Path $env:CENTRALRGB_SHOTS | Out-Null
           foreach ($exe in @("dist_app\Central RGB\Central RGB.exe", "dist\Central RGB.exe")) {
             Write-Host "===== $exe ====="
             $report = Join-Path $env:RUNNER_TEMP ("selftest_" + [IO.Path]::GetRandomFileName() + ".txt")
@@ -72,6 +74,13 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           if ($env:APP_VERSION) { & $iscc "/DAppVersion=$env:APP_VERSION" central_rgb.iss } else { & $iscc central_rgb.iss }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-screenshots
+          path: ${{ runner.temp }}/shots/*.png
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
