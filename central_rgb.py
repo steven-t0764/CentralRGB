@@ -593,6 +593,108 @@ EFFECT_ICONS = {"Static": "✧", "Breathing": "∿", "Color Cycle": "↻", "Rain
                 "Neon Storm": "ϟ", "Black Ice": "❄", "Off": "⏻"}
 
 
+PRESET_FILES = {name: "presets/" + name.lower().replace(" ", "-") + ".jpg" for name in eng.PRESET_EFFECTS}
+
+
+class GlowBar(tk.Canvas):
+    """Smooth light bar: colours blend into each other, with rounded ends and a soft, fading glow."""
+    LAYERS = ((1.0, 0.05), (0.72, 0.10), (0.48, 0.17))      # (height fraction, glow strength), outer to inner
+
+    def __init__(self, master, height=16, thickness=6, bg=None, slices=110):
+        self.bgc_hex = bg or P["CARD"]
+        super().__init__(master, height=height, bg=self.bgc_hex, highlightthickness=0)
+        self.h, self.t, self.slices, self.n = height, thickness, slices, 48
+        self.bgc = hex2rgb(self.bgc_hex)
+        self.layers = []          # list of (strength, rects, caps)
+        self.bind("<Configure>", lambda e: self._layout())
+
+    def _band(self, x0, x1, half, cy):
+        step = (x1 - x0) / self.slices
+        rects = [self.create_rectangle(x0 + i * step, cy - half, x0 + (i + 1) * step + 1, cy + half, width=0,
+                                       fill=self.bgc_hex) for i in range(self.slices)]
+        caps = [self.create_oval(x0 - half, cy - half, x0 + half, cy + half, width=0, fill=self.bgc_hex),
+                self.create_oval(x1 - half, cy - half, x1 + half, cy + half, width=0, fill=self.bgc_hex)]
+        return rects, caps
+
+    def _layout(self):
+        self.delete("all")
+        w, cy = max(self.winfo_width(), 30), self.h / 2
+        pad = self.h / 2
+        self.layers = []
+        for frac, k in self.LAYERS:
+            half = max(self.t / 2 + 1, self.h / 2 * frac)
+            self.layers.append((k, *self._band(pad, w - pad, half, cy)))
+        self.layers.append((None, *self._band(pad, w - pad, self.t / 2, cy)))     # bright core
+
+    def show(self, colors):
+        if not self.layers or not colors:
+            return
+        m = len(colors)
+        cols = []
+        for i in range(self.slices):
+            f = i / max(1, self.slices - 1) * (m - 1)
+            a, b = colors[int(f)], colors[min(m - 1, int(f) + 1)]
+            c = mix(a, b, f - int(f))
+            cols.append(mix(c, (255, 255, 255), 0.1) if max(c) > 20 else mix(self.bgc, c, 0.6))
+        for k, rects, caps in self.layers:
+            for i, it in enumerate(rects):
+                c = cols[i] if k is None else mix(self.bgc, cols[i], k)
+                self.itemconfigure(it, fill=hexcol(c))
+            self.itemconfigure(caps[0], fill=self.itemcget(rects[0], "fill"))
+            self.itemconfigure(caps[1], fill=self.itemcget(rects[-1], "fill"))
+
+
+class PresetTile(tk.Canvas):
+    """Picture tile for a preset effect, with its name on top (like the effect gallery mockup)."""
+
+    def __init__(self, master, name, on_click, height=104):
+        super().__init__(master, height=height, bg=P["CARD"], highlightthickness=2, highlightbackground=P["CARD"],
+                         cursor="hand2")
+        self.name, self.h, self._img, self._size, self.selected = name, height, None, None, False
+        try:
+            self.src = Image.open(resource(PRESET_FILES[name])).convert("RGB")
+        except Exception:
+            self.src = None
+        self.bind("<Configure>", lambda e: self._render())
+        self.bind("<Button-1>", lambda e: on_click(name))
+
+    def _render(self):
+        w, h = max(self.winfo_width() - 4, 40), self.h - 4
+        if (w, h) == self._size:
+            return
+        self._size = (w, h)
+        if self.src is not None:                               # cover-crop the artwork to the tile
+            sw, sh = self.src.size
+            k = max(w / sw, h / sh)
+            im = self.src.resize((int(sw * k) + 1, int(sh * k) + 1), Image.LANCZOS)
+            l, t = (im.width - w) // 2, (im.height - h) // 2
+            im = im.crop((l, t, l + w, t + h))
+        else:
+            cols = eng.compute_colors(self.name, (255, 255, 255), 100, 50, 32, 1.0)
+            im = Image.new("RGB", (len(cols), 1))
+            im.putdata(cols)
+            im = im.resize((w, h), Image.BILINEAR)
+        shade = Image.new("RGB", (w, h), (0, 0, 0))            # darken slightly so the title reads well
+        im = Image.blend(im, shade, 0.22)
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), 8, fill=255)
+        bg = Image.new("RGB", (w, h), hex2rgb(P["CARD"]))
+        bg.paste(im, (0, 0), mask)
+        self._img = ImageTk.PhotoImage(bg)
+        self.delete("all")
+        self.create_image(2, 2, image=self._img, anchor="nw")
+        words = self.name.upper().split(" ")
+        text = "\n".join([" ".join(words[:len(words) // 2 or 1]), " ".join(words[len(words) // 2 or 1:])]) \
+            if len(words) > 1 else words[0]
+        for dx, dy, col in ((1, 2, "#000000"), (0, 0, "#ffffff")):
+            self.create_text(w / 2 + 2 + dx, h / 2 + 2 + dy, text=text, fill=col, justify="center",
+                             font=(FONT, 12, "bold"))
+
+    def select(self, on, accent):
+        self.selected = on
+        self.configure(highlightbackground=accent if on else P["CARD"])
+
+
 class EffectTile(tk.Canvas):
     """Effect tile: a live strip of the effect along the top edge, then its icon and name."""
     COLS = 24
@@ -617,9 +719,9 @@ class EffectTile(tk.Canvas):
         if self.big:
             self.create_text(14, 24, text=icon, anchor="w", fill=P["FAINT"], font=(FONT, 12))
         if not self.big:
-            self.create_text(14, y, text=icon, anchor="w", fill=P["MUTED"], font=(FONT, 11))
-        self.create_text(14 if self.big else 34, y, text=self.name, anchor="w", fill=P["TEXT"],
-                         font=(FONT, 11, "bold" if self.big else "normal"))
+            self.create_text(12, y, text=icon, anchor="w", fill=P["MUTED"], font=(FONT, 10))
+        self.create_text(14 if self.big else 28, y, text=self.name, anchor="w", fill=P["TEXT"],
+                         font=(FONT, 11 if self.big else 10, "bold" if self.big else "normal"))
         self.sub = self.create_text(14, y + 19, text="", anchor="w", fill=P["MUTED"], font=(FONT, 8))
         self._sub()
 
@@ -929,6 +1031,10 @@ class App(ctk.CTk):
                 self.show_page(name)
                 self.update()
                 steps.append(f"page {name}: ok")
+            missing = [f for f in PRESET_FILES.values() if not resource(f).exists()]
+            if missing:
+                raise RuntimeError(f"Preset pictures missing from the build: {missing}")
+            steps.append(f"preset pictures: {len(PRESET_FILES)} found")
             self.overlay_preview.render(self.overlay_cfg, {"name": "test", "fps": 144, "low": 110, "ms": 6.9}, {})
             steps.append("overlay preview: ok")
             res = eng.system_check()
@@ -1120,8 +1226,8 @@ class App(ctk.CTk):
         self.home_status = self.label(txt, "Starting…", 13, color=P["MUTED"], anchor="w")
         self.home_status.pack(fill="x")
         self.primary(top, "Apply lighting", self._apply_all, height=34, width=140).pack(side="right")
-        self.home_strip = LedStrip(hero, n=48, height=40)
-        self.home_strip.pack(fill="x", padx=16, pady=(4, 16))
+        self.home_strip = GlowBar(hero, height=22, thickness=8)
+        self.home_strip.pack(fill="x", padx=22, pady=(6, 18))
 
         # tiles
         grid = ctk.CTkFrame(p, fg_color="transparent")
@@ -1146,8 +1252,8 @@ class App(ctk.CTk):
             for w in (c, hdr, big, sub):
                 w.bind("<Button-1>", lambda e, pg=page: self.show_page(pg))
                 w.configure(cursor="hand2")
-        self.home_light_strip = LedStrip(self.home_tiles["Lighting"][1].master, n=14, height=14, pill=True)
-        self.home_light_strip.pack(fill="x", padx=18, pady=(4, 0))
+        self.home_light_strip = GlowBar(self.home_tiles["Lighting"][1].master, height=12, thickness=4)
+        self.home_light_strip.pack(fill="x", padx=18, pady=(6, 0))
 
         # quick actions
         self.caption(p, "Quick actions").pack(fill="x", pady=(22, 8))
@@ -1190,7 +1296,7 @@ class App(ctk.CTk):
         self.home_status.configure(text=(f"{len(rows)} RGB devices · {sum(r[3] for r in rows)} LEDs · {len(fans)} fans"
                                          if self.connected else "Connecting to your RGB hardware…"))
         big, sub = self.home_tiles["Lighting"]
-        big.configure(text=self.effect)
+        big.configure(text=self.effect, font=F(26 if len(self.effect) <= 10 else 20, "bold", display=True))
         sub.configure(text=f"{hexcol(self.color).upper()} · {int(self.bright.get())}% brightness")
         big, sub = self.home_tiles["Fans"]
         big.configure(text=s.get("profile", "Auto"))
@@ -1276,18 +1382,19 @@ class App(ctk.CTk):
         grid = ctk.CTkFrame(ec, fg_color="transparent")
         grid.pack(fill="x", padx=12, pady=(0, 12))
         self.tiles = {}
-        big = eng.BASIC_EFFECTS[:4]
-        rest = [e for e in eng.EFFECTS if e not in big]
-        for i, name in enumerate(big):
-            t = EffectTile(grid, name, self._set_effect, big=True)
-            t.grid(row=0, column=i * 3, columnspan=3, sticky="nsew", padx=4, pady=4)
-            self.tiles[name] = t
-        for i, name in enumerate(rest):
+        for i, name in enumerate(eng.BASIC_EFFECTS):
             t = EffectTile(grid, name, self._set_effect)
-            t.grid(row=1 + i // 3, column=(i % 3) * 4, columnspan=4, sticky="nsew", padx=4, pady=3)
+            t.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
+            grid.grid_columnconfigure(i, weight=1, uniform="e")
             self.tiles[name] = t
-        for c in range(12):
-            grid.grid_columnconfigure(c, weight=1, uniform="e")
+        self.caption(ec, "Presets").pack(fill="x", padx=18, pady=(4, 6))
+        pg = ctk.CTkFrame(ec, fg_color="transparent")
+        pg.pack(fill="x", padx=12, pady=(0, 12))
+        for i, name in enumerate(eng.PRESET_EFFECTS):
+            t = PresetTile(pg, name, self._set_effect)
+            t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
+            pg.grid_columnconfigure(i % 4, weight=1, uniform="p")
+            self.tiles[name] = t
 
         ctl = self.card(right)
         ctl.pack(fill="x", pady=(14, 0))
@@ -2285,10 +2392,11 @@ class App(ctk.CTk):
                 self.preview_track.create_rectangle(0, 1, tw * pos, 3, fill=self.accent, width=0)
             if self.current_page == "Home":
                 self.home_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 48, t))
-                self.home_light_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 14, t))
+                self.home_light_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 24, t))
             elif self.current_page == "Lighting":
                 for name, tile in self.tiles.items():
-                    tile.show(eng.compute_colors(name, self.color, 100, 50, tile.n, t))
+                    if isinstance(tile, EffectTile):
+                        tile.show(eng.compute_colors(name, self.color, 100, 50, tile.n, t))
             elif self.current_page == "Devices":
                 ex = set(self.settings["excluded"])
                 for i, card in enumerate(self.device_cards):

@@ -15,7 +15,7 @@
 A free and open-source Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
-- **Sets every device at once** with a color wheel, presets, brightness and speed, and a gallery of 13 effects: Static, Breathing, Color Cycle, Rainbow Wave, Calm Water, Rain, Side to Side, Crimson, RGBarz, Gradient Wave, Neon Storm, Black Ice and Off
+- **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** with picture previews: Calm Water, Rain, Side to Side, Crimson, RGBarz, Gradient Wave, Neon Storm and Black Ice
 - **Per-device lighting**: click Customize on a device to see a drawing of it with live LEDs and its exact model details, and give it its own effect, color and brightness
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
@@ -278,6 +278,7 @@ CentralRGB/
 ├── rgb_engine.py         # OpenRGB setup, lighting effects, system check, settings
 ├── hw_monitor.py         # LibreHardwareMonitor sensors, fan logic, system details
 ├── fps_overlay.py        # in-game FPS overlay (PresentMon)
+├── presets/              # preview pictures for the preset effects (made by tools/make_preset_art.py)
 ├── win_effects.py        # dark, seamless title bar
 ├── central_rgb.ico/.png  # app icon
 ├── central_rgb.iss       # Inno Setup installer script
