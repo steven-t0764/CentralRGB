@@ -1486,6 +1486,27 @@ class App(ctk.CTk):
         steps.append("timings:")
         for k, v in self.timings.items():
             steps.append(f"  {k}: {v * 1000:.0f} ms")
+        try:
+            import psutil
+            me = psutil.Process()
+            for label, eff, hide in (("idle on Home, Static", "Static", False), ("idle on Home, Rainbow Wave", "Rainbow Wave", False),
+                                     ("hidden in tray, Rainbow Wave", "Rainbow Wave", True)):
+                self._set_effect(eff)
+                self.show_page("Home")
+                if hide:
+                    self.withdraw()
+                self.update()
+                me.cpu_percent(None)
+                end = time.time() + 3
+                while time.time() < end:
+                    self.update()
+                    time.sleep(0.01)
+                cpu = me.cpu_percent(None) / max(1, psutil.cpu_count())
+                steps.append(f"CPU {label}: {cpu:.1f}% of the whole machine")
+                if hide:
+                    self.deiconify()
+        except Exception as e:
+            steps.append(f"CPU measure failed: {e}")
         steps.append("slow build steps: " + (", ".join(self.slow_steps) or "none"))
         for at, lines in getattr(self, "_stall_samples", []):
             steps.append(f"  stall at {at:.1f} s, threads were in:")
@@ -2770,7 +2791,9 @@ class App(ctk.CTk):
             dot.itemconfigure(oval, fill={"ok": OK, "basic": WARN}.get(s["status"], WARN))
             sub.configure(text={"ok": f"{len(s['sensors'])} sensors · {len(s['fans'])} fans",
                                 "basic": "Basic stats only", "starting": "Loading…"}.get(s["status"], ""))
-            if self.current_page == "Home":
+            if self._hidden():
+                pass                              # in the tray: keep the data, skip drawing
+            elif self.current_page == "Home":
                 self._refresh_home(s)
             elif self.current_page == "Monitor":
                 self._refresh_monitor(s)
@@ -3142,10 +3165,8 @@ class App(ctk.CTk):
         # out and filled in, then it appears in a single repaint (no half-drawn frames).
         h = fx.freeze(self._holder)
         try:
-            for n, pg in self.pages.items():
-                if n != name and pg.winfo_ismapped():
-                    pg.place_forget()
-            page.place(relx=0, rely=0, relwidth=1, relheight=1)
+            if not page.winfo_manager():          # first visit: lay it out once, then keep it ready
+                page.place(relx=0, rely=0, relwidth=1, relheight=1)
             page.tkraise()
             if name == "Home":
                 self._refresh_home(self.snap)
@@ -3195,12 +3216,21 @@ class App(ctk.CTk):
         for sw in getattr(self, "home_switches", []):
             sw.configure(progress_color=acc)
 
+    def _hidden(self) -> bool:
+        try:
+            return self.state() in ("withdrawn", "iconic")
+        except tk.TclError:
+            return True
+
     def _animate(self):
+        if self._hidden():                       # in the tray or minimized: draw nothing
+            self.after(250, self._animate)
+            return
         t = time.time()
         st = self._current_state()
         try:
-            self.preview.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], self.preview.n, t))
             if self.current_page == "Lighting":
+                self.preview.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], self.preview.n, t))
                 tw = max(self.preview_track.winfo_width(), 20)
                 self.preview_track.delete("all")
                 self.preview_track.create_rectangle(0, 1, tw, 3, fill=P["TRACK"], width=0)
