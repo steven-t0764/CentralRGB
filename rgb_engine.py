@@ -52,7 +52,8 @@ IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW for helper commands
 
 BASIC_EFFECTS = ["Static", "Breathing", "Color Cycle", "Rainbow Wave", "Off"]
-PRESET_EFFECTS = ["Tide", "Drizzle", "Sweep", "Ember", "Pulse", "Drift", "Volt", "Frost"]
+PRESET_EFFECTS = ["Tide", "Drizzle", "Sweep", "Ember", "Pulse", "Drift", "Volt", "Frost",
+                  "Aurora", "Supernova", "Cascade", "Cyberpunk", "Magma", "Stardust", "Nebula", "Eclipse"]
 RENAMED = {'Calm Water': 'Tide', 'Rain': 'Drizzle', 'Side to Side': 'Sweep', 'Crimson': 'Ember', 'RGBarz': 'Pulse', 'Gradient Wave': 'Drift', 'Neon Storm': 'Volt', 'Black Ice': 'Frost'}   # older preset names, kept so saved settings still work
 EFFECTS = BASIC_EFFECTS[:4] + PRESET_EFFECTS + ["Off"]
 ANIMATED = set(EFFECTS) - {"Static", "Off"}
@@ -470,6 +471,78 @@ def _preset(effect, n, t, offset=0.0):
         for i in range(n):
             v = (0.5 + 0.5 * math.sin(t * (0.6 + 1.5 * _rnd(i, 5)) + _rnd(i, 6 + offset) * 6.28)) ** 6
             out.append(_mix((0, 10, 22), (150, 235, 255), v))
+    elif effect == "Aurora":        # green, teal and violet curtains rippling along
+        stops = [(20, 255, 140), (0, 210, 220), (120, 70, 255), (20, 255, 140)]
+        for i in range(n):
+            x = i / max(1, n)
+            ripple = 0.5 + 0.5 * math.sin(x * 11 + t * 1.1 + offset * 6) * math.sin(x * 3.7 - t * 0.45)
+            col = _palette(stops, (x * 0.6 + t * 0.06 + offset) % 1.0)
+            out.append(_mix((0, 8, 20), col, 0.25 + 0.75 * ripple))
+    elif effect == "Supernova":     # a white-hot flash bursts from the middle and cools outwards
+        period = 2.6
+        ph = (t + offset * 3) % period / period
+        for i in range(n):
+            d = abs((i + 0.5) / n - 0.5) * 2 if n > 1 else 0.0       # 0 centre .. 1 ends
+            front = ph * 1.3
+            k = math.exp(-((d - front) / 0.16) ** 2)
+            heat = max(0.0, 1 - (front - d) * 2.2) if d < front else 0.0
+            col = _palette([(255, 250, 235), (255, 170, 60), (255, 60, 150), (90, 30, 200)], min(0.999, ph * 0.9 + d * 0.3))
+            glow = _mix((8, 2, 30), col, max(k, heat * 0.55))
+            out.append(glow)
+    elif effect == "Cascade":       # green code streams falling down the strip, each with a fading trail
+        drops = 4
+        lv = [0.0] * n
+        head_at = [False] * n
+        for k in range(drops):
+            speed = 0.035 + 0.04 * _rnd(k, 31)
+            head = ((t * speed + _rnd(k, 32) + offset) % 1.5) - 0.2       # runs off the end, then restarts
+            for i in range(n):
+                d = head - (i + 0.5) / n
+                if 0 <= d < 0.45:
+                    lv[i] = max(lv[i], 1 - d / 0.45)
+                    head_at[i] = head_at[i] or d < 1.5 / max(1, n)
+        for i in range(n):
+            k = lv[i]
+            out.append((200, 255, 215) if head_at[i] else (int(30 * k ** 4), int(14 + 230 * k ** 1.5), int(30 * k ** 2)))
+    elif effect == "Cyberpunk":     # neon blocks that glitch between magenta, cyan and yellow
+        pal = [(255, 40, 200), (0, 240, 255), (255, 225, 30), (150, 60, 255)]
+        slot = int(t * 2.2)
+        glitch = _rnd(int(t * 9), 41 + offset) < 0.12
+        for i in range(n):
+            block = int(i / max(1, n) * 6 + _rnd(slot, 43) * 3)
+            col = pal[int(_rnd(block, slot + 50) * len(pal)) % len(pal)]
+            if glitch and _rnd(i, int(t * 9) + 60) < 0.5:
+                col = pal[(pal.index(col) + 1) % len(pal)]
+            out.append(col)
+    elif effect == "Magma":         # dark rock with slow molten veins flowing through it
+        for i in range(n):
+            x = i / max(1, n)
+            v = math.sin(x * 13 + t * 0.6 + offset * 5) * math.sin(x * 5.3 - t * 0.35 + _rnd(i, 70))
+            v = max(0.0, v) ** 2
+            col = _palette([(40, 4, 2), (255, 70, 10), (255, 190, 60), (255, 240, 180)], min(0.999, v))
+            out.append(_mix((22, 2, 0), col, 0.3 + 0.7 * min(1.0, v * 1.6)))
+    elif effect == "Stardust":      # deep navy with warm and cool sparkles twinkling
+        for i in range(n):
+            rate = 0.8 + 2.4 * _rnd(i, 80)
+            v = (0.5 + 0.5 * math.sin(t * rate + _rnd(i, 81 + offset) * 6.28)) ** 12
+            star = (255, 225, 170) if _rnd(i, 82) < 0.5 else (190, 215, 255)
+            out.append(_mix((6, 6, 28), star, v))
+    elif effect == "Nebula":        # slow churning purple, pink and blue clouds
+        stops = [(70, 10, 120), (255, 60, 170), (60, 120, 255), (120, 30, 200), (70, 10, 120)]
+        for i in range(n):
+            x = i / max(1, n)
+            w = 0.5 + 0.3 * math.sin(x * 4 + t * 0.35 + offset * 4) + 0.2 * math.sin(x * 9 - t * 0.6)
+            out.append(_mix((10, 2, 24), _palette(stops, (x * 0.5 + t * 0.04) % 1.0), 0.35 + 0.65 * w))
+    elif effect == "Eclipse":       # a dark disc drifts along with a bright corona around it
+        pos = (t * 0.18 + offset) % 1.4 - 0.2
+        for i in range(n):
+            d = abs((i + 0.5) / n - pos) if n > 1 else 0.3
+            if d < 0.08:
+                out.append((2, 2, 6))
+                continue
+            k = math.exp(-(d - 0.08) / 0.07)
+            col = _mix((255, 150, 60), (255, 245, 225), math.exp(-(d - 0.08) / 0.025))
+            out.append(_mix((14, 6, 26), col, k))
     return out or [(0, 0, 0)] * n
 
 

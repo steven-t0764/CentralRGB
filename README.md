@@ -15,7 +15,7 @@
 A free and open-source Windows desktop app that controls **all the RGB lighting in your PC from one place**, and also handles **fan control** and **system monitoring**. Central RGB finds your hardware automatically, sets up the drivers and engines it needs, and lets you change every device's color at once.
 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
-- **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** with picture previews: Tide, Drizzle, Sweep, Ember, Pulse, Drift, Volt and Frost
+- **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** of 16 effects with picture previews: Tide, Drizzle, Sweep, Ember, Pulse, Drift, Volt, Frost, Aurora, Supernova, Cascade, Cyberpunk, Magma, Stardust, Nebula and Eclipse
 - **Per-device lighting**: click Customize on a device to see a model of it (RAM stick, graphics card, fans, cooler, keyboard, mouse, board) lit with its live colors, plus its exact model details, and give it its own effect, color and brightness
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
@@ -216,7 +216,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Page | What you can do |
 |---|---|
 | Home | See your devices, current lighting, fan profile and CPU/GPU temperatures. Quick actions: Rainbow, all lights off, fan profile, game overlay on/off |
-| Lighting | Color wheel, hex code, 9 presets, 5 effects, brightness, speed, apply to all devices, save to hardware |
+| Lighting | Color wheel, hex code, 18 color swatches, 16 preset effects, 5 basic effects, brightness, speed, apply to all devices, save to hardware |
 | Devices | See every device and its LED count, switch devices on or off, rescan |
 | Fans | Profiles, custom curve, live CPU and GPU temperatures, a manual slider per fan (tap **MANUAL ↺** to go back to the curve) |
 | Monitor → Overview | CPU / GPU / RAM gauges and graphs, network up/down, drive usage, uptime, power draw |

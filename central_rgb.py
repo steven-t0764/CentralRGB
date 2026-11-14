@@ -83,7 +83,9 @@ EFFECT_INFO = {"Static": "Solid color", "Breathing": "Slow fade", "Color Cycle":
                "Rainbow Wave": "Flowing rainbow", "Off": "Lights off", "Tide": "Slow blue waves",
                "Drizzle": "Falling color drops", "Sweep": "Sweeping rainbow bar", "Ember": "Glowing red embers",
                "Pulse": "Bouncing equalizer", "Drift": "Drifting gradient", "Volt": "Lightning flashes",
-               "Frost": "Cold glints"}
+               "Frost": "Cold glints", "Aurora": "Northern lights", "Supernova": "Bursting star",
+               "Cascade": "Falling code", "Cyberpunk": "Neon glitch", "Magma": "Molten veins",
+               "Stardust": "Twinkling stars", "Nebula": "Drifting clouds", "Eclipse": "Moving corona"}
 TYPE_ICONS = {"Motherboard": "▦", "RAM": "▥", "GPU": "▣", "Cooler": "✺", "LED strip": "┅",
               "Keyboard": "⌨", "Mouse": "◖", "Mousepad": "▭", "Headset": "◠", "Headset stand": "⊥",
               "Case": "▢", "Light": "✦", "Speaker": "◉", "Other": "◆"}
@@ -802,7 +804,8 @@ class CurveEditor(tk.Canvas):
 # ----------------------------------------------------------------------------- composite widgets
 EFFECT_ICONS = {"Static": "✧", "Breathing": "∿", "Color Cycle": "↻", "Rainbow Wave": "≋", "Tide": "≈",
                 "Drizzle": "⁖", "Sweep": "⇆", "Ember": "◉", "Pulse": "▮", "Drift": "∿",
-                "Volt": "ϟ", "Frost": "❄", "Off": "⏻"}
+                "Volt": "ϟ", "Frost": "❄", "Aurora": "≋", "Supernova": "✺", "Cascade": "⋮",
+                "Cyberpunk": "▚", "Magma": "◉", "Stardust": "✧", "Nebula": "☁", "Eclipse": "◐", "Off": "⏻"}
 
 
 PRESET_FILES = {name: "presets/" + name.lower().replace(" ", "-") + ".jpg" for name in eng.PRESET_EFFECTS}
@@ -1741,12 +1744,14 @@ class App(ctk.CTk):
         yield
         self.caption(ec, "Presets").pack(fill="x", padx=18, pady=(4, 6))
         yield
-        pg = ctk.CTkFrame(ec, fg_color="transparent")
+        # 16 presets: about two and a half rows show, the rest scroll into view
+        pg = ctk.CTkScrollableFrame(ec, fg_color=P["CARD"], height=218, corner_radius=0,
+                                    scrollbar_button_color=P["TRACK"], scrollbar_button_hover_color=P["LINE"])
         yield
-        pg.pack(fill="x", padx=12, pady=(0, 12))
+        pg.pack(fill="x", padx=(12, 4), pady=(0, 12))
         yield
         for i, name in enumerate(eng.PRESET_EFFECTS):
-            t = PresetTile(pg, name, self._set_effect)
+            t = PresetTile(pg, name, self._set_effect, height=88)
             t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
             pg.grid_columnconfigure(i % 4, weight=1, uniform="p")
             self.tiles[name] = t
