@@ -62,6 +62,78 @@ CYAN, PURPLE, TEAL, BLUE = "#2ee6ff", "#a46bff", "#2ee6c4", "#3b82f6"
 PINK, VIOLET = "#ff2d95", "#8b5cff"
 GRAD = (PINK, VIOLET, CYAN)
 RADIUS = 8
+CARD_BORDER, CARD_BORDER_W = None, 0      # outlined panels (set by some themes)
+
+# ----------------------------------------------------------------------------- themes
+# Each theme sets the panel colours, the accent (CYAN slot), the chart colours and an optional panel
+# outline. A theme is applied once at startup, before any widget is made, so changing it needs a restart.
+THEMES = {
+    "cyber_cyan": dict(name="Cyber Cyan", desc="Default: navy panels, cyan accent"),
+    "ultraviolet": dict(name="Ultraviolet Pulse", desc="Deep purple with magenta",
+                        BG="#0e0a17", CARD="#161024", CARD2="#1f1731", LINE="#3a2a57", TEXT="#f1ebfb",
+                        MUTED="#a99cbf", FAINT="#75688c", accent="#e14fe0", PURPLE="#9b5cff", TEAL="#c86bff",
+                        BLUE="#7a5cff", PINK="#ff2d95", VIOLET="#a855f7"),
+    "emerald": dict(name="Emerald Matrix", desc="Dark green with emerald",
+                    BG="#08110e", CARD="#0f1a16", CARD2="#15231e", LINE="#22392f", TEXT="#e6f4ee",
+                    MUTED="#93ab9f", FAINT="#61786d", accent="#2fe0a0", PURPLE="#20c4d8", TEAL="#7cf2c4",
+                    BLUE="#18a6c8", PINK="#b7f36a", VIOLET="#2fd6a0"),
+    "crimson": dict(name="Crimson Overclock", desc="Black-red with hot orange",
+                    BG="#120a0a", CARD="#1b1011", CARD2="#251517", LINE="#44252a", TEXT="#f7eaea",
+                    MUTED="#b79d9f", FAINT="#85696c", accent="#ff5a3c", PURPLE="#ff2d55", TEAL="#ff9a3c",
+                    BLUE="#e8364f", PINK="#ffcc33", VIOLET="#ff3b3b"),
+    "nebula_glass": dict(name="Nebula Glass", desc="Violet glass panels with soft outlines",
+                         BG="#140f2a", SIDE="#120d26", CARD="#1f1840", CARD2="#2a2152", LINE="#4b3f8a",
+                         TEXT="#f2efff", MUTED="#b2a9d8", FAINT="#7d74a8", accent="#45d4ff", PURPLE="#b06bff",
+                         TEAL="#7fe3ff", BLUE="#6a7dff", PINK="#ff5ccf", VIOLET="#8b5cff",
+                         border="#5d4fb0", border_w=1),
+    "tactical_mech": dict(name="Tactical Mech", desc="Gunmetal plates with steel frames",
+                          BG="#17191b", SIDE="#141618", CARD="#26292c", CARD2="#303438", LINE="#4a4f55",
+                          TEXT="#e8eaec", MUTED="#a3a9b0", FAINT="#737a82", accent="#4fd1c5", PURPLE="#e0a33a",
+                          TEAL="#7fe0d6", BLUE="#5b9bd5", PINK="#e0a33a", VIOLET="#8fa3b8",
+                          BTN="#3a3f44", BTN_LINE="#5b6168", border="#6b7178", border_w=2),
+    "bio_neural": dict(name="Bio-Neural", desc="Bioluminescent green glow",
+                       BG="#07120f", SIDE="#06100d", CARD="#0c1c18", CARD2="#122722", LINE="#1f4a3e",
+                       TEXT="#e4fbf3", MUTED="#8fbfae", FAINT="#5b8a7a", accent="#36f0b0", PURPLE="#29c4ff",
+                       TEAL="#8af5d0", BLUE="#1fa8e0", PINK="#b4ff6a", VIOLET="#2fe6c0",
+                       border="#1f6b55", border_w=1),
+    "cyber_glitch": dict(name="Cyber Glitch", desc="Experimental: neon pink frames, cyan accent",
+                         BG="#0c0a1d", SIDE="#0a0819", CARD="#141030", CARD2="#1c1740", LINE="#3a2d6e",
+                         TEXT="#f0ecff", MUTED="#a69fd0", FAINT="#6f679c", accent="#36e2ff", PURPLE="#ff3fd2",
+                         TEAL="#36e2ff", BLUE="#6a5cff", PINK="#ff3fd2", VIOLET="#8b5cff",
+                         border="#c13fb8", border_w=1),
+}
+DEFAULT_THEME = "cyber_cyan"
+
+
+def _saved_theme() -> str:
+    try:
+        import json
+        t = json.loads((eng.settings_dir() / "settings.json").read_text(encoding="utf-8")).get("theme")
+        return t if t in THEMES else DEFAULT_THEME
+    except Exception:
+        return DEFAULT_THEME
+
+
+def _apply_theme(key: str):
+    """Swap the module colours for a theme. Must run before any widget or default argument uses them."""
+    global CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W
+    t = THEMES.get(key) or THEMES[DEFAULT_THEME]
+    if "BG" not in t:                         # the default theme keeps the original values exactly
+        return
+    s = dict(t)
+    acc = s["accent"]
+    s.setdefault("SIDE", s["BG"])
+    s.setdefault("TRACK", hexcol(mix(hex2rgb(s["CARD2"]), hex2rgb(s["LINE"]), 0.5)))
+    s.setdefault("HOVER", hexcol(mix(hex2rgb(s["BG"]), hex2rgb(s["CARD2"]), 0.5)))
+    s.setdefault("SEL", hexcol(mix(hex2rgb(s["BG"]), hex2rgb(acc), 0.12)))
+    s.setdefault("BTN", s["CARD2"])
+    s.setdefault("BTN_HOVER", hexcol(mix(hex2rgb(s["BTN"]), hex2rgb(s["LINE"]), 0.5)))
+    s.setdefault("BTN_LINE", s["LINE"])
+    SOLID.update({k: s[k] for k in SOLID})
+    P.update(SOLID)
+    CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET = acc, s["PURPLE"], s["TEAL"], s["BLUE"], s["PINK"], s["VIOLET"]
+    GRAD = (PINK, VIOLET, CYAN)
+    CARD_BORDER, CARD_BORDER_W = s.get("border"), s.get("border_w", 0)
 
 
 def windows_accent(fallback="#60cdff") -> str:
@@ -78,7 +150,6 @@ def windows_accent(fallback="#60cdff") -> str:
         return fallback
 
 
-DEFAULT_ACCENT = CYAN
 WIN11 = eng.IS_WIN and fx.win_build() >= 22000
 FONT = "Segoe UI Variable Text" if WIN11 else ("Segoe UI" if eng.IS_WIN else "DejaVu Sans")
 FONT_DISPLAY = "Segoe UI Variable Display" if WIN11 else FONT
@@ -126,6 +197,11 @@ def on_color(hex_color) -> str:
     r, g, b = (c / 255 for c in hex2rgb(hex_color))
     lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
     return "#0f1117" if lum > 0.6 else "#ffffff"
+
+
+THEME = _saved_theme()
+_apply_theme(THEME)
+DEFAULT_ACCENT = CYAN
 
 
 def lerp_grad(t, stops=GRAD):
@@ -245,9 +321,13 @@ class SmoothFrame(ctk.CTkFrame):
 
     def __init__(self, master, fg_color=None, corner_radius=RADIUS, border_width=0, border_color=None, **kw):
         fg = fg_color or P["CARD"]
+        if border_color is None and CARD_BORDER and fg == P["CARD"]:
+            border_color, border_width = CARD_BORDER, CARD_BORDER_W     # outlined panels in some themes
+        bw = int(border_width) if border_color else 0
         super().__init__(master, fg_color=fg, corner_radius=0, border_width=0, **kw)
         self._r = max(2, int(corner_radius))
         self._fill = fg
+        self._line, self._bw = (border_color, bw) if bw else (None, 0)
         self._corners, self._imgs = [], []
         self._make_corners()
 
@@ -275,10 +355,12 @@ class SmoothFrame(ctk.CTkFrame):
         bg = self._color_behind(self.master)
         sc = ctk.ScalingTracker.get_widget_scaling(self) if hasattr(ctk, "ScalingTracker") else 1.0
         px = max(2, int(round(r * sc)))
-        key = (px, bg, self._fill)
+        bwp = max(1, int(round(self._bw * sc))) if self._bw else 0
+        key = (px, bg, self._fill, self._line, bwp)
         if key not in SmoothFrame._corner_cache:             # 4 corner images per size/colour, made once
             big = Image.new("RGB", (2 * px * AA, 2 * px * AA), hex2rgb(bg))
-            ImageDraw.Draw(big).ellipse((0, 0, 2 * px * AA - 1, 2 * px * AA - 1), fill=hex2rgb(self._fill))
+            ImageDraw.Draw(big).ellipse((0, 0, 2 * px * AA - 1, 2 * px * AA - 1), fill=hex2rgb(self._fill),
+                                        outline=hex2rgb(self._line) if bwp else None, width=bwp * AA)
             circle = big.resize((2 * px, 2 * px), Image.LANCZOS)
             SmoothFrame._corner_cache[key] = [ImageTk.PhotoImage(circle.crop((ox, oy, ox + px, oy + px)))
                                               for ox, oy in ((0, 0), (px, 0), (0, px), (px, px))]
@@ -290,6 +372,14 @@ class SmoothFrame(ctk.CTkFrame):
             cv.create_image(0, 0, anchor="nw", image=img)
             cv.place(relx=rx, rely=ry, anchor=anchor)
             self._corners.append(cv)
+        if bwp:                                              # straight edges of the outline, between the corners
+            for kw in (dict(x=px, y=0, relwidth=1, width=-2 * px, height=bwp),
+                       dict(x=px, rely=1, y=-bwp, relwidth=1, width=-2 * px, height=bwp),
+                       dict(x=0, y=px, relheight=1, height=-2 * px, width=bwp),
+                       dict(relx=1, x=-bwp, y=px, relheight=1, height=-2 * px, width=bwp)):
+                edge = tk.Frame(self, bg=self._line, bd=0, highlightthickness=0)
+                edge.place(**kw)
+                self._corners.append(edge)
         self.bind("<Map>", lambda e: [tk.Misc.lift(c) for c in self._corners], add="+")
         for c in self._corners:
             tk.Misc.lift(c)
@@ -1364,14 +1454,25 @@ class Tray:
             pass
 
 
-def claim_single_instance(app_q) -> bool:
-    """Become the running copy. Returns False if Central RGB is already running (it is asked to show itself)."""
+def claim_single_instance(app_q, wait=0.0) -> bool:
+    """Become the running copy. Returns False if Central RGB is already running (it is asked to show itself).
+    wait: keep trying this many seconds first (used after a restart, while the old copy closes)."""
     import socket
-    try:
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.bind(("127.0.0.1", INSTANCE_PORT))
-        srv.listen(4)
-    except OSError:
+    end = time.time() + wait
+    while True:
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.bind(("127.0.0.1", INSTANCE_PORT))
+            srv.listen(4)
+            break
+        except OSError:
+            srv.close()
+            if time.time() < end:
+                time.sleep(0.25)
+                continue
+            srv = None
+            break
+    if srv is None:
         try:
             with socket.create_connection(("127.0.0.1", INSTANCE_PORT), timeout=2) as c:
                 c.sendall(b"show")
@@ -3390,17 +3491,30 @@ class App(ctk.CTk):
         self.caption(body, "Appearance").pack(fill="x", pady=(22, 8))
 
         yield
+        def theme(row):
+            names = [t["name"] for t in THEMES.values()]
+            self.theme_menu = ctk.CTkOptionMenu(row, values=names, width=230, height=32, corner_radius=6, font=F(13),
+                                                dropdown_font=F(13), fg_color=P["CARD2"], button_color=P["CARD2"],
+                                                button_hover_color=P["BTN_HOVER"], dropdown_fg_color=P["CARD2"],
+                                                dropdown_hover_color=P["BTN_HOVER"], dropdown_text_color=P["TEXT"],
+                                                text_color=P["TEXT"], dynamic_resizing=False, command=self._set_theme)
+            saved = self.settings.data.get("theme")
+            self.theme_menu.set(THEMES[saved if saved in THEMES else THEME]["name"])
+            return self.theme_menu
+        yield
+        self.setting_row(body, "\ue771", "◑", "Theme", "The look of the whole app. Changing it restarts Central RGB", theme)
+        yield
         def accent(row):
-            self.accent_seg = PillSwitcher(row, values=["Cyan", "Windows", "Match lighting"], command=self._set_accent_mode,
+            self.accent_seg = PillSwitcher(row, values=["Theme", "Windows", "Match lighting"], command=self._set_accent_mode,
                                                      height=32, font=F(13), corner_radius=6, fg_color=P["CARD2"],
                                                      unselected_color=P["CARD2"], unselected_hover_color=P["BTN_HOVER"],
                                                      selected_color=self.accent, selected_hover_color=self.accent,
                                                      text_color=P["TEXT"])
-            self.accent_seg.set({"match": "Match lighting", "windows": "Windows"}.get(self.settings.data.get("accent_mode"), "Cyan"))
+            self.accent_seg.set({"match": "Match lighting", "windows": "Windows"}.get(self.settings.data.get("accent_mode"), "Theme"))
             self.accent_widgets.append(("seg", self.accent_seg))
             return self.accent_seg
         yield
-        self.setting_row(body, "\ue790", "◐", "Accent color", "Cyan, your Windows accent color, or follow your lighting color", accent)
+        self.setting_row(body, "\ue790", "◐", "Accent color", "The theme's accent, your Windows accent color, or follow your lighting color", accent)
         yield
         def closing(row):
             self.close_seg = PillSwitcher(row, values=["Keep running in tray", "Quit"], command=self._set_close_mode,
@@ -3481,6 +3595,31 @@ class App(ctk.CTk):
         messagebox.showinfo(eng.APP_NAME, "Restart Central RGB for this to take effect." + (
             "\n\nReading RAM temperatures shares the RAM's SMBus with the RGB controller, which can make "
             "RGB RAM blink. Leave this off if you have RGB RAM." if on else ""))
+
+    def _set_theme(self, name):
+        key = next((k for k, t in THEMES.items() if t["name"] == name), DEFAULT_THEME)
+        if key == THEME:
+            self.settings["theme"] = key
+            return
+        self.settings["theme"] = key
+        if messagebox.askyesno(eng.APP_NAME, f"Restart Central RGB now to switch to {name}?\n\n"
+                               "Your lighting comes back right away. Fans go back to BIOS control for a moment "
+                               "while it restarts."):
+            self._restart()
+        else:
+            self.status(f"{name} will be used next time Central RGB opens")
+
+    def _restart(self):
+        """Start a fresh copy (it waits for this one to close), then quit."""
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--restarted"]
+        else:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--restarted"]
+        try:
+            subprocess.Popen(cmd, creationflags=eng.NO_WINDOW if not getattr(sys, "frozen", False) else 0)
+        except Exception as e:
+            messagebox.showerror(eng.APP_NAME, f"Couldn't restart automatically ({e}). Please reopen Central RGB.")
+        self._quit()
 
     def _set_accent_mode(self, choice):
         self.settings["accent_mode"] = {"Match lighting": "match", "Windows": "windows"}.get(choice, "cyan")
@@ -4127,7 +4266,7 @@ def main():
             os._exit(1)
         return
     q: queue.Queue = queue.Queue()
-    if not claim_single_instance(q):
+    if not claim_single_instance(q, wait=15.0 if "--restarted" in sys.argv else 0.0):
         return                                   # already running: it has been asked to show its window
     app = App(background="--background" in sys.argv)
     while not q.empty():                         # a "show" that arrived while starting
