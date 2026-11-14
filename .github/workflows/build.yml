@@ -46,8 +46,10 @@ jobs:
         shell: pwsh
         run: |
           $report = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $sw = [Diagnostics.Stopwatch]::StartNew()
           $p = Start-Process -FilePath "dist\Central RGB.exe" -ArgumentList "--selftest `"$report`"" -PassThru
           if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; throw "Self-test timed out after 2 minutes" }
+          Write-Host "Process ran for $($sw.ElapsedMilliseconds) ms (includes 9 s of measuring)"
           if (Test-Path $report) { Get-Content $report } else { Write-Host "No self-test report was written" }
           if ($p.ExitCode -ne 0) { throw "Self-test failed (exit code $($p.ExitCode))" }
 

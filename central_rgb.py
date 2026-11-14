@@ -1027,6 +1027,9 @@ class App(ctk.CTk):
     TEST_BACKEND = None   # tests can inject a simulated sensor backend
 
     def __init__(self, background=False, selftest=None):
+        self._t_start = time.perf_counter()
+        self.timings: dict[str, float] = {}
+        self._gaps: list[tuple[float, float]] = []
         self.selftest = selftest          # path to write the result to, when run with --selftest
         self.selftest_errors: list[str] = []
         self.settings = eng.Settings()
@@ -1087,8 +1090,11 @@ class App(ctk.CTk):
             self.iconify()
         if self.splash is not None:
             self.splash.begin()
+        self.timings["window built"] = time.perf_counter() - self._t_start
         if selftest:
-            self.after(2500, self._run_selftest)
+            self._last_tick = time.perf_counter()
+            self.after(16, self._stall_tick)
+            self.after(9000, self._run_selftest)
             return
         self.after(300, lambda: self._bg(self._startup))
         self.after(800, lambda: self._bg(self._load_sysinfo))
@@ -1099,6 +1105,12 @@ class App(ctk.CTk):
         if self.selftest is not None:
             self.selftest_errors.append(msg)
         sys.stderr.write(msg)
+
+    def _stall_tick(self):
+        now = time.perf_counter()
+        self._gaps.append((now - self._t_start, now - self._last_tick))
+        self._last_tick = now
+        self.after(16, self._stall_tick)
 
     def _run_selftest(self):
         """Open every page, draw the overlay preview, run the system check, then report and exit."""
@@ -1121,6 +1133,13 @@ class App(ctk.CTk):
             steps.append(f"monitor: {self.monitor.snapshot()['status']}")
         except Exception:
             self.selftest_errors.append(traceback.format_exc())
+        steps.append("timings:")
+        for k, v in self.timings.items():
+            steps.append(f"  {k}: {v * 1000:.0f} ms")
+        worst = sorted(self._gaps, key=lambda g: -g[1])[:5]
+        steps.append("longest UI freezes after the window appeared (at time: length):")
+        for at, g in worst:
+            steps.append(f"  {at:.1f} s: {g * 1000:.0f} ms")
         ok = not self.selftest_errors
         report = [f"Central RGB {eng.APP_VERSION} self-test: {'PASSED' if ok else 'FAILED'}"] + steps + self.selftest_errors
         try:
@@ -1279,7 +1298,9 @@ class App(ctk.CTk):
         for name, *_ in NAV:
             f = ctk.CTkFrame(holder, fg_color=P["BG"], corner_radius=0)
             f.place(relx=0, rely=0, relwidth=1, relheight=1)
+            _t = time.perf_counter()
             getattr(self, f"_page_{name.lower()}")(f)
+            self.timings[f"page {name}"] = time.perf_counter() - _t
             self.pages[name] = f
             if self.splash is not None:
                 self.splash.keep_on_top()
