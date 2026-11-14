@@ -934,6 +934,19 @@ class PresetTile(tk.Canvas):
         self.bind("<Configure>", lambda e: self._render())
         self.bind("<Button-1>", lambda e: on_click(name))
 
+    _mask_cache: dict = {}
+
+    @staticmethod
+    def _masks(W, H):
+        """Rounded-corner mask and selection-ring mask for a tile size (shared by all tiles)."""
+        if (W, H) not in PresetTile._mask_cache:
+            m = Image.new("L", (W * AA, H * AA), 0)
+            ImageDraw.Draw(m).rounded_rectangle((2 * AA, 2 * AA, (W - 2) * AA - 1, (H - 2) * AA - 1), 9 * AA, fill=255)
+            r = Image.new("L", (W * AA, H * AA), 0)
+            ImageDraw.Draw(r).rounded_rectangle((AA, AA, W * AA - AA - 1, H * AA - AA - 1), 10 * AA, outline=255, width=2 * AA)
+            PresetTile._mask_cache[(W, H)] = (m.resize((W, H), Image.LANCZOS), r.resize((W, H), Image.LANCZOS))
+        return PresetTile._mask_cache[(W, H)]
+
     def _render(self):
         w, h = max(self.winfo_width() - 4, 40), self.h - 4
         if (w, h, self.selected, self.accent) == self._size:
@@ -942,7 +955,7 @@ class PresetTile(tk.Canvas):
         if self.src is not None:                               # cover-crop the artwork to the tile
             sw, sh = self.src.size
             k = max(w / sw, h / sh)
-            im = self.src.resize((int(sw * k) + 1, int(sh * k) + 1), Image.LANCZOS)
+            im = self.src.resize((int(sw * k) + 1, int(sh * k) + 1), Image.LANCZOS, reducing_gap=2.0)
             l, t = (im.width - w) // 2, (im.height - h) // 2
             im = im.crop((l, t, l + w, t + h))
         else:
@@ -953,18 +966,13 @@ class PresetTile(tk.Canvas):
         shade = Image.new("RGB", (w, h), (0, 0, 0))            # darken slightly so the title reads well
         im = Image.blend(im, shade, 0.22)
         W, H = w + 4, h + 4
-        big_mask = Image.new("L", (W * AA, H * AA), 0)                # smooth rounded corners
-        ImageDraw.Draw(big_mask).rounded_rectangle((2 * AA, 2 * AA, (W - 2) * AA - 1, (H - 2) * AA - 1), 9 * AA, fill=255)
-        mask = big_mask.resize((W, H), Image.LANCZOS)
+        mask, ring = PresetTile._masks(W, H)
         bg = Image.new("RGB", (W, H), hex2rgb(P["CARD"]))
         full = Image.new("RGB", (W, H))
         full.paste(im, (2, 2))
         bg.paste(full, (0, 0), mask)
         if self.selected:                                             # smooth accent ring
-            ring = Image.new("L", (W * AA, H * AA), 0)
-            ImageDraw.Draw(ring).rounded_rectangle((AA, AA, W * AA - AA - 1, H * AA - AA - 1), 10 * AA,
-                                                   outline=255, width=2 * AA)
-            bg.paste(Image.new("RGB", (W, H), hex2rgb(self.accent)), (0, 0), ring.resize((W, H), Image.LANCZOS))
+            bg.paste(Image.new("RGB", (W, H), hex2rgb(self.accent)), (0, 0), ring)
         self._img = ImageTk.PhotoImage(bg)
         self.delete("all")
         self.create_image(0, 0, image=self._img, anchor="nw")
@@ -1755,6 +1763,7 @@ class App(ctk.CTk):
             t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
             pg.grid_columnconfigure(i % 4, weight=1, uniform="p")
             self.tiles[name] = t
+            yield                                  # one tile per build step
 
         yield
         ctl = self.card(right)
