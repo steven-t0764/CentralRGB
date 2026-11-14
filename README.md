@@ -21,7 +21,8 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
 - **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
-- **Windows 11 design**: looks like a built-in Windows app, with Fluent dark styling, your own Windows accent color, a Settings-style layout, a Home dashboard and a short startup animation with the logo
+- **Neon dark design**: deep navy panels with cyan and purple accents, glowing outlines on the selected item, gradient gauges and charts, a Home dashboard and a startup animation with the logo
+- **Edit by device type**: chips on the Lighting page (All Devices, RAM, GPU, Motherboard...) let you set the lighting for every device or just one kind
 - **Starts with Windows** (optional) and reapplies your lighting and fan profile at login
 - **Normal Windows installer**: choose where to install it, and get a desktop shortcut and an uninstaller
 
@@ -127,7 +128,7 @@ flowchart LR
 
 A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sidebar and six pages. Pieces like the color wheel, LED strips, fan curve editor, ring gauges and graphs are custom-drawn on canvases, so they can animate smoothly.
 
-- Windows 11 Fluent dark palette and Segoe UI Variable type. The accent color is read from your Windows settings. Switch **Settings → Accent color** to **Match lighting** to follow your lighting color instead.
+- A navy palette with cyan and purple accents. **Settings → Accent color** switches between Cyan (default), your Windows accent color, or your lighting color.
 - Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
 - Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
 
@@ -222,7 +223,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
 | Overlay | A small pill that shows your frame rate as a plain number, pinned to a corner of the game window. It stays on the game when you tab out and hides when the game is minimized or closed. Optional extras: 1% low, frame time, CPU and GPU temperature. Works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
 | Profiles | Save the current look under a name, then load or delete it later |
-| Settings | System check, accent color (Windows or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
+| Settings | System check, accent color (Cyan, Windows or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
 
 > [!IMPORTANT]
 > Animated effects and custom fan profiles only run while Central RGB is open. Closing the window offers to **minimize instead**. If you quit, the lights stay on their last frame and the fans go back to BIOS control.
