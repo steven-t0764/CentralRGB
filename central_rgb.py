@@ -163,40 +163,36 @@ def accent_bar(frame):
 
 
 class Splash(tk.Frame):
-    """Startup animation: glow + logo fade/zoom, name, an LED bar that lights up, then it slides away."""
-    FPS, T_END, T_EXIT = 33, 1.9, 0.32
+    """Startup animation: the logo fades and zooms in over a soft glow, the name fades in beneath it,
+    then everything keeps zooming as it fades away and the app fades in."""
+    FPS = 60
+    T_IN, T_HOLD, T_OUT, T_DIP, T_RISE = 1.0, 0.75, 0.5, 0.14, 0.32
 
     def __init__(self, root, icon_img, on_done=None):
         super().__init__(root, bg=P["BG"])
-        self.root, self.on_done = root, on_done
+        self.root, self.on_done, self.icon = root, on_done, icon_img
         self.sc = ctk.ScalingTracker.get_window_scaling(root) if hasattr(ctk, "ScalingTracker") else 1.0
         self.cv = tk.Canvas(self, bg=P["BG"], highlightthickness=0)
         self.cv.pack(fill="both", expand=True)
         self.place(relx=0, rely=0, relwidth=1, relheight=1)
         tk.Misc.lift(self)
         bg = hex2rgb(P["BG"])
-        size = int(176 * self.sc)
-        # soft colour glow behind the logo
-        g = int(size * 3.2)
+        self.size = int(176 * self.sc)
+        g = int(self.size * 3.2)
         glow = Image.new("RGB", (g, g), bg)
         d = ImageDraw.Draw(glow)
         for (fx_, fy_, col) in ((0.34, 0.40, PINK), (0.66, 0.42, CYAN), (0.5, 0.66, VIOLET)):
             r = g * 0.2
             d.ellipse((g * fx_ - r, g * fy_ - r, g * fx_ + r, g * fy_ + r), fill=hex2rgb(col))
-        glow = Image.blend(glow.filter(ImageFilter.GaussianBlur(g * 0.11)), Image.new("RGB", (g, g), bg), 0.45)
-        self.glow_frames = [ImageTk.PhotoImage(Image.blend(Image.new("RGB", (g, g), bg), glow, k / 7)) for k in range(8)]
-        # logo frames: fade + zoom
-        self.logo_frames = []
-        for k in range(1, 13):
-            a, z = k / 12, 0.82 + 0.18 * (1 - (1 - k / 12) ** 3)
-            im = icon_img.resize((int(size * z), int(size * z)), Image.LANCZOS)
-            im.putalpha(im.getchannel("A").point(lambda v, a=a: int(v * a)))
-            self.logo_frames.append(ImageTk.PhotoImage(im))
+        flat = Image.new("RGB", (g, g), bg)
+        glow = Image.blend(glow.filter(ImageFilter.GaussianBlur(g * 0.11)), flat, 0.45)
+        self.glow_frames = [ImageTk.PhotoImage(Image.blend(flat, glow, k / 23)) for k in range(24)]
         self.glow_item = self.cv.create_image(-4000, -4000, image=self.glow_frames[0])   # off-screen until begin()
-        self.logo_item = self.cv.create_image(-4000, -4000, image=self.logo_frames[0])
-        self.title = self.cv.create_text(0, 0, text="Central RGB", fill=P["BG"], font=(FONT, int(30 * self.sc), "bold"))
-        self.sub = self.cv.create_text(0, 0, text="LIGHTING  ·  FANS  ·  MONITOR", fill=P["BG"], font=(FONT, int(10 * self.sc), "bold"))
-        self.leds = [self.cv.create_rectangle(0, 0, 0, 0, width=0, fill=P["CARD2"]) for _ in range(28)]
+        self.logo_item = self.cv.create_image(-4000, -4000)
+        self.line = self.cv.create_line(-10, -10, -10, -10, width=max(2, int(2 * self.sc)), fill=VIOLET)
+        self.title = self.cv.create_text(-4000, 0, text="Central RGB", fill=P["BG"], font=(FONT, int(30 * self.sc), "bold"))
+        self.sub = self.cv.create_text(-4000, 0, text="LIGHTING  ·  FANS  ·  MONITOR", fill=P["BG"], font=(FONT, int(10 * self.sc), "bold"))
+        self._logo_img = None
         self.started = False
 
     def keep_on_top(self):
@@ -209,44 +205,80 @@ class Splash(tk.Frame):
         self.started, self.t0 = True, time.time()
         self._tick()
 
+    def _target_alpha(self):
+        return max(0.6, min(1.0, int(self.root.settings.data.get("opacity", DEFAULT_OPACITY)) / 100))
+
+    def _set_window_alpha(self, k):
+        try:
+            self.root.attributes("-alpha", self._target_alpha() * k)
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _smooth(k):
+        k = max(0.0, min(1.0, k))
+        return k * k * (3 - 2 * k)
+
     def _tick(self):
         if not self.winfo_exists():
             return
         t = time.time() - self.t0
+        t_out = self.T_IN + self.T_HOLD
+        t_dip = t_out + self.T_OUT
+        if t >= t_dip:                                   # logo is gone: cross-fade the window to the app
+            self._fade_to_app()
+            return
         w, h, sc = max(self.winfo_width(), 200), max(self.winfo_height(), 200), self.sc
-        cx, cy = w / 2, h / 2 - 50 * sc
+        cx, cy = w / 2, h / 2 - 40 * sc
         cv, bg = self.cv, hex2rgb(P["BG"])
-        k = min(1.0, t / 0.6)
-        cv.coords(self.glow_item, cx, cy)
-        cv.itemconfigure(self.glow_item, image=self.glow_frames[min(7, int(k * 7.99))])
+        k_in = 1 - (1 - min(1.0, t / self.T_IN)) ** 3     # ease-out
+        k_out = self._smooth((t - t_out) / self.T_OUT)    # 0 until the exit starts
+        drift = min(t, t_out) / t_out * 0.04              # slow continuous zoom so it never sits still
+        scale = (0.62 + 0.38 * k_in + drift) * (1 + 0.55 * k_out * k_out)
+        alpha = self._smooth(t / (self.T_IN * 0.8)) * (1 - k_out)
+        px = max(8, int(self.size * scale))
+        im = self.icon.resize((px, px), Image.BILINEAR)
+        im.putalpha(im.getchannel("A").point(lambda v: int(v * alpha)))
+        self._logo_img = ImageTk.PhotoImage(im)
         cv.coords(self.logo_item, cx, cy)
-        cv.itemconfigure(self.logo_item, image=self.logo_frames[min(11, int(k * 11.99))])
-        kt = max(0.0, min(1.0, (t - 0.35) / 0.5))
-        rise = (1 - kt) * 10 * sc
-        cv.coords(self.title, cx, cy + 128 * sc + rise)
+        cv.itemconfigure(self.logo_item, image=self._logo_img)
+        cv.coords(self.glow_item, cx, cy)
+        cv.itemconfigure(self.glow_item, image=self.glow_frames[min(23, int(alpha * 23.99))])
+        kt = self._smooth((t - 0.35) / 0.6) * (1 - self._smooth((t - t_out) / (self.T_OUT * 0.7)))
+        spread = (1 - self._smooth((t - 0.35) / 0.6)) * 8 * sc + k_out * 18 * sc
+        cv.coords(self.title, cx, cy + 132 * sc + spread)
         cv.itemconfigure(self.title, fill=hexcol(mix(bg, hex2rgb(P["TEXT"]), kt)))
-        cv.coords(self.sub, cx, cy + 160 * sc + rise)
+        cv.coords(self.sub, cx, cy + 164 * sc + spread)
         cv.itemconfigure(self.sub, fill=hexcol(mix(bg, hex2rgb(P["MUTED"]), kt)))
-        n, bw, gap = len(self.leds), 9 * sc, 5 * sc
-        x0, y = cx - (n * (bw + gap) - gap) / 2, cy + 196 * sc
-        lit = (t - 0.45) / 1.1 * n
-        for i, it in enumerate(self.leds):
-            cv.coords(it, x0 + i * (bw + gap), y, x0 + i * (bw + gap) + bw, y + bw)
-            if i < lit:
-                hue = (i / n + t * 0.25) % 1.0
-                col = [c * 255 for c in colorsys.hsv_to_rgb(hue, 0.85, 1)]
-                cv.itemconfigure(it, fill=hexcol(mix(bg, col, min(1.0, lit - i))))
-            else:
-                cv.itemconfigure(it, fill=P["CARD2"])
-        if t >= self.T_END:
-            ke = min(1.0, (t - self.T_END) / self.T_EXIT)
-            self.place_configure(rely=-(ke ** 3))          # accelerate upward
-            if ke >= 1.0:
-                self.destroy()
+        kl = self._smooth((t - 0.5) / 0.9)                # thin line grows out from the centre
+        half = 92 * sc * kl
+        cv.coords(self.line, cx - half, cy + 188 * sc + spread, cx + half, cy + 188 * sc + spread)
+        cv.itemconfigure(self.line, fill=hexcol(mix(bg, hex2rgb(lerp_grad((t * 0.5) % 1.0)), kt)))
+        self.after(1000 // self.FPS, self._tick)
+
+    def _fade_to_app(self, phase=0, t0=None):
+        """Dip the window's opacity, swap the splash for the app, and fade back up."""
+        if t0 is None:
+            t0 = time.time()
+        t = time.time() - t0
+        if phase == 0:
+            k = min(1.0, t / self.T_DIP)
+            self._set_window_alpha(1 - 0.55 * self._smooth(k))
+            if k >= 1.0:
+                if self.winfo_exists():
+                    self.place_forget()
+                self.root.after(10, lambda: self._fade_to_app(1))
+                return
+        else:
+            k = min(1.0, t / self.T_RISE)
+            self._set_window_alpha(0.45 + 0.55 * self._smooth(k))
+            if k >= 1.0:
+                if self.winfo_exists():
+                    self.destroy()
                 if self.on_done:
                     self.on_done()
                 return
-        self.after(1000 // self.FPS, self._tick)
+        self.root.after(1000 // self.FPS, lambda: self._fade_to_app(phase, t0))
 
 
 def F(size, weight="normal"):
@@ -789,8 +821,6 @@ class App(ctk.CTk):
             self.pages[name] = f
             if self.splash is not None:
                 self.splash.keep_on_top()
-        self.curtain = tk.Frame(holder, bg=P["BG"])
-        self.curtain.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._slide_id = 0
 
     # ---------------------------------------------------------------- Lighting
@@ -1480,14 +1510,14 @@ class App(ctk.CTk):
 
     # ---------------------------------------------------------------- navigation / accent / animation
     def show_page(self, name, animate=True):
-        prev, order = self.current_page, [n for n, _ in NAV]
+        prev = self.current_page
         self.current_page = name
         page = self.pages[name]
         self._slide_id += 1
         for f in self.pages.values():
             f.place_configure(relx=0, rely=0)
         if animate and prev != name and self.settings.data.get("animations", True) and self.winfo_viewable():
-            self._slide(page, 1 if order.index(name) > order.index(prev) else -1, self._slide_id)
+            self._fade_page(page, self._slide_id)
         else:
             page.tkraise()
         for n, b in self.nav.items():
@@ -1497,18 +1527,29 @@ class App(ctk.CTk):
         if name in ("Monitor", "Fans"):
             self.after(10, lambda: (self._refresh_monitor(self.snap) if name == "Monitor" else self._refresh_fans(self.snap)))
 
-    def _slide(self, page, direction, sid, i=0, steps=9, dist=0.10):
-        """New section glides in from below (or above when moving up the menu) and settles."""
+    def _fade_page(self, page, sid, phase=0, t0=None):
+        """Cross-fade between sections: the window dims, the section swaps, and it fades back in."""
         if sid != self._slide_id:
             return
-        if i == 0:
-            self.curtain.tkraise()
-            page.place_configure(rely=direction * dist)
+        if t0 is None:
+            t0 = time.time()
+        target = max(0.6, min(1.0, int(self.settings.data.get("opacity", DEFAULT_OPACITY)) / 100))
+        t = time.time() - t0
+        dur = 0.09 if phase == 0 else 0.22
+        k = min(1.0, t / dur)
+        k = k * k * (3 - 2 * k)
+        level = 1 - 0.35 * k if phase == 0 else 0.65 + 0.35 * k
+        try:
+            self.attributes("-alpha", target * level)
+        except tk.TclError:
+            pass
+        if k >= 1.0:
+            if phase == 1:
+                return
             page.tkraise()
-        k = 1 - (1 - i / steps) ** 3                     # ease-out
-        page.place_configure(rely=direction * dist * (1 - k))
-        if i < steps:
-            self.after(15, lambda: self._slide(page, direction, sid, i + 1, steps, dist))
+            self.after(10, lambda: self._fade_page(page, sid, 1))
+            return
+        self.after(12, lambda: self._fade_page(page, sid, phase, t0))
 
     def _update_accent(self):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))
