@@ -27,6 +27,13 @@ import threading
 import time
 import traceback
 import webbrowser
+
+if __name__ == "__main__" and "--sensor-worker" in sys.argv:
+    # Sensor helper process (see hw_monitor.ProcBackend): start it before loading any UI code.
+    import hw_monitor
+    hw_monitor.sensor_worker()
+    sys.exit(0)
+
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -1151,6 +1158,7 @@ class App(ctk.CTk):
     def __init__(self, background=False, selftest=None):
         self._t_start = time.perf_counter()
         self.timings: dict[str, float] = {}
+        self.slow_steps: list[str] = []
         self._gaps: list[tuple[float, float]] = []
         self.selftest = selftest          # path to write the result to, when run with --selftest
         self.selftest_errors: list[str] = []
@@ -1301,6 +1309,7 @@ class App(ctk.CTk):
         steps.append("timings:")
         for k, v in self.timings.items():
             steps.append(f"  {k}: {v * 1000:.0f} ms")
+        steps.append("slow build steps: " + (", ".join(self.slow_steps) or "none"))
         worst = sorted(self._gaps, key=lambda g: -g[1])[:5]
         steps.append("longest UI freezes after the window appeared (at time: length):")
         for at, g in worst:
@@ -1469,8 +1478,13 @@ class App(ctk.CTk):
             f.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.pages[name] = f
             _t = time.perf_counter()
+            step = 0
             for _ in getattr(self, f"_page_{name.lower()}")(f):
-                self.timings[f"page {name}"] = self.timings.get(f"page {name}", 0) + time.perf_counter() - _t
+                took = time.perf_counter() - _t
+                self.timings[f"page {name}"] = self.timings.get(f"page {name}", 0) + took
+                if took > 0.15:
+                    self.slow_steps.append(f"{name} step {step}: {took * 1000:.0f} ms")
+                step += 1
                 yield
                 _t = time.perf_counter()
             self.timings[f"page {name}"] = self.timings.get(f"page {name}", 0) + time.perf_counter() - _t
