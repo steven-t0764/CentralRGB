@@ -502,6 +502,9 @@ class NavItem(ctk.CTkFrame):
             self.configure(fg_color=P["HOVER"] if inside else "transparent")
 
     def set(self, on, accent):
+        if (on, accent) == getattr(self, "_style", None):
+            return                                   # unchanged: skip CustomTkinter's redraw
+        self._style = (on, accent)
         self.on = on
         self.configure(fg_color=P["SEL"] if on else "transparent", border_color=accent if on else P["SIDE"])
         self.pill.configure(fg_color=accent if on else "transparent")
@@ -1513,7 +1516,8 @@ class App(ctk.CTk):
                 t0 = time.perf_counter()
                 self.show_page(name)
                 self.update()
-                steps.append(f"page {name} again: {(time.perf_counter() - t0) * 1000:.0f} ms")
+                steps.append(f"page {name} again: {(time.perf_counter() - t0) * 1000:.0f} ms  ("
+                             + ", ".join(f"{k} {v:.0f}" for k, v in getattr(self, "_switch_phases", {}).items()) + ")")
                 if shots and eng.IS_WIN:
                     try:
                         from PIL import ImageGrab
@@ -3351,8 +3355,16 @@ class App(ctk.CTk):
             return
         self.current_page = name
         page = self.pages[name]
+        ph, t = {}, time.perf_counter()
+
+        def mark(k):
+            nonlocal t
+            now = time.perf_counter()
+            ph[k] = (now - t) * 1000
+            t = now
         for n, item in self.nav.items():
             item.set(n == name, self.accent)
+        mark("nav")
         # Swap pages with drawing frozen, so the old page stays on screen until the new one is fully laid
         # out and filled in, then it appears in a single repaint (no half-drawn frames).
         h = fx.freeze(self._holder)
@@ -3360,17 +3372,23 @@ class App(ctk.CTk):
             if not page.winfo_manager():          # first visit: lay it out once, then keep it ready
                 page.place(relx=0, rely=0, relwidth=1, relheight=1)
             page.tkraise()
+            mark("raise")
             if name == "Home":
                 self._refresh_home(self.snap)
             elif name == "Monitor":
                 self._refresh_monitor(self.snap)
             elif name == "Fans":
                 self._refresh_fans(self.snap)
+            mark("refresh")
             self.update_idletasks()
+            mark("layout")
         finally:
             fx.thaw(h)
+            mark("paint")
         if h:
             self.update_idletasks()
+            mark("after")
+        self._switch_phases = ph
 
     def _update_accent(self):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))
@@ -3472,6 +3490,16 @@ class App(ctk.CTk):
 
     def log(self, msg, level=""):
         self.q.put(("log", msg, level))
+        try:                                     # also kept in %APPDATA%\CentralRGB\activity.log
+            if not hasattr(self, "_logfile"):
+                path = Path(eng.settings_dir()) / "activity.log"
+                if path.exists() and path.stat().st_size > 512_000:
+                    path.replace(path.with_suffix(".old.log"))
+                self._logfile = open(path, "a", encoding="utf-8", buffering=1)
+                self._logfile.write(f"\n===== Central RGB {APP_VERSION} started {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+            self._logfile.write(time.strftime("%H:%M:%S  ") + str(msg) + "\n")
+        except Exception:
+            pass
 
     def status(self, sub, level="warn"):
         self.q.put(("status", sub, level))
@@ -3552,8 +3580,7 @@ class App(ctk.CTk):
             return
         self.connected = True
         self._rescan(initial=True)
-        for delay in (4000, 12000):
-            self.q.put(("call", lambda d=delay: self.after(d, lambda: self._bg(self._rescan, False, True))))
+        self._bg(self._settle_devices)
         if self.settings["restore_on_start"] or self.background:
             self.engine.paused = False
             self.engine.force_reapply()
@@ -3579,6 +3606,27 @@ class App(ctk.CTk):
             return
         if self.engine.connect():
             self._rescan(initial=True)
+            self._bg(self._settle_devices)
+
+    def _settle_devices(self, max_wait=90.0, quiet_for=12.0, min_wait=25.0):
+        """OpenRGB keeps detecting hardware after its server opens: USB devices appear at once, but RAM and
+        graphics-card lighting are found by probing the SMBus and can take much longer. Keep reading the
+        device list until it has stopped changing for a while (runs on a background thread)."""
+        t0 = last_change = time.time()
+        count = len(self.engine.devices())
+        while time.time() - t0 < max_wait:
+            time.sleep(1.5)
+            try:
+                self._rescan(quiet=True)
+            except Exception:
+                pass
+            rows = len(self.engine.devices())
+            if rows != count:
+                self.log(f"OpenRGB found more hardware: {rows} device(s) now.", "ok")
+                count, last_change = rows, time.time()
+            elif time.time() - t0 > min_wait and time.time() - last_change > quiet_for:
+                break
+        self.log(f"Hardware detection finished: {count} device(s) after {time.time() - t0:.0f} s.", "info")
 
     def _rescan(self, initial=False, quiet=False):
         if not self.engine.client:
