@@ -37,7 +37,7 @@ if __name__ == "__main__" and "--sensor-worker" in sys.argv:
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import customtkinter as ctk
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageTk
@@ -510,6 +510,162 @@ class SmoothButton(tk.Canvas):
         if key in self._o:
             return self._o[key]
         return super().cget(key)
+
+
+class CreateTile(tk.Canvas):
+    """The "+ Create preset" tile at the end of the preset gallery."""
+
+    def __init__(self, master, on_click, height=88):
+        super().__init__(master, height=height, bg=P["CARD"], highlightthickness=0, cursor="hand2")
+        self.h, self._img, self._key, self._hover = height, None, None, False
+        self.bind("<Configure>", lambda e=None: self._render())
+        self.bind("<Enter>", lambda e=None: self._set_hover(True))
+        self.bind("<Leave>", lambda e=None: self._set_hover(False))
+        self.bind("<Button-1>", lambda e=None: on_click())
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._render()
+
+    def _render(self):
+        w, h = max(self.winfo_width(), 40), self.h
+        key = (w, h, self._hover, P["CARD"])
+        if key == self._key:
+            return
+        self._key = key
+        fill = P["HOVER"] if self._hover else P["CARD2"]
+        self._img = ImageTk.PhotoImage(aa_round_rect(w - 6, h - 6, 9, fill, P["CARD"],
+                                                     outline=CYAN if self._hover else P["LINE"], width=1.5))
+        self.delete("all")
+        self.create_image(3, 3, image=self._img, anchor="nw")
+        self.create_text(w / 2, h / 2 - 9, text="+", fill=CYAN, font=(FONT_DISPLAY, 22, "bold"))
+        self.create_text(w / 2, h / 2 + 16, text="Create preset", fill=P["TEXT"], font=(FONT, 10, "bold"))
+
+
+class PresetEditor(ctk.CTkToplevel):
+    """Make or edit your own lighting preset: 2-5 colours, a motion, a speed and a name, with a live preview."""
+
+    def __init__(self, app, name=None):
+        super().__init__(app, fg_color=P["BG"])
+        self.app, self.orig = app, name
+        d = app.settings.data.get("custom_presets", {}).get(name) or {
+            "motion": "Wave", "colors": [list(app.color), [160, 0, 255], [0, 220, 255]], "speed": 50}
+        self.colors = [tuple(c) for c in d["colors"]]
+        self.title("Edit preset" if name else "Create preset")
+        self.geometry("620x560")
+        self.resizable(False, False)
+        self.transient(app)
+        self.after(150, self.grab_set)
+        pad = dict(padx=22)
+        app.label(self, "Edit preset" if name else "Create preset", 22, "bold").pack(anchor="w", pady=(20, 2), **pad)
+        app.label(self, "Pick your colours and how they move. Your presets appear in the Lighting gallery "
+                        "(right-click one to edit or delete it).", 12, color=P["MUTED"], anchor="w", justify="left",
+                  wraplength=570).pack(anchor="w", **pad)
+        self.preview = LedStrip(self, n=36, height=44, bg=P["BG"], pill=True)
+        self.preview.pack(fill="x", pady=(16, 10), **pad)
+
+        app.label(self, "Name", 13, "bold").pack(anchor="w", pady=(8, 4), **pad)
+        self.name_e = ctk.CTkEntry(self, height=34, font=F(13), fg_color=P["CARD2"], border_width=0, corner_radius=6,
+                                   text_color=P["TEXT"], placeholder_text="My preset")
+        self.name_e.pack(fill="x", **pad)
+        if name:
+            self.name_e.insert(0, name)
+
+        app.label(self, "Motion", 13, "bold").pack(anchor="w", pady=(14, 4), **pad)
+        self.motion = PillSwitcher(self, values=eng.CUSTOM_MOTIONS, height=32, font=F(12), selected_color=CYAN)
+        self.motion.set(d.get("motion", "Wave"))
+        self.motion.pack(anchor="w", **pad)
+
+        app.label(self, "Colours", 13, "bold").pack(anchor="w", pady=(14, 4), **pad)
+        self.col_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.col_row.pack(fill="x", **pad)
+
+        app.label(self, "Speed", 13, "bold").pack(anchor="w", pady=(14, 0), **pad)
+        self.speed = Slider(self, from_=0, to=100, number_of_steps=100, height=18, progress_color=CYAN,
+                            button_color="#ffffff", button_hover_color="#ffffff", fg_color=P["TRACK"])
+        self.speed.set(d.get("speed", 50))
+        self.speed.pack(fill="x", pady=(6, 0), **pad)
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", side="bottom", pady=20, **pad)
+        app.primary(btns, "Save preset", self._save, height=38, width=150).pack(side="right")
+        app.secondary(btns, "Cancel", self.destroy, height=38, width=100).pack(side="right", padx=8)
+        if name:
+            app.secondary(btns, "Delete", self._delete, height=38, width=100).pack(side="left")
+        self._colours()
+        self._tick()
+
+    def _colours(self):
+        for w in self.col_row.winfo_children():
+            w.destroy()
+        for i, c in enumerate(self.colors):
+            hexc = hexcol(c)
+            SmoothButton(self.col_row, text="", width=46, height=34, corner_radius=8, fg_color=hexc, hover_color=hexc,
+                         border_width=1, border_color=P["LINE"],
+                         command=lambda k=i: self._pick(k)).pack(side="left", padx=(0, 8))
+        if len(self.colors) < 5:
+            self.app.secondary(self.col_row, "+ Add", self._add, height=34, width=70).pack(side="left", padx=(4, 6))
+        if len(self.colors) > 2:
+            self.app.secondary(self.col_row, "− Remove", self._remove, height=34, width=90).pack(side="left")
+        self.app.label(self.col_row, "click a colour to change it", 11, color=P["FAINT"]).pack(side="left", padx=10)
+
+    def _pick(self, k):
+        got = colorchooser.askcolor(color=hexcol(self.colors[k]), parent=self, title="Pick a colour")
+        if got and got[0]:
+            self.colors[k] = tuple(int(v) for v in got[0])
+            self._colours()
+
+    def _add(self):
+        self.colors.append((255, 255, 255))
+        self._colours()
+
+    def _remove(self):
+        self.colors.pop()
+        self._colours()
+
+    def _defn(self):
+        return {"motion": self.motion.get(), "colors": [list(c) for c in self.colors], "speed": int(self.speed.get())}
+
+    def _tick(self):
+        if not self.winfo_exists():
+            return
+        d = self._defn()
+        eng.CUSTOM_PRESETS["__preview__"] = d
+        try:
+            self.preview.show(eng.compute_colors("__preview__", (0, 0, 0), 100, d["speed"], self.preview.n, time.time()))
+        finally:
+            eng.CUSTOM_PRESETS.pop("__preview__", None)
+        self.after(50, self._tick)
+
+    def _save(self):
+        name = self.name_e.get().strip()[:28]
+        if not name:
+            messagebox.showinfo(eng.APP_NAME, "Give your preset a name.", parent=self)
+            return
+        if name in eng.PRESET_EFFECTS or name in eng.BASIC_EFFECTS:
+            messagebox.showinfo(eng.APP_NAME, f"\"{name}\" is a built-in effect. Pick another name.", parent=self)
+            return
+        presets = dict(self.app.settings.data.get("custom_presets", {}))
+        if name != self.orig and name in presets and not messagebox.askyesno(
+                eng.APP_NAME, f"Replace your preset \"{name}\"?", parent=self):
+            return
+        if self.orig and self.orig != name:
+            presets.pop(self.orig, None)
+        presets[name] = self._defn()
+        self.app._store_custom_presets(presets)
+        self.app._set_effect(name)
+        self.app._set_speed_value(presets[name]["speed"])
+        self.destroy()
+
+    def _delete(self):
+        if not messagebox.askyesno(eng.APP_NAME, f"Delete your preset \"{self.orig}\"?", parent=self):
+            return
+        presets = dict(self.app.settings.data.get("custom_presets", {}))
+        presets.pop(self.orig, None)
+        self.app._store_custom_presets(presets)
+        if self.app.effect == self.orig:
+            self.app._set_effect("Static")
+        self.destroy()
 
 
 class LightScroll(tk.Frame):
@@ -1224,17 +1380,38 @@ class PillSwitcher(ctk.CTkFrame):
             super().configure(require_redraw=require_redraw, **kw)
 
 
+def custom_preset_art(defn, w=480, h=300) -> Image.Image:
+    """Tile picture for a user-made preset: its colours plotted over time (LEDs across, time down)."""
+    name = "__art__"
+    eng.CUSTOM_PRESETS[name] = defn
+    try:
+        frames = [eng.compute_colors(name, (0, 0, 0), 100, 60, 48, i * 0.09) for i in range(30)]
+    finally:
+        eng.CUSTOM_PRESETS.pop(name, None)
+    im = Image.new("RGB", (48, 30))
+    im.putdata([c for f in frames for c in f])
+    im = im.resize((w, h), Image.BICUBIC).filter(ImageFilter.GaussianBlur(3))
+    shade = Image.linear_gradient("L").resize((w, h)).point(lambda v: int(v * 0.45))   # darker at the bottom
+    return Image.composite(Image.new("RGB", (w, h), (0, 0, 0)), im, shade)
+
+
 class PresetTile(tk.Canvas):
     """Picture tile for a preset effect, with its name on top (like the effect gallery mockup)."""
 
-    def __init__(self, master, name, on_click, height=104):
+    def __init__(self, master, name, on_click, height=104, image=None, on_edit=None):
         super().__init__(master, height=height, bg=P["CARD"], highlightthickness=0, cursor="hand2")
         self.name, self.h, self._img, self._size, self.selected = name, height, None, None, False
         self.accent = CYAN
-        try:
-            self.src = Image.open(resource(PRESET_FILES[name])).convert("RGB")
-        except Exception:
-            self.src = None
+        if image is not None:
+            self.src = image
+        else:
+            try:
+                self.src = Image.open(resource(PRESET_FILES[name])).convert("RGB")
+            except Exception:
+                self.src = None
+        if on_edit is not None:                    # your own presets: right-click or double-click to edit
+            self.bind("<Button-3>", lambda e=None: on_edit(name))
+            self.bind("<Double-Button-1>", lambda e=None: on_edit(name))
         self.bind("<Configure>", lambda e=None: self._render())
         self.bind("<Button-1>", lambda e=None: on_click(name))
 
@@ -1608,6 +1785,8 @@ class App(ctk.CTk):
         self.selftest = selftest          # path to write the result to, when run with --selftest
         self.selftest_errors: list[str] = []
         self.settings = eng.Settings()
+        eng.CUSTOM_PRESETS.clear()
+        eng.CUSTOM_PRESETS.update(self.settings.data.get("custom_presets", {}))
         P.update(SOLID)
         ctk.set_appearance_mode("dark")
         self.splash_proc = None
@@ -2435,6 +2614,9 @@ class App(ctk.CTk):
             pg.grid_columnconfigure(i % 4, weight=1, uniform="p")
             self.tiles[name] = t
             yield                                  # one tile per build step
+        self.preset_grid = pg
+        self._custom_tiles = []
+        self._fill_custom_tiles()
 
         yield
         ctl = self.card(right)
@@ -2689,7 +2871,7 @@ class App(ctk.CTk):
             commit()
 
         self.label(controls, "Effect", 13, color=P["MUTED"], anchor="w").pack(fill="x")
-        fxm = ctk.CTkOptionMenu(controls, values=eng.EFFECTS, height=32, corner_radius=6, font=F(13), fg_color=P["CARD2"],
+        fxm = ctk.CTkOptionMenu(controls, values=eng.EFFECTS + list(eng.CUSTOM_PRESETS), height=32, corner_radius=6, font=F(13), fg_color=P["CARD2"],
                                 button_color=P["CARD2"], button_hover_color=P["BTN_HOVER"], dropdown_fg_color=P["CARD2"],
                                 text_color=P["TEXT"], command=lambda v: choose(effect=v))
         fxm.set(state["effect"])
@@ -4238,6 +4420,47 @@ class App(ctk.CTk):
             except ValueError:
                 pass
 
+    def _fill_custom_tiles(self):
+        """Your own presets (after the built-in ones), then the + Create preset tile."""
+        pg = getattr(self, "preset_grid", None)
+        if pg is None:
+            return
+        for t in self._custom_tiles:
+            self.tiles.pop(getattr(t, "name", None), None)
+            t.destroy()
+        self._custom_tiles = []
+        i = len(eng.PRESET_EFFECTS)
+        for name, defn in self.settings.data.get("custom_presets", {}).items():
+            t = PresetTile(pg, name, self._set_effect, height=88, image=custom_preset_art(defn),
+                           on_edit=self._edit_preset)
+            t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
+            self.tiles[name] = t
+            self._custom_tiles.append(t)
+            i += 1
+        c = CreateTile(pg, lambda: PresetEditor(self), height=88)
+        c.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
+        self._custom_tiles.append(c)
+        for name, t in self.tiles.items():
+            t.select(name == self.effect, self.accent)
+
+    def _edit_preset(self, name):
+        PresetEditor(self, name)
+
+    def _store_custom_presets(self, presets):
+        self.settings["custom_presets"] = presets
+        eng.CUSTOM_PRESETS.clear()
+        eng.CUSTOM_PRESETS.update(presets)
+        self._fill_custom_tiles()
+        self.log(f"Saved your presets ({len(presets)}).", "ok")
+
+    def _set_speed_value(self, v):
+        try:
+            self.speed.set(v)
+            self.speed.value_label.configure(text=f"{int(v)}%")
+            self._state_changed()
+        except Exception:
+            pass
+
     def _set_effect(self, name):
         self.effect = name
         self._update_accent()
@@ -4252,7 +4475,7 @@ class App(ctk.CTk):
         self.log(f"Applied {self.effect} to all selected devices.", "ok")
 
     def _save_hw(self):
-        if self.effect in eng.ANIMATED:
+        if eng.is_animated(self.effect):
             self.q.put(("call", lambda: messagebox.showinfo(eng.APP_NAME, "Save to hardware stores one solid color - pick Static first.")))
             return
         for r in self.engine.save_to_hardware():
@@ -4362,9 +4585,9 @@ class App(ctk.CTk):
     def _confirm_quit(self):
         s = self.monitor.snapshot()
         fan_custom = s["profile"] != "Auto" or s["manual"]
-        if self.effect in eng.ANIMATED or fan_custom:
+        if eng.is_animated(self.effect) or fan_custom:
             why = []
-            if self.effect in eng.ANIMATED:
+            if eng.is_animated(self.effect):
                 why.append(f"the '{self.effect}' lighting effect")
             if fan_custom:
                 why.append("your fan profile (fans go back to BIOS control)")

@@ -113,6 +113,17 @@ EFFECTS = BASIC_EFFECTS[:4] + PRESET_EFFECTS + ["Off"]
 ANIMATED = set(EFFECTS) - {"Static", "Off"}
 USES_COLOR = {"Static", "Breathing"}        # effects that use the colour you pick
 
+# Presets the user made (Lighting -> Create preset): name -> {"motion": ..., "colors": [[r, g, b], ...]}.
+# The app fills this from settings; compute_colors() draws them like any built-in effect.
+CUSTOM_PRESETS: dict[str, dict] = {}
+CUSTOM_MOTIONS = ["Gradient", "Wave", "Breathe", "Cycle", "Pulse", "Sparkle"]
+
+
+def is_animated(effect: str) -> bool:
+    if effect in CUSTOM_PRESETS:
+        return CUSTOM_PRESETS[effect].get("motion") != "Gradient"
+    return effect in ANIMATED
+
 TYPE_NAMES = {
     DeviceType.MOTHERBOARD: "Motherboard", DeviceType.DRAM: "RAM", DeviceType.GPU: "GPU",
     DeviceType.COOLER: "Cooler", DeviceType.LEDSTRIP: "LED strip", DeviceType.KEYBOARD: "Keyboard",
@@ -569,6 +580,8 @@ def compute_colors(effect: str, color, brightness: int, speed: int, n: int, t: f
 
     if effect == "Off":
         return [(0, 0, 0)] * n
+    if effect in CUSTOM_PRESETS:
+        return [scale(c) for c in _custom(CUSTOM_PRESETS[effect], n, t, f, offset)]
     if effect == "Breathing":
         k = 0.03 + 0.97 * (math.sin(2 * math.pi * f * 0.5 * t) + 1) / 2
         return [scale(color, k)] * n
@@ -582,6 +595,42 @@ def compute_colors(effect: str, color, brightness: int, speed: int, n: int, t: f
     if effect in PRESET_EFFECTS:
         return [scale(c) for c in _preset(effect, n, t * (0.35 + f), offset)]
     return [scale(color)] * n  # Static
+
+
+def _custom(defn: dict, n: int, t: float, f: float, offset: float = 0.0) -> list:
+    """A user-made preset: their colours (2-5) with one of CUSTOM_MOTIONS."""
+    cols = [tuple(c) for c in (defn.get("colors") or [(0, 120, 255), (160, 0, 255)])][:5]
+    if len(cols) == 1:
+        cols = cols * 2
+    motion = defn.get("motion", "Wave")
+    loop = cols + [cols[0]]                                 # wraps smoothly back to the first colour
+    out = []
+    if motion == "Gradient":                               # still: colours spread along the LEDs
+        return [_palette(cols, i / max(1, n - 1)) for i in range(n)]
+    if motion == "Wave":                                   # the gradient flows along the LEDs
+        for i in range(n):
+            out.append(_palette(loop, (i / max(1, n) + t * f * 0.25 + offset) % 1.0))
+    elif motion == "Breathe":                              # fades in and out, a new colour each breath
+        ph = t * f * 0.5 + offset
+        k = 0.04 + 0.96 * (0.5 - 0.5 * math.cos(2 * math.pi * ph))
+        col = cols[int(ph) % len(cols)]
+        out = [_mix((0, 0, 0), col, k)] * n
+    elif motion == "Cycle":                                # every LED glides through the colours together
+        out = [_palette(loop, (t * f * 0.12 + offset) % 1.0)] * n
+    elif motion == "Pulse":                                # bright pulses race along over a dim base
+        pos = (t * f * 0.45 + offset) % 1.0
+        base = _mix((0, 0, 0), cols[0], 0.18)
+        for i in range(n):
+            d = ((i / max(1, n)) - pos) % 1.0
+            k = math.exp(-(min(d, 1 - d) / 0.06) ** 2)
+            out.append(_mix(base, _palette(cols[1:] or cols, (i / max(1, n))), k))
+    else:                                                  # Sparkle: palette twinkles over the first colour
+        base = _mix((0, 0, 0), cols[0], 0.25)
+        for i in range(n):
+            rate = 0.6 + 2.0 * _rnd(i, 90)
+            v = (0.5 + 0.5 * math.sin(t * f * 2.2 * rate + _rnd(i, 91) * 6.28)) ** 10
+            out.append(_mix(base, cols[1 + int(_rnd(i, 92) * (len(cols) - 1))] if len(cols) > 1 else cols[0], v))
+    return out
 
 
 def _rnd(a: float, b: float = 0.0) -> float:
@@ -744,6 +793,8 @@ class LightingEngine(threading.Thread):
         self.dirty = True
         self.prepared: dict[str, bool] = {}   # device key -> True if per-LED capable
         self.last_slow_push: dict[str, float] = {}
+        self.last_ram_push: dict[str, float] = {}
+        self.last_sent: dict[str, list] = {}
         self._stop_evt = threading.Event()
         self.paused = False
 
@@ -906,16 +957,22 @@ class LightingEngine(threading.Thread):
                     ov = self.overrides
                     client = self.client
                     dirty = self.dirty
-                    any_animated = base["effect"] in ANIMATED or any(o.get("effect") in ANIMATED for o in ov.values())
+                    any_animated = is_animated(base["effect"]) or any(is_animated(o.get("effect", "")) for o in ov.values())
                     if client and not self.paused and (any_animated or dirty):
                         self.dirty = False
                         now = time.time()
                         for idx, dev in enumerate(self.targets()):
                             key = device_key(dev)
                             st = ov.get(key) or base            # a device can have its own lighting
-                            animated = st["effect"] in ANIMATED
+                            animated = is_animated(st["effect"])
                             if not animated and not dirty:
                                 continue
+                            if animated and not dirty and getattr(dev, "type", None) == DeviceType.DRAM:
+                                # RGB RAM is driven over the SMBus; streaming 30 frames a second makes some sticks
+                                # (e.g. Corsair Vengeance Pro) glitch now and then. ~15 a second still looks smooth.
+                                if now - self.last_ram_push.get(key, 0) < 1 / 15:
+                                    continue
+                                self.last_ram_push[key] = now
                             pkey = (key, animated)
                             if pkey not in self.prepared:
                                 self.prepared = {k: v for k, v in self.prepared.items() if k[0] != key}
@@ -928,6 +985,9 @@ class LightingEngine(threading.Thread):
                                 self.last_slow_push[key] = now
                             cols = compute_colors(st["effect"], st["color"], st["brightness"],
                                                   st["speed"], len(dev.leds), now, offset=idx * 0.07)
+                            if not dirty and self.last_sent.get(key) == cols:
+                                continue                    # nothing changed for this device: don't write
+                            self.last_sent[key] = cols
                             try:
                                 self._push(dev, cols, how)
                             except (ConnectionError, OSError):
