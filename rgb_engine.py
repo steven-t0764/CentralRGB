@@ -48,6 +48,39 @@ RELEASES_PAGE = "https://openrgb.org/releases.html"
 FALLBACK_ZIP = ("https://codeberg.org/OpenRGB/OpenRGB/releases/download/release_1.1/"
                 "OpenRGB_1.1_Windows_64_8e16de2.zip")
 PAWNIO_PAGE = "https://pawnio.eu"
+PAWNIO_SETUP = "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe"
+
+
+def pawnio_installed() -> bool:
+    if not IS_WIN:
+        return False
+    try:
+        import winreg
+        winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\PawnIO").Close()
+        return True
+    except Exception:
+        return False
+
+
+def install_pawnio(log=print) -> str:
+    """Download the official, signed PawnIO installer (the same one the setup uses; never bundled) and run
+    it silently. PawnIO is the driver LibreHardwareMonitor and OpenRGB use for CPU temperatures, fan control
+    and RGB RAM. Returns 'ok', 'reboot' or an error message."""
+    if not IS_WIN:
+        return "PawnIO is Windows-only."
+    import tempfile
+    import urllib.request
+    try:
+        dest = Path(tempfile.gettempdir()) / "PawnIO_setup.exe"
+        log(f"Downloading PawnIO: {PAWNIO_SETUP}")
+        with urllib.request.urlopen(PAWNIO_SETUP, timeout=60) as r, open(dest, "wb") as f:
+            shutil.copyfileobj(r, f)
+        code = subprocess.run([str(dest), "-install", "-silent"], creationflags=NO_WINDOW, timeout=180).returncode
+        if code == 3010:
+            return "reboot"
+        return "ok" if code == 0 else f"PawnIO installer exited with code {code}"
+    except Exception as e:
+        return f"Couldn't install PawnIO: {e}"
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW for helper commands
 

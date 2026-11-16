@@ -127,6 +127,7 @@ class FpsCounter:
         self.log = log
         self.proc: subprocess.Popen | None = None
         self.lock = threading.Lock()
+        self.modes: dict[int, str] = {}
         self.frames: dict[int, collections.deque] = {}
         self.names: dict[int, str] = {}
         self.status, self.message = "off", ""
@@ -226,10 +227,13 @@ class FpsCounter:
                 if "Application" in parts and "ProcessID" in parts:
                     ms_col = next((c for c in ("MsBetweenPresents", "FrameTime", "msBetweenPresents") if c in parts), None)
                     if ms_col:
-                        cols = (parts.index("Application"), parts.index("ProcessID"), parts.index(ms_col))
+                        cols = (parts.index("Application"), parts.index("ProcessID"), parts.index(ms_col),
+                                parts.index("PresentMode") if "PresentMode" in parts else None)
                 continue
             try:
                 name, pid, ms = parts[cols[0]], int(parts[cols[1]]), float(parts[cols[2]])
+                if cols[3] is not None:
+                    self.modes[pid] = parts[cols[3]]
             except (ValueError, IndexError):
                 continue
             now = time.monotonic()
@@ -241,6 +245,16 @@ class FpsCounter:
                 dq.append((now, ms))
 
     # ---------------- reading
+    def mode(self, pid) -> str:
+        """How the game shows its frames, as PresentMon reports it (e.g. 'Hardware: Legacy Flip')."""
+        return self.modes.get(pid, "")
+
+    @staticmethod
+    def exclusive(mode: str) -> bool:
+        """Exclusive fullscreen: the game owns the screen and no normal window (like this overlay) can show
+        on top of it. 'Hardware: Legacy Flip' / 'Legacy Copy' are exclusive; flip/composed modes are not."""
+        return "Legacy" in (mode or "")
+
     def alive(self, pid) -> bool:
         """True while this process has drawn a frame in the last 15 seconds."""
         now = time.monotonic()

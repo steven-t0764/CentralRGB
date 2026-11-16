@@ -397,6 +397,25 @@ class SmoothFrame(ctk.CTkFrame):
 # Tk redraws them at the next idle moment anyway, so the forced pass is switched off.
 ctk.CTkCanvas.update_idletasks = lambda self: None
 
+# Invisible layout frames (fg_color="transparent") still get CustomTkinter's default rounded corners, drawn
+# with its slow font-glyph shapes. Nobody can see them, but every repaint (e.g. bringing the window back from
+# the taskbar) redrew 100+ of them, leaving black boxes for a second. Give them square corners instead.
+_ctk_frame_init = ctk.CTkFrame.__init__
+
+
+def _frame_init(self, master, *args, **kw):
+    if kw.get("fg_color") == "transparent" and "corner_radius" not in kw:
+        kw["corner_radius"] = 0
+        kw.setdefault("border_width", 0)
+    _ctk_frame_init(self, master, *args, **kw)
+
+
+ctk.CTkFrame.__init__ = _frame_init
+
+
+class _SkipStatus(Exception):
+    """Internal: the overlay status line was already filled in."""
+
 
 class SmoothButton(tk.Canvas):
     """Rounded button drawn with Pillow (anti-aliased fill and outline), in place of CustomTkinter buttons
@@ -2848,6 +2867,13 @@ class App(ctk.CTk):
         yield
         self.mon_seg.set("Overview")
         yield
+        self.pawn_bar = SmoothFrame(p, fg_color="#2a2112", corner_radius=8)
+        self.primary(self.pawn_bar, "Install PawnIO", self._install_pawnio, height=32, width=140).pack(side="right", padx=14, pady=12)
+        self.label(self.pawn_bar, "CPU temperatures (and fan control) need the free PawnIO driver, which isn't installed.",
+                   13, color="#ffd166", anchor="w").pack(side="left", fill="x", expand=True, padx=16, pady=12)
+        if eng.IS_WIN and not eng.pawnio_installed():
+            self.pawn_bar.pack(fill="x", pady=(0, 12))
+        yield
         self.accent_widgets.append(("seg", self.mon_seg))
         yield
         stack = ctk.CTkFrame(p, fg_color="transparent")
@@ -3400,6 +3426,16 @@ class App(ctk.CTk):
             if cfg["enabled"] and running and getattr(self, "_game_pid", None):
                 if self.overlay_win is None:
                     self.overlay_win = fpo.OverlayWindow(self, self._overlay_colors(), FONT)
+                mode = self.fps.mode(self._game_pid)
+                key = (self._game_pid, fpo.FpsCounter.exclusive(mode))
+                if key != getattr(self, "_overlay_logged", None):
+                    self._overlay_logged = key
+                    name = (fps or {}).get("name") or "the game"
+                    self.log(f"Overlay attached to {name} (pid {self._game_pid}, display mode: {mode or 'unknown'}, "
+                             f"window {fpo.game_window_state(self._game_hwnd)}).")
+                    if key[1]:
+                        self.log(f"{name} is in exclusive fullscreen, so no overlay window can appear on top of it. "
+                                 "Switch the game to Borderless (or Windowed) fullscreen in its display settings.", "warn")
                 in_front = fpo.foreground_window()[1] == self._game_pid
                 self.overlay_win.update_overlay(cfg, fps, metrics, self._game_hwnd, in_front, stale)
             elif self.overlay_win is not None:
@@ -3410,13 +3446,19 @@ class App(ctk.CTk):
                 self.overlay_preview_note.configure(
                     text=f"Live: {fps['name']}" if fps else "Sample numbers. Live numbers show here while a game is running.")
                 st = self.fps.status
+                gp = getattr(self, "_game_pid", None)
+                if st == "running" and gp and fpo.FpsCounter.exclusive(self.fps.mode(gp)):
+                    self.overlay_status.configure(
+                        text=f"{(fps or {}).get('name', 'Your game')} is in exclusive fullscreen, so the overlay can't show "
+                             "on top of it. Switch the game to Borderless (or Windowed) fullscreen.", text_color=WARN)
+                    raise _SkipStatus
                 self.overlay_status.configure(
                     text={"off": "Off", "starting": "Starting the FPS counter (first time downloads PresentMon)…",
                           "running": (f"Tracking {fps['name']}: {fps['fps']:.0f} FPS" if fps else
                                       "Running. Open a game and it will appear on it."),
                           "error": self.fps.message}.get(st, ""),
                     text_color=BAD if st == "error" else OK if st == "running" else P["MUTED"])
-        except tk.TclError:
+        except (tk.TclError, _SkipStatus):
             pass
         except Exception:
             traceback.print_exc()
@@ -3604,7 +3646,29 @@ class App(ctk.CTk):
             r.pack(fill="x", pady=2)
             ctk.CTkLabel(r, text=g, width=22, height=22, corner_radius=11, fg_color=col, text_color="#1a1a1a",
                          font=F(12, "bold")).pack(side="left", padx=(18, 14), pady=12)
+            if "PawnIO driver not found" in msg and eng.IS_WIN:
+                self.primary(r, "Install PawnIO", self._install_pawnio, height=32, width=140).pack(side="right", padx=14)
             self.label(r, msg, 13, anchor="w", justify="left", wraplength=820).pack(side="left", fill="x", expand=True, padx=(0, 16), pady=10)
+
+    def _install_pawnio(self):
+        if not messagebox.askyesno(eng.APP_NAME, "Install the PawnIO driver?\n\nIt's the free, signed driver Central RGB "
+                                   "uses (through LibreHardwareMonitor and OpenRGB) to read CPU temperatures, control fans "
+                                   "and reach RGB RAM. The official installer is downloaded from pawnio.eu's GitHub."):
+            return
+
+        def work():
+            res = eng.install_pawnio(self.log)
+            if res in ("ok", "reboot"):
+                self.log("PawnIO installed." + (" Windows wants a restart to finish." if res == "reboot" else ""), "ok")
+                msg = ("PawnIO is installed. " + ("Restart Windows, then open Central RGB." if res == "reboot"
+                                                  else "Close Central RGB from the tray and open it again to load CPU temperatures."))
+                self.q.put(("call", lambda: (messagebox.showinfo(eng.APP_NAME, msg),
+                                             self.pawn_bar.pack_forget() if hasattr(self, "pawn_bar") else None)))
+                self._bg(self._run_check)
+            else:
+                self.log(res, "bad")
+                self.q.put(("call", lambda: messagebox.showerror(eng.APP_NAME, res)))
+        self._bg(work)
 
     def _toggle_ram_temps(self):
         on = self.ramtemp_sw.get() == 1
@@ -3914,6 +3978,18 @@ class App(ctk.CTk):
             time.sleep(0.2)
 
     def _connect_flow(self):
+        """Find/start OpenRGB and connect. Only one of these runs at a time (the device-checking loop and the
+        startup could otherwise both start one, launching or connecting twice)."""
+        if not hasattr(self, "_connect_lock"):
+            self._connect_lock = threading.Lock()
+        if not self._connect_lock.acquire(blocking=False):
+            return
+        try:
+            self._connect_flow_locked()
+        finally:
+            self._connect_lock.release()
+
+    def _connect_flow_locked(self):
         if self.manager.replace_visible_copy():
             time.sleep(1.0)                  # let its server port close
         if not self.manager.started_by_us() and self.manager.own_copies():
