@@ -3,6 +3,8 @@ name: Build Central RGB
 on:
   push:
     branches: [main, test]
+  pull_request:          # every pull request into main is tested and built (auto-merge.yml merges it if it passes)
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:

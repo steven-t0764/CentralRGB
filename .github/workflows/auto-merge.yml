@@ -1,0 +1,43 @@
+# Merges a pull request into main automatically once its build has passed.
+#
+# - Runs after "Build Central RGB" finishes for a pull request: the tests, the Windows build and the app's
+#   self-test must all have succeeded.
+# - Only for branches in this repository (collaborators). Pull requests from forks are never auto-merged.
+# - Merges exactly the commit that was tested (a newer push waits for its own build).
+# - Draft pull requests and ones labelled "do-not-merge" are left for a person to merge.
+name: Auto-merge passing pull requests
+
+on:
+  workflow_run:
+    workflows: ["Build Central RGB"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr list -R "$REPO" --head "$BRANCH" --base main --state open \
+                 --json number,headRefOid,isDraft,labels \
+                 --jq '.[] | select(.headRefOid == $ENV.SHA and (.isDraft | not)
+                         and ([.labels[].name] | index("do-not-merge") | not)) | .number' | head -n 1)
+          if [ -z "$pr" ]; then
+            echo "Nothing to merge (no open, non-draft pull request at $SHA without the do-not-merge label)."
+            exit 0
+          fi
+          echo "Build passed for pull request #$pr at $SHA - merging."
+          gh pr merge "$pr" -R "$REPO" --merge --delete-branch
