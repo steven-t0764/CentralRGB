@@ -2,7 +2,7 @@ name: Build Central RGB
 
 on:
   push:
-    branches: [main, test]
+    branches: [main, test, 'test-*']   # test-<name>: a separate test build, e.g. for one person's PC
   pull_request:          # every pull request into main is tested and built (auto-merge.yml merges it if it passes)
     branches: [main]
   release:
@@ -107,17 +107,22 @@ jobs:
       # Pushes to the "test" branch publish a pre-release named test-build (not a real release), so a build
       # can be tried on a real PC first. Its files are replaced on every test push.
       - name: Publish test build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/test'
+        # test -> "test-build" release; test-<name> -> its own "test-<name>-build" release, so a build made
+        # for one person's PC can be downloaded without touching the shared test build
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/test' || startsWith(github.ref, 'refs/heads/test-'))
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $sha = "${{ github.sha }}".Substring(0, 7)
-          gh release view test-build *> $null
+          $branch = "${{ github.ref_name }}"
+          $tag = "$branch-build"
+          $suffix = if ($branch -eq "test") { "test" } else { $branch }
+          gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create test-build --prerelease --target "${{ github.sha }}" --title "Test build (not a release)" --notes "Automatic build from the test branch."
+            gh release create $tag --prerelease --target "${{ github.sha }}" --title "Test build: $branch (not a release)" --notes "Automatic build from the $branch branch."
           }
-          Copy-Item "dist\Central RGB.exe" "Central-RGB-test.exe"
-          Copy-Item (Get-ChildItem installer\*.exe | Select-Object -First 1).FullName "CentralRGB-Setup-test.exe"
-          gh release upload test-build "Central-RGB-test.exe" "CentralRGB-Setup-test.exe" --clobber
-          gh release edit test-build --notes "Automatic build of commit $sha from the test branch, for trying changes before a real release."
+          Copy-Item "dist\Central RGB.exe" "Central-RGB-$suffix.exe"
+          Copy-Item (Get-ChildItem installer\*.exe | Select-Object -First 1).FullName "CentralRGB-Setup-$suffix.exe"
+          gh release upload $tag "Central-RGB-$suffix.exe" "CentralRGB-Setup-$suffix.exe" --clobber
+          gh release edit $tag --notes "Automatic build of commit $sha from the $branch branch, for trying changes before a real release."

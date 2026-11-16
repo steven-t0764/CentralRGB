@@ -8,6 +8,8 @@ preview script goes in this folder.**
 | `fake_openrgb.py` | Simulated OpenRGB with 8 demo devices (motherboard, GPU, 2 RAM sticks, fan LEDs, AIO cooler, keyboard, mouse). `install()` points the lighting engine at it. |
 | `fake_lhm.py` | Simulated LibreHardwareMonitor: CPU, GPU, motherboard and SSD sensors, plus 5 controllable fans (one is an AIO pump). |
 | `test_fan_safety.py` | Checks the fan-safety rules: fans never below 20 %, pumps never below 70 %, all fans to 100 % at 90 °C, and fans handed back to the BIOS on Auto and on close. |
+| `test_ddr5_guard.py` | Checks the DDR5 RAM rules: OpenRGB kept running with DDR5, Rescan asks before it would lose found RAM, and the "shut down fully" note. |
+| `ddr5_scenario.py` | Walks the real app through the DDR5 rules on the fake hardware (`--ddr4` checks nothing changed for DDR4). Opens a window, so it isn't run by `unittest`. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |
 
 ## Run the tests

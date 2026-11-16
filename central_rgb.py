@@ -3914,17 +3914,25 @@ class App(ctk.CTk):
             time.sleep(0.2)
 
     def _connect_flow(self):
+        self.ddr5 = eng.ddr5_installed()
+        self._searched_before = False
         if self.manager.replace_visible_copy():
             time.sleep(1.0)                  # let its server port close
         if not self.manager.started_by_us() and self.manager.own_copies():
-            # a hidden OpenRGB of ours left over from an earlier session (e.g. ended in Task Manager):
-            # its device list may be incomplete, so restart it for a fresh hardware scan
-            self.log("Restarting a hidden OpenRGB left from an earlier session, for a fresh hardware scan.")
-            self.manager.stop_own_copies()
-            for _ in range(25):
-                if not self.manager.server_running():
-                    break
-                time.sleep(0.2)
+            if eng.keep_openrgb_running(self.ddr5) and self.manager.server_running():
+                # DDR5 RAM is only found the first time OpenRGB searches after the PC starts, so the hidden
+                # OpenRGB kept from the last session is reused instead of restarted
+                self.log("Reconnecting to the hidden OpenRGB that's already running (with DDR5 RAM it isn't "
+                         "restarted, so your RAM lighting stays found).", "ok")
+            else:
+                # a hidden OpenRGB of ours left over from an earlier session (e.g. ended in Task Manager):
+                # its device list may be incomplete, so restart it for a fresh hardware scan
+                self.log("Restarting a hidden OpenRGB left from an earlier session, for a fresh hardware scan.")
+                self.manager.stop_own_copies()
+                for _ in range(25):
+                    if not self.manager.server_running():
+                        break
+                    time.sleep(0.2)
         if not self.manager.server_running():
             self.status("Waiting for sensors…")
             self._wait_for_sensors()
@@ -3935,6 +3943,7 @@ class App(ctk.CTk):
                 self.q.put(("need_openrgb",))
                 return
             self.status("Starting OpenRGB (≈30 s)…")
+            self._note_hardware_search()
             if not self.manager.launch(exe):
                 self.status("OpenRGB problem - see Settings", "bad")
                 return
@@ -3980,10 +3989,53 @@ class App(ctk.CTk):
             self.q.put(("call", lambda: (self.conflict_btn.configure(state="normal", text="Close them"),
                                          self._update_conflict_bar(left))))
             time.sleep(1.5)
-            self._full_rescan()
+            self._full_rescan("conflicts")
         self._bg(work)
 
-    def _full_rescan(self):
+    def _ram_found(self) -> bool:
+        return any(r[1] == "RAM" for r in self.engine_rows())
+
+    def engine_rows(self):
+        try:
+            return [(eng.device_key(d), eng.type_name(d)) for d in self.engine.devices()]
+        except Exception:
+            return []
+
+    def _note_hardware_search(self):
+        """Called just before the hidden OpenRGB starts (and searches for hardware)."""
+        boot = eng.boot_id()
+        self._searched_before = bool(boot) and self.settings["openrgb_boot"] == boot
+        self.settings["openrgb_boot"] = boot
+
+    def _ask_on_main(self, title, text) -> bool:
+        """Yes/No question from a background thread (the answer waits for the user)."""
+        done, ans = threading.Event(), [False]
+
+        def ask():
+            try:
+                ans[0] = messagebox.askyesno(title, text, icon="warning", default="no")
+            finally:
+                done.set()
+        self.q.put(("call", ask))
+        done.wait()
+        return ans[0]
+
+    def _ram_guard_allows_restart(self, why: str) -> bool:
+        """With DDR5 RAM already found, restarting the hidden OpenRGB would lose it until a full shutdown."""
+        ours = self.manager.started_by_us() or bool(self.manager.own_copies())
+        if not eng.rescan_needs_ok(getattr(self, "ddr5", False), ours, self._ram_found()):
+            return True
+        if why == "conflicts":
+            self.log("Kept OpenRGB running instead of re-detecting: your DDR5 RAM lighting is already found, and "
+                     "searching again would lose it until the PC is shut down.", "info")
+            return False
+        return self._ask_on_main(
+            eng.APP_NAME,
+            "Your RAM is DDR5. On many PCs, DDR5 RAM lighting is only found the first time OpenRGB searches "
+            "after the PC starts.\n\nRe-detecting now restarts OpenRGB, and your RAM lighting will probably "
+            "disappear until you shut the PC down fully.\n\nRe-detect anyway?")
+
+    def _full_rescan(self, why: str = "button"):
         """Rescan button: make OpenRGB look for hardware again. The hidden OpenRGB this app runs is
         restarted (it only detects devices when it starts); an OpenRGB you run yourself is just refreshed."""
         if not hasattr(self, "_rescan_lock"):
@@ -3991,13 +4043,16 @@ class App(ctk.CTk):
         if not self._rescan_lock.acquire(blocking=False):
             return                           # a rescan is already running
         try:
-            self._full_rescan_locked()
+            self._full_rescan_locked(why)
         finally:
             self._rescan_lock.release()
 
-    def _full_rescan_locked(self):
+    def _full_rescan_locked(self, why: str = "button"):
         if not self.manager.started_by_us() and not self.manager.own_copies():
             self._rescan()                   # an OpenRGB you run yourself: just refresh its list
+            return
+        if not self._ram_guard_allows_restart(why):
+            self._rescan()                   # refresh the list without restarting OpenRGB
             return
         self.status("Re-detecting hardware…")
         self.log("Re-detecting hardware (restarting the hidden OpenRGB)…")
@@ -4009,6 +4064,7 @@ class App(ctk.CTk):
                 break
             time.sleep(0.2)
         self._wait_for_sensors()
+        self._note_hardware_search()
         if not self.manager.launch(exe):
             self.status("OpenRGB problem - see Settings", "bad")
             return
@@ -4035,6 +4091,22 @@ class App(ctk.CTk):
             elif time.time() - t0 > min_wait and time.time() - last_change > quiet_for:
                 break
         self.log(f"Hardware detection finished: {count} device(s) after {time.time() - t0:.0f} s.", "info")
+        self._check_ram()
+
+    def _check_ram(self):
+        found = self._ram_found()
+        if found and not self.settings["ram_seen"]:
+            self.settings["ram_seen"] = True
+        note = eng.ram_missing_note(getattr(self, "ddr5", False), found, getattr(self, "_searched_before", False),
+                                    self.settings["ram_seen"])
+        if not note:
+            return
+        self.log(note, "warn")
+        boot = eng.boot_id()
+        # a pop-up only when RAM lighting is expected (found on this PC before) and at most once per boot
+        if self.settings["ram_seen"] and self.settings["ram_note_boot"] != boot and not self.background:
+            self.settings["ram_note_boot"] = boot
+            self.q.put(("call", lambda: messagebox.showwarning(eng.APP_NAME, note)))
 
     def _rescan(self, initial=False, quiet=False):
         if not self.engine.client:
@@ -4314,7 +4386,10 @@ class App(ctk.CTk):
         self.engine.stop()
         self.fps.stop()
         self.monitor.stop()       # hands fans back to the BIOS
-        self.manager.stop()       # the hidden OpenRGB this app started
+        if eng.keep_openrgb_running(getattr(self, "ddr5", False)):
+            pass                  # DDR5: keep the hidden OpenRGB so the RAM isn't searched for again this boot
+        else:
+            self.manager.stop()   # the hidden OpenRGB this app started
         self.destroy()
 
 

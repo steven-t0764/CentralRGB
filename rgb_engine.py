@@ -212,6 +212,69 @@ def is_admin() -> bool:
         return False
 
 
+# --------------------------------------------------------------------------- DDR5 RAM guard
+# On many boards (seen on Intel Z790 with T-Force Delta DDR5, and others) OpenRGB finds DDR5 RGB RAM only
+# the first time it searches for hardware after the PC starts. Every later search (restarting OpenRGB,
+# Rescan) misses the RAM until the PC is fully shut down, and can leave the RAM unreadable to other tools.
+# So when DDR5 is installed, the hidden OpenRGB is started once and then kept: it isn't restarted by
+# Rescan, by closing conflicting apps, or by quitting and reopening Central RGB.
+SMBIOS_DDR5 = 34                       # Win32_PhysicalMemory.SMBIOSMemoryType for DDR5
+_ddr5_cache: bool | None = None
+
+RAM_SHUTDOWN_TIP = ("Shut the PC down fully (hold Shift while you click Shut down, so Windows' Fast Startup "
+                    "doesn't skip the full power-off), turn it back on, then open Central RGB before any other "
+                    "RGB app.")
+
+
+def ddr5_installed() -> bool:
+    """True if the PC's memory is DDR5. Set CENTRALRGB_FAKE_DDR5=1 (or 0) to override, for tests."""
+    global _ddr5_cache
+    fake = os.environ.get("CENTRALRGB_FAKE_DDR5")
+    if fake is not None:
+        return fake.strip() == "1"
+    if _ddr5_cache is None:
+        _ddr5_cache = False
+        if IS_WIN:
+            r = run_quiet(["powershell", "-NoProfile", "-Command",
+                           "(Get-CimInstance Win32_PhysicalMemory | Select-Object -ExpandProperty SMBIOSMemoryType)"
+                           " -join ','"], timeout=15)
+            if r and r.stdout:
+                _ddr5_cache = str(SMBIOS_DDR5) in [t.strip() for t in r.stdout.split(",")]
+    return _ddr5_cache
+
+
+def boot_id() -> int:
+    """Identifies this boot of Windows (the boot time, to the minute). 0 if unknown."""
+    try:
+        import psutil
+        return int(psutil.boot_time() // 60)
+    except Exception:
+        return 0
+
+
+def keep_openrgb_running(ddr5: bool) -> bool:
+    """Leave the hidden OpenRGB running when Central RGB closes, and reuse one that is already running
+    instead of restarting it, so the RAM isn't searched for a second time this boot."""
+    return ddr5
+
+
+def rescan_needs_ok(ddr5: bool, ours: bool, ram_found: bool) -> bool:
+    """A full Rescan restarts the hidden OpenRGB. With DDR5 RAM already found, that would lose the RAM
+    until the next full shutdown, so ask first."""
+    return ddr5 and ours and ram_found
+
+
+def ram_missing_note(ddr5: bool, ram_found: bool, searched_before_this_boot: bool, seen_before: bool) -> str | None:
+    """What to tell the user when DDR5 RGB RAM wasn't found (None if there's nothing to say)."""
+    if not ddr5 or ram_found:
+        return None
+    if searched_before_this_boot or seen_before:
+        return ("RAM lighting wasn't found. DDR5 RGB RAM is often only found the first time OpenRGB looks for "
+                "hardware after the PC starts, and OpenRGB already looked earlier this boot. " + RAM_SHUTDOWN_TIP)
+    return ("No RAM lighting found. If your DDR5 RAM has RGB: close other RGB apps (T-Force Blitz, Polychrome "
+            "Sync, iCUE, Armoury Crate...), then " + RAM_SHUTDOWN_TIP[0].lower() + RAM_SHUTDOWN_TIP[1:])
+
+
 def run_quiet(cmd, timeout=20) -> subprocess.CompletedProcess | None:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
@@ -244,6 +307,9 @@ class Settings:
             "Red breathing": {"color": [255, 0, 0], "effect": "Breathing", "brightness": 100, "speed": 30},
         },
         "restore_on_start": True,
+        "openrgb_boot": 0,          # boot_id() when the hidden OpenRGB last searched for hardware
+        "ram_seen": False,          # RGB RAM has been found on this PC before
+        "ram_note_boot": 0,         # boot_id() when the "RAM not found" pop-up was last shown
     }
 
     def __init__(self):
@@ -519,6 +585,9 @@ def system_check() -> list[tuple[str, str]]:
             out.append(("info", f"RAM sticks: {len(rams)} ({', '.join(sorted(set(rams)))})"))
     except Exception:
         pass
+    if ddr5_installed():
+        out.append(("info", "DDR5 RAM: its lighting is searched for once per boot. The hidden OpenRGB keeps "
+                            "running after you close Central RGB, and Rescan asks before searching again."))
     return out
 
 
