@@ -387,7 +387,7 @@ class SmoothFrame(ctk.CTkFrame):
                 edge = tk.Frame(self, bg=self._line, bd=0, highlightthickness=0)
                 edge.place(**kw)
                 self._corners.append(edge)
-        self.bind("<Map>", lambda e: [tk.Misc.lift(c) for c in self._corners], add="+")
+        self.bind("<Map>", lambda e=None: [tk.Misc.lift(c) for c in self._corners], add="+")
         for c in self._corners:
             tk.Misc.lift(c)
 
@@ -421,9 +421,9 @@ class SmoothButton(tk.Canvas):
         self._hover, self._img = False, None
         self._bg_item = self.create_image(0, 0, anchor="nw")
         self._txt = self.create_text(0, 0, text=text)
-        self.bind("<Configure>", lambda e: self._draw())
-        self.bind("<Enter>", lambda e: self._set_hover(True))
-        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Configure>", lambda e=None: self._draw())
+        self.bind("<Enter>", lambda e=None: self._set_hover(True))
+        self.bind("<Leave>", lambda e=None: self._set_hover(False))
         self.bind("<ButtonRelease-1>", self._click)
         self._draw()
 
@@ -510,12 +510,12 @@ class LightScroll(tk.Frame):
         self.inner = tk.Frame(self.cv, bg=bg)
         self.win = self.cv.create_window(0, 0, anchor="nw", window=self.inner)
         self.thumb = self.bar.create_rectangle(2, 0, 6, 0, fill=P["TRACK"], width=0)
-        self.inner.bind("<Configure>", lambda e: self._sync())
+        self.inner.bind("<Configure>", lambda e=None: self._sync())
         self.cv.bind("<Configure>", lambda e: self._fit(e.width))
-        self.cv.bind("<Map>", lambda e: self.after_idle(lambda: self._fit(self.cv.winfo_width())), add="+")
+        self.cv.bind("<Map>", lambda e=None: self.after_idle(lambda: self._fit(self.cv.winfo_width())), add="+")
         self.cv.configure(yscrollcommand=self._on_scroll)
         for w in (self, self.cv, self.inner, self.bar):
-            w.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self._wheel), add="+")
+            w.bind("<Enter>", lambda e=None: self.bind_all("<MouseWheel>", self._wheel), add="+")
             w.bind("<Leave>", self._leave, add="+")
         self.bar.bind("<B1-Motion>", self._drag)
         self.bar.bind("<Button-1>", self._drag)
@@ -792,7 +792,7 @@ class LedStrip(tk.Canvas):
         super().__init__(master, height=height, bg=bg, highlightthickness=0)
         self.n, self.h, self.bgc, self.pill = n, height, hex2rgb(bg), pill
         self.items, self.glows = [], []
-        self.bind("<Configure>", lambda e: self._layout())
+        self.bind("<Configure>", lambda e=None: self._layout())
 
     def _layout(self):
         self.delete("all")
@@ -955,7 +955,7 @@ class GradientBar(tk.Canvas):
         self.h, self.pct, self.cols = height, 0, (CYAN, PURPLE)
         self._img, self._key = None, None
         self.img_item = self.create_image(0, 0, anchor="nw")
-        self.bind("<Configure>", lambda e: self.set(self.pct, *self.cols))
+        self.bind("<Configure>", lambda e=None: self.set(self.pct, *self.cols))
 
     def set(self, pct, c1=CYAN, c2=PURPLE):
         self.pct, self.cols = pct, (c1, c2)
@@ -989,7 +989,7 @@ class CurveEditor(tk.Canvas):
         self.on_change, self.h = on_change, height
         self.points = [list(p) for p in hwm.DEFAULT_CURVE]
         self.editable, self.drag, self.temp, self.accent = True, None, None, DEFAULT_ACCENT
-        self.bind("<Configure>", lambda e: self.redraw())
+        self.bind("<Configure>", lambda e=None: self.redraw())
         self.bind("<Button-1>", self._press)
         self.bind("<B1-Motion>", self._move)
         self.bind("<ButtonRelease-1>", self._release)
@@ -1107,7 +1107,7 @@ class GlowBar(tk.Canvas):
         self.bgc = hex2rgb(self.bgc_hex)
         self._size, self._last, self._photo = None, None, None
         self.item = self.create_image(0, 0, anchor="nw")
-        self.bind("<Configure>", lambda e: self._masks())
+        self.bind("<Configure>", lambda e=None: self._masks())
 
     def _masks(self):
         w, h = max(self.winfo_width(), 20), self.h
@@ -1216,8 +1216,8 @@ class PresetTile(tk.Canvas):
             self.src = Image.open(resource(PRESET_FILES[name])).convert("RGB")
         except Exception:
             self.src = None
-        self.bind("<Configure>", lambda e: self._render())
-        self.bind("<Button-1>", lambda e: on_click(name))
+        self.bind("<Configure>", lambda e=None: self._render())
+        self.bind("<Button-1>", lambda e=None: on_click(name))
 
     _mask_cache: dict = {}
 
@@ -1284,8 +1284,8 @@ class EffectTile(tk.Canvas):
         self.name, self.big, self.bars, self.selected = name, big, [], False
         self.accent, self._bg = CYAN, None
         self.n = self.COLS
-        self.bind("<Configure>", lambda e: self._layout())
-        self.bind("<Button-1>", lambda e: on_click(name))
+        self.bind("<Configure>", lambda e=None: self._layout())
+        self.bind("<Button-1>", lambda e=None: on_click(name))
 
     def _layout(self):
         self.delete("all")
@@ -3055,7 +3055,7 @@ class App(ctk.CTk):
         yield
         self.sensor_search.pack(side="right", padx=8)
         yield
-        self.sensor_search.bind("<KeyRelease>", lambda e: self._rebuild_sensors())
+        self.sensor_search.bind("<KeyRelease>", lambda e=None: self._rebuild_sensors())
         yield
         wrap = ctk.CTkFrame(right, fg_color=P["CARD"])
         yield
@@ -3439,7 +3439,7 @@ class App(ctk.CTk):
         yield
         self.profile_name.pack(side="left", fill="x", expand=True)
         yield
-        self.profile_name.bind("<Return>", lambda e: self._save_profile())
+        self.profile_name.bind("<Return>", lambda e=None: self._save_profile())
         yield
         self.primary(row, "Save current", self._save_profile, height=40, width=140).pack(side="left", padx=(10, 0))
         yield
