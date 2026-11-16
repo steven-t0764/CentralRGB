@@ -21,7 +21,9 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
 - **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
-- **Neon dark design**: deep navy panels with cyan and purple accents, glowing outlines on the selected item, gradient gauges and charts, a Home dashboard and a startup animation with the logo
+- **8 themes** (Cyber Cyan, Ultraviolet Pulse, Emerald Matrix, Crimson Overclock, Nebula Glass, Tactical Mech, Bio-Neural, Cyber Glitch) that switch instantly, no restart. Smooth, anti-aliased dials, graphs, cards and buttons, and a startup animation with the logo
+- **Clears conflicts for you**: when another RGB app (MSI Mystic Light, iCUE, Armoury Crate...) is holding your hardware, the Devices page offers to close it and re-detect your devices
+- **Lives in the system tray**: closing the window keeps your lighting and fan control running; right-click the tray icon to open or quit
 - **Edit by device type**: chips on the Lighting page (All Devices, RAM, GPU, Motherboard...) let you set the lighting for every device or just one kind
 - **Starts with Windows** (optional) and reapplies your lighting and fan profile at login
 - **Normal Windows installer**: choose where to install it, and get a desktop shortcut and an uninstaller
@@ -260,7 +262,7 @@ py central_rgb.py
 
 | Problem | Fix |
 |---|---|
-| RGB RAM or motherboard lighting is missing | Make sure **PawnIO** is installed (rerun the installer, or get it from pawnio.eu) and the app runs as administrator, then press **Rescan** |
+| RGB RAM or motherboard lighting is missing | If the Devices page shows **Other RGB software is running**, press **Close them** (on MSI boards, Mystic Light holds the motherboard and RAM lighting). Make sure **PawnIO** is installed (rerun the installer, or get it from pawnio.eu), then press **Rescan** and give it about 30 seconds |
 | A device keeps changing back to its old color | Another RGB app is running. Close it and turn off its auto-start. |
 | "OpenRGB closed right after starting" | A copy of OpenRGB is already open without its SDK server. Close it from the system tray and press **Rescan**. |
 | Fans page says no controllable fans | Your motherboard's fan chip may not be supported yet, or its fans are set to a fixed mode in the BIOS |
@@ -311,7 +313,8 @@ CentralRGB/
 
 Bug reports, device reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run from source,
 what to include in an issue (it helps a lot to paste the **Settings → Activity** log and your hardware list from
-**Monitor → Advanced → Copy**), and how to send a change.
+**Monitor → Advanced → Copy**), and how to send a change. The full log is also saved as
+`%APPDATA%\CentralRGB\activity.log`.
 
 ## License
 

@@ -8,7 +8,7 @@ Open an [issue](../../issues) and include:
 
 - **What happened** and what you expected
 - **Your hardware**: in the app, go to **Monitor → Advanced → Copy** and paste the result
-- **The activity log**: **Settings → Activity**. Copy the lines around the problem.
+- **The activity log**: **Settings → Activity**, or attach `%APPDATA%\CentralRGB\activity.log`. It also records any moment the window paused, with what the app was doing.
 - Your **Windows version**, and whether you used the **installer** or the **portable** .exe
 - For lighting problems: does the device work in [OpenRGB](https://openrgb.org) on its own? If not, it needs support in OpenRGB first.
 - For fan or sensor problems: does it show up in [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) on its own?
@@ -32,15 +32,16 @@ Open an [issue](../../issues) and include:
 | `central_rgb.py` | Window, pages and custom-drawn widgets |
 | `rgb_engine.py` | Finding, downloading and starting OpenRGB, lighting effects, system check, settings |
 | `hw_monitor.py` | LibreHardwareMonitor sensors, fan-curve logic and safety limits, system details |
-| `win_effects.py` | Frosted-glass window, dark title bar, opacity |
+| `win_effects.py` | Dark title bar, title bar colors, flicker-free redraws |
 | `central_rgb.iss` | Inno Setup installer (including the optional PawnIO driver install) |
 | `tests/` | Simulated hardware, the fan-safety tests and a page-by-page preview (see [tests/README.md](tests/README.md)) |
 
 ## Sending a change
 
-1. Fork the repo and create a branch (`fix-ram-detection`, `add-wave-effect`...).
+1. Create a branch (`fix-ram-detection`, `add-wave-effect`...). Collaborators can branch in this repo; everyone else, fork it first. Don't push straight to `main`.
 2. Keep each pull request focused on one thing, and describe what you tested and on which hardware.
-3. Push your branch. GitHub Actions builds the .exe and installer on Windows, so check that the build passes.
+3. Push your branch and open a pull request into `main`. GitHub Actions runs the tests, builds the .exe and installer on Windows and runs the app's self-test, so check that the build passes.
+   - To try a build on a real PC before merging, push it to the `test` branch: it publishes a **Test build (not a release)** pre-release with the .exe and installer.
 4. Anything that touches **fan control** must keep the safety limits: the minimum speeds, the 90 °C override, and handing fans back to the BIOS on exit. `python -m unittest discover tests` checks them.
 5. Put any new test, fake device or preview script in the `tests/` folder.
 
