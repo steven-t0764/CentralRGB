@@ -1675,39 +1675,78 @@ class Tray:
             pass
 
 
-def claim_single_instance(app_q, wait=0.0) -> bool:
-    """Become the running copy. Returns False if Central RGB is already running (it is asked to show itself).
-    wait: keep trying this many seconds first (used after a restart, while the old copy closes)."""
+_instance_server = None
+
+
+def version_tuple(v) -> tuple:
+    """'2.3.10' -> (2, 3, 10); anything unreadable counts as (0,)."""
+    import re
+    nums = re.findall(r"\d+", str(v))[:3]
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
+def _bind_instance_port(wait):
     import socket
     end = time.time() + wait
     while True:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.bind(("127.0.0.1", INSTANCE_PORT))
             srv.listen(4)
-            break
+            return srv
         except OSError:
             srv.close()
-            if time.time() < end:
-                time.sleep(0.25)
-                continue
-            srv = None
-            break
+            if time.time() >= end:
+                return None
+            time.sleep(0.25)
+
+
+def claim_single_instance(app_q, wait=0.0, version=APP_VERSION) -> bool:
+    """Become the running copy. Returns False if Central RGB is already running (it is asked to show itself).
+    If the running copy is an older version (from 2.3.3 on), it quits properly (fans back to the BIOS) and
+    this newer copy takes over, so opening a freshly downloaded update never shows the old window.
+    wait: keep trying this many seconds first (used after a restart, while the old copy closes)."""
+    import socket
+    srv = _bind_instance_port(wait)
     if srv is None:
         try:
             with socket.create_connection(("127.0.0.1", INSTANCE_PORT), timeout=2) as c:
-                c.sendall(b"show")
+                c.sendall(f"show {version}".encode())
+                try:
+                    reply = c.recv(16)
+                except OSError:
+                    reply = b""
         except OSError:
             return True                     # port taken by something else: just run
-        return False
+        if not reply.startswith(b"bye"):
+            return False                    # same or newer copy running: it shows itself
+        srv = _bind_instance_port(20.0)     # older copy is shutting down: take its place
+        if srv is None:
+            return False
+
+    global _instance_server
+    _instance_server = srv                  # held for the life of the process; freed when it exits
 
     def serve():
         while True:
             try:
                 conn, _ = srv.accept()
                 with conn:
-                    if conn.recv(16).startswith(b"show"):
-                        app_q.put(("tray", "show"))
+                    conn.settimeout(2)
+                    msg = conn.recv(64)
+                    if not msg.startswith(b"show"):
+                        continue
+                    parts = msg.split()
+                    newer = len(parts) > 1 and version_tuple(parts[1].decode(errors="ignore")) > version_tuple(version)
+                    conn.sendall(b"bye" if newer else b"ok")
+                    try:
+                        conn.recv(1)         # let the caller hang up first, so our port is free right away
+                    except OSError:
+                        pass
+                    if newer:                # a newer Central RGB was opened: hand over to it
+                        app_q.put(("tray", "quit"))
+                        return
+                    app_q.put(("tray", "show"))
             except OSError:
                 return
     threading.Thread(target=serve, daemon=True).start()
