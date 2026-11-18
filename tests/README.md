@@ -9,6 +9,7 @@ preview script goes in this folder.**
 | `fake_lhm.py` | Simulated LibreHardwareMonitor: CPU, GPU, motherboard and SSD sensors, plus 5 controllable fans (one is an AIO pump). |
 | `test_fan_safety.py` | Checks the fan-safety rules: fans never below 20 %, pumps never below 70 %, all fans to 100 % at 90 °C, and fans handed back to the BIOS on Auto and on close. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |
+| `record_demo.py` | Records the README's "See it in action" GIF: a scripted mouse tour of the real app on the fake hardware (Linux, needs Xvfb, xdotool and ffmpeg). Copy its output to `assets/demo.gif`. |
 
 ## Run the tests
 
@@ -29,3 +30,11 @@ python tests/preview.py --keep-open           # leave the window open to click a
 On Linux with no screen, wrap it: `xvfb-run -a -s "-screen 0 1300x840x24" python3 tests/preview.py`.
 It uses a temporary settings folder, so your real Central RGB settings are never touched.
 The CPU, memory, network and disk numbers are demo values; add `--real-stats` to show your own.
+
+## Re-record the README demo
+
+```
+xvfb-run -a -s "-screen 0 1120x720x24" python3 tests/record_demo.py assets/demo.gif
+```
+
+It clicks fixed spots for the default 1120x720 window. If the layout changes, update `TOUR` at the top of the script.
