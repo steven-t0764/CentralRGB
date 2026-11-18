@@ -9,7 +9,7 @@
 #define AppName "Central RGB"
 ; release builds pass the tag version with /DAppVersion=...; this is the default for local builds
 #ifndef AppVersion
-  #define AppVersion "2.3.2"
+  #define AppVersion "2.3.3"
 #endif
 #define AppExe "Central RGB.exe"
 #define PawnIOUrl "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe"
