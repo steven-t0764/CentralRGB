@@ -41,7 +41,7 @@ from openrgb.utils import DeviceType, ModeColors, RGBColor
 DeviceType._missing_ = classmethod(lambda cls, value: cls.UNKNOWN)
 
 APP_NAME = "Central RGB"
-APP_VERSION = "2.4.0"   # release builds overwrite this with the release tag
+APP_VERSION = "2.3.2"   # release builds overwrite this with the release tag
 SDK_HOST = "127.0.0.1"
 SDK_PORT = 6742
 RELEASES_PAGE = "https://openrgb.org/releases.html"
