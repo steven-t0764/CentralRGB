@@ -2043,6 +2043,32 @@ class App(ctk.CTk):
                 steps.append(f"tray: icon visible={self.tray.icon.visible}, X hides the window, Open restores it")
             self.overlay_preview.render(self.overlay_cfg, {"name": "test", "fps": 144, "low": 110, "ms": 6.9}, {})
             steps.append("overlay preview: ok")
+            if eng.IS_WIN:                     # the overlay really sits above a game window (in front and behind)
+                game = tk.Toplevel(self)
+                game.geometry("900x600+80+80")
+                game.update()
+                ghwnd = int(fpo._u32().GetParent(game.winfo_id()) or game.winfo_id())
+                ow = fpo.OverlayWindow(self, self._overlay_colors(), FONT)
+                sample = {"name": "test", "fps": 144, "low": 110, "ms": 6.9}
+                ow.update_overlay(self.overlay_cfg, sample, {}, ghwnd, True)
+                self.update()
+                top_in_front = ow.is_topmost()
+                ow.update_overlay(self.overlay_cfg, sample, {}, ghwnd, False)
+                self.update()
+                u, above, h = fpo._u32(), False, ow.hwnd
+                for _ in range(400):                         # walk down the z-order from the overlay to the game
+                    h = u.GetWindow(h, 2)                    # GW_HWNDNEXT
+                    if not h:
+                        break
+                    if int(h) == ghwnd:
+                        above = True
+                        break
+                ow.destroy()
+                game.destroy()
+                if not top_in_front or not above:
+                    raise RuntimeError(f"Overlay placement failed (topmost while game in front={top_in_front}, "
+                                       f"above the game when it's behind={above})")
+                steps.append("overlay: on top of the game when it's in front, and just above it when it isn't")
             res = eng.system_check()
             steps.append(f"system check: {len(res)} results")
             for level, msg in res:

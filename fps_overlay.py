@@ -33,6 +33,37 @@ from pathlib import Path
 
 import rgb_engine as eng
 
+# Windows API with proper 64-bit types. Without argtypes, ctypes passes plain ints as 32-bit values, so
+# HWND_TOPMOST (-1) arrived as 0xFFFFFFFF, Windows rejected the call, and the overlay stayed *behind* the
+# game whenever the game was in front (it only showed after tabbing out).
+HWND_TOPMOST, HWND_NOTOPMOST, HWND_TOP = -1, -2, 0
+_user32 = None
+
+
+def _u32():
+    global _user32
+    if _user32 is None and eng.IS_WIN:
+        from ctypes import wintypes as w
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        u.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT]
+        u.SetWindowPos.restype = w.BOOL
+        u.GetWindow.argtypes = [w.HWND, w.UINT]
+        u.GetWindow.restype = w.HWND
+        u.GetParent.argtypes = [w.HWND]
+        u.GetParent.restype = w.HWND
+        u.GetForegroundWindow.restype = w.HWND
+        u.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+        u.IsWindow.argtypes = [w.HWND]
+        u.IsIconic.argtypes = [w.HWND]
+        u.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+        u.ClientToScreen.argtypes = [w.HWND, ctypes.POINTER(w.POINT)]
+        u.GetWindowLongPtrW.argtypes = [w.HWND, ctypes.c_int]
+        u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        u.SetWindowLongPtrW.argtypes = [w.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+        _user32 = u
+    return _user32
+
 PM_API = "https://api.github.com/repos/GameTechDev/PresentMon/releases/latest"
 PM_FALLBACK = "https://github.com/GameTechDev/PresentMon/releases/download/v2.3.1/PresentMon-2.3.1-x64.exe"
 PM_ASSET = re.compile(r"^PresentMon-[\d.]+-x64\.exe$", re.I)
@@ -61,13 +92,7 @@ def overlay_settings(settings) -> dict:
 def foreground_pid() -> int:
     if not eng.IS_WIN:
         return 0
-    try:
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
-        pid = ctypes.c_ulong(0)
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return int(pid.value)
-    except Exception:
-        return 0
+    return foreground_window()[1]
 
 
 def foreground_window() -> tuple[int, int]:
@@ -75,10 +100,12 @@ def foreground_window() -> tuple[int, int]:
     if not eng.IS_WIN:
         return 0, 0
     try:
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
-        pid = ctypes.c_ulong(0)
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return int(hwnd), int(pid.value)
+        from ctypes import wintypes as w
+        u = _u32()
+        hwnd = u.GetForegroundWindow()
+        pid = w.DWORD(0)
+        u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(hwnd or 0), int(pid.value)
     except Exception:
         return 0, 0
 
@@ -91,20 +118,21 @@ def game_window_state(hwnd: int):
     """Screen rectangle (x, y, w, h) of the game's drawing area, 'minimized', or None if the window is gone."""
     if not eng.IS_WIN or not hwnd:
         return None
-    u = ctypes.windll.user32
     try:
+        from ctypes import wintypes as wt
+        u = _u32()
         if not u.IsWindow(hwnd):
             return None
         if u.IsIconic(hwnd):
             return "minimized"
-        r = _RECT()
+        r = wt.RECT()
         u.GetClientRect(hwnd, ctypes.byref(r))
-        pt = (ctypes.c_long * 2)(0, 0)
+        pt = wt.POINT(0, 0)
         u.ClientToScreen(hwnd, ctypes.byref(pt))
         w, h = r.right - r.left, r.bottom - r.top
         if w < 200 or h < 150:
             return None
-        return pt[0], pt[1], w, h
+        return pt.x, pt.y, w, h
     except Exception:
         return None
 
@@ -378,12 +406,12 @@ class OverlayWindow(tk.Toplevel):
         if self._styled or not eng.IS_WIN:
             return
         try:
-            user32 = ctypes.windll.user32
-            self.hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            u = _u32()
+            self.hwnd = int(u.GetParent(self.winfo_id()) or self.winfo_id())
             GWL_EXSTYLE = -20
-            style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
+            style = u.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
             # layered + transparent (clicks pass through) + tool window (no taskbar button) + never takes focus
-            user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
+            u.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
             self._styled = True
         except Exception:
             pass
@@ -401,20 +429,31 @@ class OverlayWindow(tk.Toplevel):
             except tk.TclError:
                 pass
             return
-        u = ctypes.windll.user32
-        flags = 0x0001 | 0x0002 | 0x0010   # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        u = _u32()
+        flags = 0x0001 | 0x0002 | 0x0010 | 0x0040   # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
         try:
             if game_in_front:
-                u.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, flags)               # HWND_TOPMOST
+                ok = u.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)     # above everything, the game included
+                if not ok and not getattr(self, "_warned", False):
+                    self._warned = True
+                    eng_log = getattr(self.master, "log", None)
+                    if eng_log:
+                        eng_log(f"Overlay couldn't move on top (Windows error {ctypes.get_last_error()}).", "warn")
             else:
-                u.SetWindowPos(self.hwnd, -2, 0, 0, 0, 0, flags)               # HWND_NOTOPMOST
-                above = u.GetWindow(game_hwnd, 3)                              # GW_HWNDPREV: window just above the game
-                if above and above != self.hwnd:
-                    u.SetWindowPos(self.hwnd, above, 0, 0, 0, 0, flags)        # slot in just below it = just above the game
+                u.SetWindowPos(self.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+                above = u.GetWindow(game_hwnd, 3)                                 # GW_HWNDPREV: window just above the game
+                if above and int(above) != self.hwnd:
+                    u.SetWindowPos(self.hwnd, above, 0, 0, 0, 0, flags)           # just below that = just above the game
                 elif not above:
-                    u.SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, flags)            # game is on top: go above it
+                    u.SetWindowPos(self.hwnd, HWND_TOP, 0, 0, 0, 0, flags)        # game is on top: go above it
         except Exception:
             pass
+
+    def is_topmost(self) -> bool:
+        """For the self-test: is the overlay really in the always-on-top layer?"""
+        if not eng.IS_WIN or not self.hwnd:
+            return False
+        return bool(_u32().GetWindowLongPtrW(self.hwnd, -20) & 0x8)        # WS_EX_TOPMOST
 
     def update_overlay(self, cfg, fps, metrics, game_hwnd=0, game_in_front=True, stale=False):
         rect = game_window_state(game_hwnd) if eng.IS_WIN else (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
