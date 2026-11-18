@@ -101,8 +101,14 @@ THEMES = {
                          TEXT="#f0ecff", MUTED="#a69fd0", FAINT="#6f679c", accent="#36e2ff", PURPLE="#ff3fd2",
                          TEAL="#36e2ff", BLUE="#6a5cff", PINK="#ff3fd2", VIOLET="#8b5cff",
                          border="#c13fb8", border_w=1),
+    "gunmetal": dict(name="Gunmetal", desc="Compact: neutral panels, only your lighting brings colour",
+                     BG="#111214", SIDE="#0c0d0f", CARD="#17181b", CARD2="#1f2024", LINE="#2a2c31",
+                     TEXT="#ececee", MUTED="#a0a2a8", FAINT="#6b6e75", TRACK="#2a2c31", HOVER="#16171a",
+                     SEL="#1d1f23", BTN="#1e2023", BTN_HOVER="#26282c", BTN_LINE="#2f3237",
+                     accent="#5cc8da", chrome="#e6e7ea", PURPLE="#7b7e86", TEAL="#5cc8da", BLUE="#5cc8da",
+                     PINK="#5cc8da", VIOLET="#5cc8da"),
 }
-DEFAULT_THEME = "cyber_cyan"
+DEFAULT_THEME = "gunmetal"
 
 
 def _saved_theme() -> str:
@@ -138,7 +144,7 @@ def _apply_theme(key: str):
     CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET = acc, s["PURPLE"], s["TEAL"], s["BLUE"], s["PINK"], s["VIOLET"]
     GRAD = (PINK, VIOLET, CYAN)
     CARD_BORDER, CARD_BORDER_W = s.get("border"), s.get("border_w", 0)
-    DEFAULT_ACCENT = CYAN
+    DEFAULT_ACCENT = s.get("chrome", CYAN)      # buttons, sliders, selection (Gunmetal keeps them off-white)
 
 
 def windows_accent(fallback="#60cdff") -> str:
@@ -156,8 +162,10 @@ def windows_accent(fallback="#60cdff") -> str:
 
 
 WIN11 = eng.IS_WIN and fx.win_build() >= 22000
-FONT = "Segoe UI Variable Text" if WIN11 else ("Segoe UI" if eng.IS_WIN else "DejaVu Sans")
+FONT = "Segoe UI Variable Text" if WIN11 else ("Segoe UI" if eng.IS_WIN else "Selawik")   # Selawik: Segoe stand-in for previews
 FONT_DISPLAY = "Segoe UI Variable Display" if WIN11 else FONT
+FONT_SEMI = ("Segoe UI Variable Text Semibold" if WIN11 else
+             ("Segoe UI Semibold" if eng.IS_WIN else "Selawik Semibold"))   # "bold" text uses semibold, not 700
 ICON_FONT = "Segoe Fluent Icons" if WIN11 else ("Segoe MDL2 Assets" if eng.IS_WIN else None)
 MONO = "Cascadia Mono" if eng.IS_WIN else "DejaVu Sans Mono"
 
@@ -535,11 +543,11 @@ class CreateTile(tk.Canvas):
         self._key = key
         fill = P["HOVER"] if self._hover else P["CARD2"]
         self._img = ImageTk.PhotoImage(aa_round_rect(w - 6, h - 6, 9, fill, P["CARD"],
-                                                     outline=CYAN if self._hover else P["LINE"], width=1.5))
+                                                     outline=P["MUTED"] if self._hover else P["LINE"], width=1))
         self.delete("all")
         self.create_image(3, 3, image=self._img, anchor="nw")
-        self.create_text(w / 2, h / 2 - 9, text="+", fill=CYAN, font=(FONT_DISPLAY, 22, "bold"))
-        self.create_text(w / 2, h / 2 + 16, text="Create preset", fill=P["TEXT"], font=(FONT, 10, "bold"))
+        self.create_text(w / 2, h / 2 - 8, text="+", fill=P["MUTED"], font=(FONT_DISPLAY, 18))
+        self.create_text(w / 2, h / 2 + 14, text="Create preset", fill=P["MUTED"], font=(FONT, 10))
 
 
 class PresetEditor(ctk.CTkToplevel):
@@ -837,7 +845,7 @@ class Splash(tk.Frame):
 
 
 
-_TYPE = {9: 11, 10: 11, 11: 12, 12: 13, 13: 14}     # Fluent sizes: body 14, caption 12
+_TYPE = {9: 10, 10: 11, 11: 11, 12: 12, 13: 13, 14: 13}   # compact scale: body 13, caption 11-12
 
 
 def spaced(text):
@@ -846,6 +854,8 @@ def spaced(text):
 
 
 def F(size, weight="normal", display=False):
+    if weight == "bold":
+        return ctk.CTkFont(family=FONT_SEMI, size=_TYPE.get(size, size))
     return ctk.CTkFont(family=FONT_DISPLAY if display else FONT, size=_TYPE.get(size, size), weight=weight)
 
 
@@ -859,14 +869,16 @@ class NavItem(ctk.CTkFrame):
     """Windows 11 Settings-style navigation item: accent pill, icon, label."""
 
     def __init__(self, master, name, glyph, fallback, command):
-        super().__init__(master, fg_color="transparent", corner_radius=8, height=40, border_width=0)
+        super().__init__(master, fg_color="transparent", corner_radius=6, height=32, border_width=0)
         self.pack_propagate(False)
-        self.pill = ctk.CTkFrame(self, width=3, height=16, corner_radius=2, fg_color="transparent")
-        self.pill.pack(side="left", padx=(4, 10))
-        self.icon = icon_label(self, glyph, fallback, size=16, width=22)
-        self.icon.pack(side="left")
-        self.text = ctk.CTkLabel(self, text=name, font=F(14), text_color=P["TEXT"], anchor="w")
-        self.text.pack(side="left", padx=14, fill="x", expand=True)
+        self.icon = icon_label(self, glyph, fallback, size=15, width=20, color=P["MUTED"])
+        self.icon.pack(side="left", padx=(10, 0))
+        self.text = ctk.CTkLabel(self, text=name, font=F(13), text_color=P["MUTED"], anchor="w")
+        self.text.pack(side="left", padx=10, fill="x", expand=True)
+        # signature: the open page is marked by one lit LED in your current lighting colour
+        self.pill = tk.Canvas(self, width=14, height=14, bg=P["SIDE"], highlightthickness=0)
+        self.pill.pack(side="right", padx=(0, 8))
+        self._dot = None
         self.on = False
         for w in (self, self.icon, self.text, self.pill):
             # e=None: CustomTkinter 6 can call these without an event
@@ -877,14 +889,22 @@ class NavItem(ctk.CTkFrame):
     def _hover(self, inside):
         if not self.on and self.winfo_exists():
             self.configure(fg_color=P["HOVER"] if inside else "transparent")
+            self.pill.configure(bg=P["HOVER"] if inside else P["SIDE"])
 
-    def set(self, on, accent):
-        if (on, accent) == getattr(self, "_style", None):
+    def set(self, on, led):
+        if (on, led) == getattr(self, "_style", None):
             return                                   # unchanged: skip CustomTkinter's redraw
-        self._style = (on, accent)
+        self._style = (on, led)
         self.on = on
         self.configure(fg_color=P["SEL"] if on else "transparent")
-        self.pill.configure(fg_color=accent if on else "transparent")
+        self.text.configure(text_color=P["TEXT"] if on else P["MUTED"])
+        self.icon.configure(text_color=P["TEXT"] if on else P["MUTED"])
+        bg = P["SEL"] if on else P["SIDE"]
+        self.pill.configure(bg=bg)
+        self.pill.delete("all")
+        if on:                                       # soft halo + bright core, like an LED behind diffuser
+            self.pill.create_oval(2, 2, 12, 12, fill=hexcol(mix(hex2rgb(bg), hex2rgb(led), 0.35)), width=0)
+            self.pill.create_oval(4, 4, 10, 10, fill=led, width=0)
 
 
 def fmt(v, unit="", nd=0, none="—"):
@@ -894,7 +914,7 @@ def fmt(v, unit="", nd=0, none="—"):
 def temp_color(t):
     if t is None:
         return P["MUTED"]
-    return OK if t < 65 else WARN if t < 82 else BAD
+    return P["TEXT"] if t < 70 else WARN if t < 85 else BAD      # colour only when it means something
 
 
 # ----------------------------------------------------------------------------- canvas widgets
@@ -984,10 +1004,13 @@ class LedStrip(tk.Canvas):
         r = min(step * 0.26, self.h * 0.16)
         for i in range(self.n):
             cx = step * (i + 0.5)
-            self.glows.append(self.create_rectangle(cx - r * 2.1, cy - r * 2.1, cx + r * 2.1, cy + r * 2.1, width=0, fill=P["CARD"]))
-            self.items.append(self.create_rectangle(cx - r, cy - r, cx + r, cy + r, width=0, fill=P["CARD"]))
+            self.glows.append(self.create_oval(cx - r * 2.2, cy - r * 2.2, cx + r * 2.2, cy + r * 2.2, width=0, fill=P["CARD"]))
+            self.items.append(self.create_oval(cx - r, cy - r, cx + r, cy + r, width=0, fill=P["CARD"]))
+        if getattr(self, "_last", None):                 # resized: redraw what was last shown
+            self.show(self._last)
 
     def show(self, colors):
+        self._last = colors
         n = len(self.items)
         for i in range(n):
             c = colors[int(i * len(colors) / n)] if colors else (0, 0, 0)
@@ -1023,19 +1046,22 @@ class Sparkline(tk.Canvas):
         bgc = self.bgc
         img = Image.new("RGB", (W, H), bgc)
         d = ImageDraw.Draw(img)
+        if getattr(self, "grid_lines", False):                # muted guides at 25 / 50 / 75 %
+            for q in (0.25, 0.5, 0.75):
+                y = (h - 3 - (h - 10) * q) * k
+                d.line([(0, y), (W, y)], fill=imix(bgc, (255, 255, 255), 0.05), width=k)
         for vals, color in series:
             rgb = hex2rgb(color)
             fkey = (W, H, color, bgc)
             if fkey not in Sparkline._fill_cache:            # fading fill colour + fade mask, made once
-                grad = Image.linear_gradient("L").resize((W, H)).point(lambda v: int((255 - v) * 0.55))
-                Sparkline._fill_cache[fkey] = (Image.new("RGB", (W, H), imix(bgc, rgb, 0.30)), grad)
+                grad = Image.linear_gradient("L").resize((W, H)).point(lambda v: int((255 - v) * 0.45))
+                Sparkline._fill_cache[fkey] = (Image.new("RGB", (W, H), imix(bgc, rgb, 0.18)), grad)
             fill, grad = Sparkline._fill_cache[fkey]
             x0 = w - step * (len(vals) - 1)
             pts = [((x0 + i * step) * k, (h - 3 - (h - 10) * min(v, top) / top) * k) for i, v in enumerate(vals)]
             m = Image.new("L", (W, H), 0)
             ImageDraw.Draw(m).polygon([(pts[0][0], H)] + pts + [(pts[-1][0], H)], fill=255)
             img.paste(fill, (0, 0), ImageChops.multiply(m, grad))
-            d.line(pts, fill=imix(bgc, rgb, 0.30), width=6 * k, joint="curve")   # glow
             d.line(pts, fill=rgb, width=2 * k, joint="curve")
         out = img.resize((w, h), Image.BILINEAR)
         if self._img is None or (self._img.width(), self._img.height()) != (w, h):
@@ -1422,9 +1448,9 @@ class PresetTile(tk.Canvas):
         """Rounded-corner mask and selection-ring mask for a tile size (shared by all tiles)."""
         if (W, H) not in PresetTile._mask_cache:
             m = Image.new("L", (W * AA, H * AA), 0)
-            ImageDraw.Draw(m).rounded_rectangle((2 * AA, 2 * AA, (W - 2) * AA - 1, (H - 2) * AA - 1), 9 * AA, fill=255)
+            ImageDraw.Draw(m).rounded_rectangle((2 * AA, 2 * AA, (W - 2) * AA - 1, (H - 2) * AA - 1), 6 * AA, fill=255)
             r = Image.new("L", (W * AA, H * AA), 0)
-            ImageDraw.Draw(r).rounded_rectangle((AA, AA, W * AA - AA - 1, H * AA - AA - 1), 10 * AA, outline=255, width=2 * AA)
+            ImageDraw.Draw(r).rounded_rectangle((AA, AA, W * AA - AA - 1, H * AA - AA - 1), 8 * AA, outline=255, width=2 * AA)
             PresetTile._mask_cache[(W, H)] = (m.resize((W, H), Image.LANCZOS), r.resize((W, H), Image.LANCZOS))
         return PresetTile._mask_cache[(W, H)]
 
@@ -1444,8 +1470,8 @@ class PresetTile(tk.Canvas):
             im = Image.new("RGB", (len(cols), 1))
             im.putdata(cols)
             im = im.resize((w, h), Image.BILINEAR)
-        shade = Image.new("RGB", (w, h), (0, 0, 0))            # darken slightly so the title reads well
-        im = Image.blend(im, shade, 0.22)
+        fade = Image.linear_gradient("L").resize((w, h)).point(lambda v: int(max(0, v - 110) * 1.6))
+        im = Image.composite(Image.new("RGB", (w, h), (8, 9, 11)), im, fade)   # dark band under the name
         W, H = w + 4, h + 4
         mask, ring = PresetTile._masks(W, H)
         bg = Image.new("RGB", (W, H), hex2rgb(P["CARD"]))
@@ -1457,12 +1483,7 @@ class PresetTile(tk.Canvas):
         self._img = ImageTk.PhotoImage(bg)
         self.delete("all")
         self.create_image(0, 0, image=self._img, anchor="nw")
-        words = self.name.upper().split(" ")
-        text = "\n".join([" ".join(words[:len(words) // 2 or 1]), " ".join(words[len(words) // 2 or 1:])]) \
-            if len(words) > 1 else words[0]
-        for dx, dy, col in ((1, 2, "#000000"), (0, 0, "#ffffff")):
-            self.create_text(w / 2 + 2 + dx, h / 2 + 2 + dy, text=text, fill=col, justify="center",
-                             font=(FONT, 12, "bold"))
+        self.create_text(12, h - 8, text=self.name, fill="#f2f2f4", anchor="sw", font=(FONT_SEMI, 10))
 
     def select(self, on, accent):
         if (on, accent) != (self.selected, self.accent):
@@ -1475,7 +1496,7 @@ class EffectTile(tk.Canvas):
     COLS = 24
 
     def __init__(self, master, name, on_click, big=False):
-        self.h = 84 if big else 44
+        self.h = 84 if big else 36
         super().__init__(master, height=self.h, bg=P["CARD"], highlightthickness=0, cursor="hand2")
         self.name, self.big, self.bars, self.selected = name, big, [], False
         self.accent, self._bg = CYAN, None
@@ -1487,8 +1508,8 @@ class EffectTile(tk.Canvas):
         self.delete("all")
         w = max(self.winfo_width(), 40)
         on = self.selected
-        self._bg = ImageTk.PhotoImage(aa_round_rect(w, self.h, 8, P["SEL"] if on else P["CARD2"], P["CARD"],
-                                                    outline=self.accent if on else P["LINE"], width=2 if on else 1))
+        self._bg = ImageTk.PhotoImage(aa_round_rect(w, self.h, 6, P["CARD2"], P["CARD"],
+                                                    outline=self.accent if on else P["LINE"], width=1))
         self.create_image(0, 0, image=self._bg, anchor="nw")
         x0, x1 = 10, w - 10                                         # live strip, inset from the corners
         step = (x1 - x0) / self.COLS
@@ -1498,10 +1519,9 @@ class EffectTile(tk.Canvas):
         icon = EFFECT_ICONS.get(self.name, "•")
         if self.big:
             self.create_text(14, 24, text=icon, anchor="w", fill=P["FAINT"], font=(FONT, 12))
-        if not self.big:
-            self.create_text(12, y, text=icon, anchor="w", fill=P["MUTED"], font=(FONT, 10))
-        self.create_text(14 if self.big else 28, y, text=self.name, anchor="w", fill=P["TEXT"],
-                         font=(FONT, 11 if self.big else 10, "bold" if self.big else "normal"))
+        self.create_text(14 if self.big else 10, y, text=self.name, anchor="w",
+                         fill=P["TEXT"] if (on or self.big) else P["MUTED"],
+                         font=(FONT_SEMI if on or self.big else FONT, 11 if self.big else 10))
         self.sub = self.create_text(14, y + 19, text="", anchor="w", fill=P["MUTED"], font=(FONT, 8))
         self._sub()
 
@@ -1541,63 +1561,60 @@ class DeviceArt(tk.Canvas):
 
 class DeviceCard(SmoothFrame):
     def __init__(self, master, key, tname, name, leds, enabled, on_toggle, on_edit):
-        super().__init__(master, fg_color=P["CARD"], corner_radius=6)
+        super().__init__(master, fg_color=P["CARD"], corner_radius=8)
         accent_bar(self)
         self.key = key
         top = ctk.CTkFrame(self, fg_color="transparent")
-        top.pack(fill="x", padx=16, pady=(14, 6))
-        ctk.CTkLabel(top, text=TYPE_ICONS.get(tname, "◆"), width=40, height=40, corner_radius=10,
-                     fg_color=P["SEL"], font=F(18), text_color=CYAN).pack(side="left")
+        top.pack(fill="x", padx=12, pady=(12, 4))
         # controls are packed before the text so a long device name can never squeeze them
         self.switch = Switch(top, text="", width=44, command=lambda: on_toggle(key, self.switch.get() == 1))
         self.switch.pack(side="right")
-        self.edit_btn = SmoothButton(top, text="Customize", width=96, height=30, corner_radius=15, font=F(13),
+        self.edit_btn = SmoothButton(top, text="Customize", width=76, height=26, corner_radius=6, font=F(11),
                                       fg_color=P["BTN"], hover_color=P["BTN_HOVER"], text_color=P["TEXT"],
                                       border_width=1, border_color=P["BTN_LINE"], command=lambda: on_edit(key))
-        self.edit_btn.pack(side="right", padx=10)
+        self.edit_btn.pack(side="right", padx=8)
         info = ctk.CTkFrame(top, fg_color="transparent")
-        info.pack(side="left", fill="x", expand=True, padx=12)
-        ctk.CTkLabel(info, text=name, font=F(14, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
-        ctk.CTkLabel(info, text=f"{tname} · {leds} LEDs", font=F(11), text_color=P["MUTED"], anchor="w").pack(fill="x")
+        info.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        ctk.CTkLabel(info, text=name, font=F(13, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
+        ctk.CTkLabel(info, text=f"{tname} · {leds} LEDs", font=F(11), text_color=P["FAINT"], anchor="w").pack(fill="x")
         if enabled:
             self.switch.select()
-        self.strip = GlowBar(self, height=20, thickness=6)
-        self.strip.n = max(1, min(leds, 24))
-        self.strip.pack(fill="x", padx=12, pady=(4, 14))
+        self.strip = LedStrip(self, n=max(1, min(leds, 32)), height=20)
+        self.strip.pack(fill="x", padx=8, pady=(0, 8))
 
 
 class FanCard(SmoothFrame):
     def __init__(self, master, fan, on_manual, on_reset):
-        super().__init__(master, fg_color=P["CARD"], corner_radius=6)
+        super().__init__(master, fg_color=P["CARD"], corner_radius=8)
         accent_bar(self)
         self.fid, self.on_manual, self.touched = fan["id"], on_manual, 0
         top = ctk.CTkFrame(self, fg_color="transparent")
-        top.pack(fill="x", padx=16, pady=(14, 0))
-        self.spin = tk.Canvas(top, width=40, height=40, bg=P["CARD"], highlightthickness=0)
+        top.pack(fill="x", padx=12, pady=(12, 0))
+        self.spin = tk.Canvas(top, width=28, height=28, bg=P["CARD"], highlightthickness=0)
         self.spin.pack(side="left")
-        self.blades = [self.spin.create_arc(4, 4, 36, 36, start=a, extent=50, fill=P["FAINT"], outline="")
+        self.blades = [self.spin.create_arc(2, 2, 26, 26, start=a, extent=50, fill=P["FAINT"], outline="")
                        for a in (0, 120, 240)]
-        self.spin.create_oval(15, 15, 25, 25, fill=P["CARD"], outline="")
+        self.spin.create_oval(10, 10, 18, 18, fill=P["CARD"], outline="")
         self.angle = 0
-        self.badge = SmoothButton(top, text="", width=78, height=24, corner_radius=12, font=F(10, "bold"),
-                                   fg_color=P["SEL"], hover_color=P["HOVER"], text_color=CYAN,
-                                   border_width=1, border_color=P["BTN_LINE"],
+        self.badge = SmoothButton(top, text="", width=64, height=22, corner_radius=6, font=F(10),
+                                   fg_color=P["CARD2"], hover_color=P["BTN_HOVER"], text_color=P["MUTED"],
+                                   border_width=1, border_color=P["CARD2"],
                                    command=lambda: on_reset(self.fid))
         self.badge.pack(side="right")
         info = ctk.CTkFrame(top, fg_color="transparent")
-        info.pack(side="left", fill="x", expand=True, padx=12)
-        ctk.CTkLabel(info, text=fan["name"], font=F(14, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
-        ctk.CTkLabel(info, text=fan["hw"], font=F(11), text_color=P["MUTED"], anchor="w").pack(fill="x")
+        info.pack(side="left", fill="x", expand=True, padx=10)
+        ctk.CTkLabel(info, text=fan["name"], font=F(13, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
+        ctk.CTkLabel(info, text=fan["hw"], font=F(11), text_color=P["FAINT"], anchor="w").pack(fill="x")
         mid = ctk.CTkFrame(self, fg_color="transparent")
-        mid.pack(fill="x", padx=16, pady=(10, 0))
-        self.rpm = ctk.CTkLabel(mid, text="—", font=F(26, "bold"), text_color=P["TEXT"])
+        mid.pack(fill="x", padx=12, pady=(6, 0))
+        self.rpm = ctk.CTkLabel(mid, text="—", font=F(20, display=True), text_color=P["TEXT"])
         self.rpm.pack(side="left")
-        ctk.CTkLabel(mid, text=" RPM", font=F(12), text_color=P["MUTED"]).pack(side="left", pady=(8, 0))
-        self.pct = ctk.CTkLabel(mid, text="", font=F(13, "bold"), text_color=P["MUTED"])
+        ctk.CTkLabel(mid, text=" RPM", font=F(11), text_color=P["FAINT"]).pack(side="left", pady=(6, 0))
+        self.pct = ctk.CTkLabel(mid, text="", font=ctk.CTkFont(family=MONO, size=11), text_color=P["MUTED"])
         self.pct.pack(side="right")
-        self.slider = Slider(self, from_=hwm.FAN_FLOOR, to=100, height=16, fg_color=P["TRACK"],
+        self.slider = Slider(self, from_=hwm.FAN_FLOOR, to=100, height=14, fg_color=P["TRACK"],
                                     button_color=P["TEXT"], button_hover_color="white", command=self._slide)
-        self.slider.pack(fill="x", padx=16, pady=(8, 16))
+        self.slider.pack(fill="x", padx=12, pady=(6, 12))
 
     def _slide(self, v):
         self.touched = time.time()
@@ -1615,12 +1632,12 @@ class FanCard(SmoothFrame):
                 self.slider.set(shown)
         self.slider.configure(progress_color=accent)
         if f.get("manual") is not None:
-            self.badge.configure(text="MANUAL  ↺", fg_color=P["SEL"], text_color=accent, border_color=accent)
+            self.badge.configure(text="Manual  ↺", text_color=P["TEXT"], border_color=P["BTN_LINE"])
         else:
-            self.badge.configure(text="BIOS" if auto else "CURVE", fg_color=P["SEL"], text_color=CYAN, border_color=P["BTN_LINE"])
+            self.badge.configure(text="BIOS" if auto else "Curve", text_color=P["MUTED"], border_color=P["CARD2"])
         speed = (rpm or 0) / 2500
         self.angle = (self.angle + 40 * speed) % 360
-        col = accent if rpm else P["FAINT"]
+        col = P["MUTED"] if rpm else P["FAINT"]
         for i, b in enumerate(self.blades):
             self.spin.itemconfigure(b, start=self.angle + i * 120, fill=col)
 
@@ -1798,8 +1815,8 @@ class App(ctk.CTk):
         super().__init__(fg_color=P["BG"])
         self.withdraw()                                     # stays hidden until fully built
         self.title(eng.APP_NAME)
-        self.geometry("1300x840")
-        self.minsize(1200, 790)
+        self.geometry("1120x720")
+        self.minsize(1040, 680)
         self.background = background
         self._set_icon()
 
@@ -2191,66 +2208,67 @@ class App(ctk.CTk):
         return c
 
     def label(self, parent, text, size=12, weight="normal", color=None, **kw):
-        return ctk.CTkLabel(parent, text=text, font=F(size, weight), text_color=color or P["TEXT"], **kw)
+        kw.setdefault("font", F(size, weight))
+        return ctk.CTkLabel(parent, text=text, text_color=color or P["TEXT"], **kw)
 
     def caption(self, parent, text):
-        """Fluent group heading: sentence case, semibold."""
-        return ctk.CTkLabel(parent, text=text, font=F(14, "bold"), text_color=P["TEXT"], anchor="w")
+        """Group heading: sentence case, small, secondary colour."""
+        return ctk.CTkLabel(parent, text=text, font=F(12, "bold"), text_color=P["MUTED"], anchor="w")
 
     def setting_row(self, parent, glyph, fallback, title, desc, make_control):
         """Windows 11 Settings row: icon, title and description on the left, a control on the right."""
-        row = SmoothFrame(parent, fg_color=P["CARD"], corner_radius=6, height=68)
-        row.pack(fill="x", pady=2)
+        row = SmoothFrame(parent, fg_color=P["CARD"], corner_radius=8, height=52)
+        row.pack(fill="x", pady=(0, 4))
         row.pack_propagate(False)
-        icon_label(row, glyph, fallback, size=18, width=24, color=P["TEXT"]).pack(side="left", padx=(18, 14))
+        icon_label(row, glyph, fallback, size=15, width=20, color=P["MUTED"]).pack(side="left", padx=(16, 12))
         txt = ctk.CTkFrame(row, fg_color="transparent")
         txt.pack(side="left", fill="x", expand=True)
-        self.label(txt, title, 14, anchor="w").pack(fill="x")
+        self.label(txt, title, 13, anchor="w").pack(fill="x")
         if desc:
-            self.label(txt, desc, 12, color=P["MUTED"], anchor="w", justify="left", wraplength=560).pack(fill="x")
+            self.label(txt, desc, 11, color=P["FAINT"], anchor="w", justify="left", wraplength=520).pack(fill="x")
         ctl = make_control(row)
-        ctl.pack(side="right", padx=18)
+        ctl.pack(side="right", padx=16)
         return row, ctl
 
     def primary(self, parent, text, cmd, **kw):
         b = ctk.CTkButton(parent, text=text, command=cmd, fg_color=self.accent, hover_color=self.accent,
-                          text_color=on_color(self.accent), font=F(14), corner_radius=kw.pop("corner_radius", 6), **kw)
+                          text_color=on_color(self.accent), font=F(13, "bold"), corner_radius=kw.pop("corner_radius", 6), **kw)
         self.accent_widgets.append(("button", b))
         return b
 
     def secondary(self, parent, text, cmd, **kw):
         return SmoothButton(parent, text=text, command=cmd, fg_color=P["BTN"], hover_color=P["BTN_HOVER"],
-                            text_color=P["TEXT"], font=kw.pop("font", F(14)), corner_radius=kw.pop("corner_radius", 6),
+                            text_color=P["TEXT"], font=kw.pop("font", F(13)), corner_radius=kw.pop("corner_radius", 6),
                             border_width=1, border_color=P["BTN_LINE"], **kw)
 
     def slider_row(self, parent, label, value, cmd, lo=0, hi=100, unit="%"):
         row = ctk.CTkFrame(parent, fg_color="transparent")
         top = ctk.CTkFrame(row, fg_color="transparent")
         top.pack(fill="x")
-        self.label(top, label, 12, "bold").pack(side="left")
-        val = self.label(top, f"{value}{unit}", 12, color=P["MUTED"])
+        self.label(top, label, 12, color=P["MUTED"]).pack(side="left")
+        val = self.label(top, f"{value}{unit}", 12, color=P["TEXT"], font=ctk.CTkFont(family=MONO, size=11))
         val.pack(side="right")
-        s = Slider(row, from_=lo, to=hi, number_of_steps=hi - lo, height=20, progress_color=self.accent,
+        s = Slider(row, from_=lo, to=hi, number_of_steps=hi - lo, height=16, progress_color=self.accent,
                           button_color=self.accent, button_hover_color="white", fg_color=P["TRACK"])
         s.set(value)
         s.configure(command=lambda v: (val.configure(text=f"{int(v)}{unit}"), cmd(int(v))))
-        s.pack(fill="x", pady=(6, 0))
+        s.pack(fill="x", pady=(4, 0))
         s.value_label = val
         self.accent_widgets.append(("slider", s))
         return row, s
 
     def header(self, parent, title, subtitle, right=None):
         h = ctk.CTkFrame(parent, fg_color="transparent")
-        h.pack(fill="x", pady=(4, 20))
+        h.pack(fill="x", pady=(0, 16))
         txt = ctk.CTkFrame(h, fg_color="transparent")
         txt.pack(side="left", fill="x", expand=True)
         img = None
         if img is not None:
             ctk.CTkLabel(txt, text="", image=img, anchor="w").pack(fill="x")
         else:
-            ctk.CTkLabel(txt, text=spaced(title), font=F(28, display=True), text_color=P["TEXT"], anchor="w").pack(fill="x")
+            ctk.CTkLabel(txt, text=title, font=F(20, display=True), text_color=P["TEXT"], anchor="w").pack(fill="x")
         if subtitle:
-            self.label(txt, subtitle, 13, color=P["MUTED"], anchor="w").pack(fill="x", pady=(2, 0))
+            self.label(txt, subtitle.rstrip("."), 12, color=P["MUTED"], anchor="w").pack(fill="x")
         return h
 
     # ---------------------------------------------------------------- build
@@ -2258,48 +2276,47 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        side = ctk.CTkFrame(self, fg_color=P["SIDE"], corner_radius=0, width=268)
+        side = ctk.CTkFrame(self, fg_color=P["SIDE"], corner_radius=0, width=220)
         side.grid(row=0, column=0, sticky="ns")
         side.grid_propagate(False)
         side.pack_propagate(False)
         brand = ctk.CTkFrame(side, fg_color="transparent")
-        brand.pack(fill="x", padx=16, pady=(18, 14))
-        self.logo = tk.Canvas(brand, width=32, height=32, bg=P["SIDE"], highlightthickness=0)
+        brand.pack(fill="x", padx=16, pady=(16, 20))
+        self.logo = tk.Canvas(brand, width=24, height=24, bg=P["SIDE"], highlightthickness=0)
         self.logo.pack(side="left")
         if self._icon_img is not None:
-            self._logo_img = ImageTk.PhotoImage(self._icon_img.resize((32, 32), Image.LANCZOS))
-            self.logo.create_image(16, 16, image=self._logo_img)
-        bt = ctk.CTkFrame(brand, fg_color="transparent")
-        bt.pack(side="left", padx=12)
-        self.label(bt, "Central RGB", 14, "bold", anchor="w").pack(fill="x")
-        self.label(bt, f"Version {APP_VERSION}", 11, color=P["FAINT"], anchor="w").pack(fill="x")
+            self._logo_img = ImageTk.PhotoImage(self._icon_img.resize((24, 24), Image.LANCZOS))
+            self.logo.create_image(12, 12, image=self._logo_img)
+        self.label(brand, "Central RGB", 13, "bold", anchor="w").pack(side="left", padx=(10, 0))
+        self.label(brand, APP_VERSION, 11, color=P["FAINT"], anchor="e",
+                   font=ctk.CTkFont(family=MONO, size=10)).pack(side="right")
 
         self.nav = {}
         for name, glyph, fallback in NAV:
             item = NavItem(side, name, glyph, fallback, lambda n=name: self.show_page(n))
-            item.pack(fill="x", padx=8, pady=1)
+            item.pack(fill="x", padx=8, pady=(0, 2))
             self.nav[name] = item
 
         st = ctk.CTkFrame(side, fg_color="transparent")
-        st.pack(side="bottom", fill="x", padx=20, pady=18)
+        st.pack(side="bottom", fill="x", padx=16, pady=16)
         self.status_rows = {}
         for key, label in (("rgb", "Lighting"), ("hw", "Sensors")):
             r = ctk.CTkFrame(st, fg_color="transparent")
             r.pack(fill="x", pady=3)
-            dot = tk.Canvas(r, width=8, height=8, bg=P["SIDE"], highlightthickness=0)
+            dot = tk.Canvas(r, width=6, height=6, bg=P["SIDE"], highlightthickness=0)
             dot.pack(side="left", pady=(6, 0), anchor="n")
-            oval = dot.create_oval(0, 0, 8, 8, fill=WARN, width=0)
+            oval = dot.create_oval(0, 0, 6, 6, fill=WARN, width=0)
             col = ctk.CTkFrame(r, fg_color="transparent")
-            col.pack(side="left", padx=10, fill="x", expand=True)
-            self.label(col, label, 12, anchor="w").pack(fill="x")
-            sub = self.label(col, "Starting…", 11, color=P["FAINT"], anchor="w", justify="left", wraplength=200)
+            col.pack(side="left", padx=8, fill="x", expand=True)
+            self.label(col, label, 11, color=P["MUTED"], anchor="w").pack(fill="x")
+            sub = self.label(col, "Starting…", 10, color=P["FAINT"], anchor="w", justify="left", wraplength=170)
             sub.pack(fill="x")
             self.status_rows[key] = (dot, oval, sub)
 
         if self.splash is not None:
             self.splash.keep_on_top()
         holder = ctk.CTkFrame(self, fg_color=P["BG"], corner_radius=0)
-        holder.grid(row=0, column=1, sticky="nsew", padx=(20, 36), pady=(18, 24))
+        holder.grid(row=0, column=1, sticky="nsew", padx=(20, 20), pady=(16, 16))
         holder.grid_rowconfigure(0, weight=1)
         holder.grid_columnconfigure(0, weight=1)
         self.pages = {}
@@ -2349,68 +2366,63 @@ class App(ctk.CTk):
         yield
         top = ctk.CTkFrame(hero, fg_color="transparent")
         yield
-        top.pack(fill="x", padx=22, pady=(20, 6))
-        yield
-        logo = tk.Canvas(top, width=64, height=64, bg=P["CARD"], highlightthickness=0)
-        yield
-        logo.pack(side="left")
-        yield
-        if self._icon_img is not None:
-            self._home_logo = ImageTk.PhotoImage(self._icon_img.resize((64, 64), Image.LANCZOS))
-            logo.create_image(32, 32, image=self._home_logo)
+        top.pack(fill="x", padx=16, pady=(16, 4))
         yield
         txt = ctk.CTkFrame(top, fg_color="transparent")
         yield
-        txt.pack(side="left", padx=18, fill="x", expand=True)
+        txt.pack(side="left", fill="x", expand=True)
         yield
-        ctk.CTkLabel(txt, text="Central RGB", font=F(22, "bold", display=True), text_color=P["TEXT"], anchor="w").pack(fill="x")
+        self.label(txt, "Your lighting", 11, color=P["FAINT"], anchor="w").pack(fill="x")
+        self.home_effect = ctk.CTkLabel(txt, text=self.effect, font=F(16, "bold"), text_color=P["TEXT"], anchor="w")
+        self.home_effect.pack(fill="x")
         yield
-        self.home_status = self.label(txt, "Starting…", 13, color=P["MUTED"], anchor="w")
+        hero_sub = self.label(txt, "", 12, color=P["MUTED"], anchor="w")
+        hero_sub.pack(fill="x")
         yield
-        self.home_status.pack(fill="x")
         yield
-        self.primary(top, "Apply lighting", self._apply_all, height=34, width=140).pack(side="right")
+        self.primary(top, "Apply lighting", self._apply_all, height=32, width=128).pack(side="right", anchor="n")
         yield
-        self.home_strip = GlowBar(hero, height=22, thickness=8)
+        # the one bright thing on the page: your LEDs, live
+        self.home_strip = LedStrip(hero, n=40, height=48)
         yield
-        self.home_strip.pack(fill="x", padx=22, pady=(6, 18))
+        self.home_strip.pack(fill="x", padx=12, pady=(4, 4))
+        self.home_status = self.label(hero, "Starting…", 11, color=P["FAINT"], anchor="w")
+        self.home_status.pack(fill="x", padx=16, pady=(0, 12))
 
         # tiles
         yield
         grid = ctk.CTkFrame(p, fg_color="transparent")
         yield
-        grid.pack(fill="x", pady=(14, 0))
+        grid.pack(fill="x", pady=(12, 0))
         yield
-        self.home_tiles = {}
+        self.home_tiles = {"Lighting": (self.home_effect, hero_sub)}
         yield
-        specs = [("Lighting", "\uea80", "✦", "Lighting"), ("Fans", "\uec4a", "✺", "Fans"),
+        specs = [("Fans", "\uec4a", "✺", "Fans"),
                  ("Processor", "\ue950", "◔", "Monitor"), ("Graphics", "\ue7f4", "▣", "Monitor")]
         yield
         for i, (title, glyph, fb, page) in enumerate(specs):
-            c = self.card(grid, height=132)
-            c.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0 if i == 3 else 6))
+            c = self.card(grid, height=104)
+            c.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0 if i == 2 else 6))
             c.pack_propagate(False)
             grid.grid_columnconfigure(i, weight=1, uniform="ht")
             hdr = ctk.CTkFrame(c, fg_color="transparent")
-            hdr.pack(fill="x", padx=18, pady=(16, 0))
-            icon_label(hdr, glyph, fb, size=16, color=P["MUTED"]).pack(side="left")
-            self.label(hdr, title, 13, color=P["MUTED"]).pack(side="left", padx=10)
-            big = ctk.CTkLabel(c, text="—", font=F(26, "bold", display=True), text_color=P["TEXT"], anchor="w")
-            big.pack(fill="x", padx=18, pady=(8, 0))
-            sub = self.label(c, "", 12, color=P["FAINT"], anchor="w")
-            sub.pack(fill="x", padx=18)
+            hdr.pack(fill="x", padx=16, pady=(12, 0))
+            icon_label(hdr, glyph, fb, size=13, color=P["FAINT"]).pack(side="left")
+            self.label(hdr, title, 12, color=P["MUTED"]).pack(side="left", padx=8)
+            big = ctk.CTkLabel(c, text="—", font=F(22, display=True), text_color=P["TEXT"], anchor="w")
+            big.pack(fill="x", padx=16, pady=(4, 0))
+            sub = self.label(c, "", 11, color=P["FAINT"], anchor="w")
+            sub.pack(fill="x", padx=16)
             self.home_tiles[title] = (big, sub)
             for w in (c, hdr, big, sub):
                 w.bind("<Button-1>", lambda e, pg=page: self.show_page(pg))
                 w.configure(cursor="hand2")
         yield
-        self.home_light_strip = GlowBar(self.home_tiles["Lighting"][1].master, height=12, thickness=4)
-        yield
-        self.home_light_strip.pack(fill="x", padx=18, pady=(6, 0))
+        self.home_light_strip = LedStrip(grid, n=24, height=8)     # kept for the animator, not shown
 
         # quick actions
         yield
-        self.caption(p, "Quick actions").pack(fill="x", pady=(22, 8))
+        self.caption(p, "Quick actions").pack(fill="x", pady=(20, 8))
         yield
         self.home_switches = []
 
@@ -2457,7 +2469,7 @@ class App(ctk.CTk):
         self.home_status.configure(text=(f"{len(rows)} RGB devices · {sum(r[3] for r in rows)} LEDs · {len(fans)} fans"
                                          if self.connected else "Connecting to your RGB hardware…"))
         big, sub = self.home_tiles["Lighting"]
-        big.configure(text=self.effect, font=F(26 if len(self.effect) <= 10 else 20, "bold", display=True))
+        big.configure(text=self.effect)
         sub.configure(text=f"{hexcol(self.color).upper()} · {int(self.bright.get())}% brightness")
         big, sub = self.home_tiles["Fans"]
         big.configure(text=s.get("profile", "Auto"))
@@ -2472,40 +2484,38 @@ class App(ctk.CTk):
 
     # ---------------------------------------------------------------- Lighting
     def _page_lighting(self, p):
-        self.header(p, "Lighting", "Pick a color and an effect. Changes go live on every selected device.")
+        h = self.header(p, "Lighting", "Pick a color and an effect. Changes go live on every selected device")
         yield
         self.light_scope = "All"
         yield
-        self.chip_row = ctk.CTkFrame(p, fg_color="transparent")
+        self.apply_btn = self.primary(h, "Apply to all devices", self._apply_all, height=32, width=164)
+        self.apply_btn.pack(side="right", anchor="n", pady=(4, 0))
+        self.secondary(h, "Save to hardware", lambda: self._bg(self._save_hw), height=32, width=132).pack(
+            side="right", anchor="n", pady=(4, 0), padx=(0, 8))
         yield
-        self.chip_row.pack(fill="x", pady=(0, 12))
+        # device scope + live strip share one row: what you edit, and what it looks like right now
+        top = ctk.CTkFrame(p, fg_color="transparent")
+        top.pack(fill="x", pady=(0, 12))
+        self.chip_row = ctk.CTkFrame(top, fg_color="transparent")
+        self.chip_row.pack(fill="x")
         yield
         self.chips = {}
         yield
         self._build_chips()
 
         yield
-        prev = self.card(p, height=58)
+        prev = self.card(p, height=44)
         yield
-        prev.pack(fill="x", pady=(0, 14))
-        yield
+        prev.pack(fill="x", pady=(0, 12))
         prev.pack_propagate(False)
         yield
-        self.preview_label = self.label(prev, "", 14, anchor="w", width=250)
+        self.label(prev, "Live", 11, color=P["FAINT"], anchor="w").pack(side="left", padx=(16, 8))
+        self.preview_label = self.label(prev, "", 12, "bold", anchor="w", width=96)
+        self.preview_label.pack(side="left")
         yield
-        self.preview_label.pack(side="left", padx=(18, 10))
-        yield
-        pv = ctk.CTkFrame(prev, fg_color="transparent")
-        yield
-        pv.pack(side="left", fill="both", expand=True, padx=(0, 12), pady=8)
-        yield
-        self.preview = LedStrip(pv, n=36, height=28)
-        yield
-        self.preview.pack(fill="x")
-        yield
-        self.preview_track = tk.Canvas(pv, height=4, bg=P["CARD"], highlightthickness=0)
-        yield
-        self.preview_track.pack(fill="x", pady=(2, 0))
+        self.preview = LedStrip(prev, n=48, height=28)
+        self.preview.pack(side="left", fill="x", expand=True, padx=(8, 12))
+        self.preview_track = tk.Canvas(prev, height=1, bg=P["CARD"], highlightthickness=0)   # kept, not shown
 
         yield
         body = ctk.CTkFrame(p, fg_color="transparent")
@@ -2517,39 +2527,19 @@ class App(ctk.CTk):
         body.grid_rowconfigure(0, weight=1)
 
         yield
-        cc = self.card(body)
+        cc = self.card(body, width=232)
         yield
-        cc.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        cc.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         yield
-        self.caption(cc, "Color").pack(fill="x", padx=18, pady=(14, 8))
+        self.caption(cc, "Color").pack(fill="x", padx=16, pady=(12, 8))
         yield
-        self.wheel = ColorWheel(cc, size=196, command=lambda rgb: self._set_color(rgb, from_wheel=True))
+        self.wheel = ColorWheel(cc, size=176, command=lambda rgb: self._set_color(rgb, from_wheel=True))
         yield
-        self.wheel.pack(padx=18)
+        self.wheel.pack(padx=16)
         yield
-        hexrow = ctk.CTkFrame(cc, fg_color="transparent")
+        sw = tk.Canvas(cc, height=44, width=200, bg=P["CARD"], highlightthickness=0)
         yield
-        hexrow.pack(fill="x", padx=18, pady=(12, 6))
-        yield
-        self.swatch = tk.Canvas(hexrow, width=28, height=28, bg=P["CARD"], highlightthickness=0)
-        yield
-        self.swatch.pack(side="left")
-        yield
-        self.swatch_item = self.swatch.create_rectangle(1, 1, 27, 27, fill="#000", width=0)
-        yield
-        self.hex_entry = ctk.CTkEntry(hexrow, width=104, height=30, corner_radius=6, font=F(13),
-                                      fg_color=P["CARD2"], border_width=1, border_color=P["LINE"], text_color=P["TEXT"],
-                                      justify="center")
-        yield
-        self.hex_entry.pack(side="left", padx=10)
-        yield
-        self.hex_entry.bind("<Return>", self._hex_entered)
-        yield
-        self.hex_entry.bind("<FocusOut>", self._hex_entered)
-        yield
-        sw = tk.Canvas(cc, height=48, width=200, bg=P["CARD"], highlightthickness=0)
-        yield
-        sw.pack(padx=18, pady=(4, 4), anchor="w")
+        sw.pack(padx=16, pady=(12, 0), anchor="w")
         yield
         step = 200 / len(SWATCHES)
         yield
@@ -2557,22 +2547,46 @@ class App(ctk.CTk):
             for i, c in enumerate(SWATCHES):
                 col = tuple(int(v) for v in mix(c, (230, 230, 240), k)) if k else c
                 x = step * i + step / 2
-                it = sw.create_rectangle(x - 9, 3 + row * 24, x + 9, 21 + row * 24, fill=hexcol(col), outline=P["CARD"], width=2)
+                it = sw.create_oval(x - 8, 3 + row * 22, x + 8, 19 + row * 22, fill=hexcol(col), outline=P["CARD"], width=2)
                 sw.tag_bind(it, "<Button-1>", lambda e, cl=col: self._set_color(cl))
-                sw.tag_bind(it, "<Enter>", lambda e, i2=it: sw.itemconfigure(i2, outline="white"))
+                sw.tag_bind(it, "<Enter>", lambda e, i2=it: sw.itemconfigure(i2, outline=P["TEXT"]))
                 sw.tag_bind(it, "<Leave>", lambda e, i2=it: sw.itemconfigure(i2, outline=P["CARD"]))
+        yield
+        hexrow = ctk.CTkFrame(cc, fg_color="transparent")
+        yield
+        hexrow.pack(fill="x", padx=16, pady=(12, 0))
+        yield
+        self.swatch = tk.Canvas(hexrow, width=24, height=24, bg=P["CARD"], highlightthickness=0)
+        yield
+        self.swatch.pack(side="left")
+        yield
+        self.swatch_item = self.swatch.create_oval(1, 1, 23, 23, fill="#000", width=0)
+        yield
+        mono = ctk.CTkFont(family=MONO, size=11)
+        self.hex_entry = ctk.CTkEntry(hexrow, width=100, height=28, corner_radius=6, font=mono,
+                                      fg_color=P["CARD2"], border_width=1, border_color=P["LINE"], text_color=P["TEXT"],
+                                      justify="center")
+        yield
+        self.hex_entry.pack(side="left", padx=(8, 0), fill="x", expand=True)
+        yield
+        self.hex_entry.bind("<Return>", self._hex_entered)
+        yield
+        self.hex_entry.bind("<FocusOut>", self._hex_entered)
         yield
         rgbrow = ctk.CTkFrame(cc, fg_color="transparent")
         yield
-        rgbrow.pack(fill="x", padx=18, pady=(6, 14))
+        rgbrow.pack(fill="x", padx=16, pady=(8, 16))
         yield
         self.rgb_entries = []
         yield
-        for ch in "RGB":
-            self.label(rgbrow, ch, 12, color=P["MUTED"]).pack(side="left", padx=(0, 5))
-            e = ctk.CTkEntry(rgbrow, width=46, height=28, corner_radius=6, font=F(12), fg_color=P["CARD2"],
+        for i, ch in enumerate("RGB"):
+            rgbrow.grid_columnconfigure(i, weight=1, uniform="rgb")
+            cell = ctk.CTkFrame(rgbrow, fg_color="transparent")
+            cell.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 4, 0))
+            self.label(cell, ch, 11, color=P["FAINT"], width=12).pack(side="left", padx=(0, 4))
+            e = ctk.CTkEntry(cell, width=40, height=28, corner_radius=6, font=mono, fg_color=P["CARD2"],
                              border_width=1, border_color=P["LINE"], text_color=P["TEXT"], justify="center")
-            e.pack(side="left", padx=(0, 10))
+            e.pack(side="left", fill="x", expand=True)
             e.bind("<Return>", self._rgb_entered)
             e.bind("<FocusOut>", self._rgb_entered)
             self.rgb_entries.append(e)
@@ -2584,33 +2598,33 @@ class App(ctk.CTk):
         yield
         ec = self.card(right)
         yield
-        ec.pack(fill="x")
+        ec.pack(fill="both", expand=True)
         yield
-        self.caption(ec, "Effect").pack(fill="x", padx=18, pady=(14, 6))
+        self.caption(ec, "Effect").pack(fill="x", padx=16, pady=(12, 8))
         yield
         grid = ctk.CTkFrame(ec, fg_color="transparent")
         yield
-        grid.pack(fill="x", padx=12, pady=(0, 12))
+        grid.pack(fill="x", padx=14, pady=(0, 12))
         yield
         self.tiles = {}
         yield
         for i, name in enumerate(eng.BASIC_EFFECTS):
             t = EffectTile(grid, name, self._set_effect)
-            t.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
+            t.grid(row=0, column=i, sticky="nsew", padx=2)
             grid.grid_columnconfigure(i, weight=1, uniform="e")
             self.tiles[name] = t
         yield
-        self.caption(ec, "Presets").pack(fill="x", padx=18, pady=(4, 6))
+        self.caption(ec, "Presets").pack(fill="x", padx=16, pady=(0, 8))
         yield
         # 16 presets: about two and a half rows show, the rest scroll into view
-        scroll = LightScroll(ec, height=218)
+        scroll = LightScroll(ec, height=260)
         pg = scroll.inner
         yield
-        scroll.pack(fill="x", padx=(12, 4), pady=(0, 12))
+        scroll.pack(fill="both", expand=True, padx=(14, 4), pady=(0, 12))
         yield
         for i, name in enumerate(eng.PRESET_EFFECTS):
-            t = PresetTile(pg, name, self._set_effect, height=88)
-            t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
+            t = PresetTile(pg, name, self._set_effect, height=76)
+            t.grid(row=i // 4, column=i % 4, sticky="nsew", padx=2, pady=2)
             pg.grid_columnconfigure(i % 4, weight=1, uniform="p")
             self.tiles[name] = t
             yield                                  # one tile per build step
@@ -2619,31 +2633,19 @@ class App(ctk.CTk):
         self._fill_custom_tiles()
 
         yield
-        ctl = self.card(right)
-        yield
-        ctl.pack(fill="x", pady=(14, 0))
-        yield
         st = self.settings["state"]
         yield
-        r1, self.bright = self.slider_row(ctl, "Brightness", st.get("brightness", 100), lambda v: self._state_changed())
+        # brightness and speed live with the colour: everything that changes how the light looks, in one column
+        sl = ctk.CTkFrame(cc, fg_color="transparent")
+        sl.pack(side="bottom", fill="x", padx=16, pady=(0, 16))
+        r1, self.bright = self.slider_row(sl, "Brightness", st.get("brightness", 100), lambda v: self._state_changed())
         yield
-        r1.pack(fill="x", padx=18, pady=(14, 4))
+        r1.pack(fill="x", pady=(0, 12))
         yield
-        r2, self.speed = self.slider_row(ctl, "Speed", st.get("speed", 50), lambda v: self._state_changed())
+        r2, self.speed = self.slider_row(sl, "Speed", st.get("speed", 50), lambda v: self._state_changed())
         yield
-        r2.pack(fill="x", padx=18, pady=4)
-        yield
-        btns = ctk.CTkFrame(ctl, fg_color="transparent")
-        yield
-        btns.pack(fill="x", padx=18, pady=(10, 16))
-        yield
-        self.apply_btn = self.primary(btns, "Apply to all devices", self._apply_all, height=40)
-        yield
-        self.apply_btn.pack(side="left", fill="x", expand=True)
-        yield
-        self.secondary(btns, "Save to hardware", lambda: self._bg(self._save_hw), height=40, width=140).pack(side="right", padx=(10, 0))
-        yield
-        self.secondary(btns, "⏻  Off", lambda: self._set_effect("Off"), height=40, width=80).pack(side="right", padx=(10, 0))
+        r2.pack(fill="x")
+        ctk.CTkFrame(cc, height=1, fg_color=P["LINE"]).pack(side="bottom", fill="x", padx=16, pady=(0, 16))
 
     # ---- device chips: edit all devices at once, or one kind of device
     def _build_chips(self):
@@ -2653,23 +2655,23 @@ class App(ctk.CTk):
         counts = {}
         for _, t, _, _ in self.device_rows:
             counts[t] = counts.get(t, 0) + 1
-        items = [("All", f"[ All Devices ({len(self.device_rows)}) ]")] + \
-                [(t, f"[ {t} ({n}) ]" if n > 1 else f"[ {t} ]") for t, n in counts.items()]
+        items = [("All", f"All devices  {len(self.device_rows)}")] + \
+                [(t, f"{t}  {n}" if n > 1 else t) for t, n in counts.items()]
         if self.light_scope not in dict(items):
             self.light_scope = "All"
         for key, text in items:
-            b = SmoothButton(self.chip_row, text=text, height=32, width=max(60, 9 * len(text) + 22), corner_radius=16,
-                             font=F(13), border_width=1,
+            b = SmoothButton(self.chip_row, text=text, height=28, width=max(52, 7 * len(text) + 24), corner_radius=6,
+                             font=F(12), border_width=1,
                               command=lambda k=key: self._set_scope(k))
-            b.pack(side="left", padx=(0, 8))
+            b.pack(side="left", padx=(0, 4))
             self.chips[key] = b
         self._style_chips()
 
     def _style_chips(self):
         for k, b in self.chips.items():
             on = k == self.light_scope
-            b.configure(fg_color=P["SEL"] if on else "transparent", hover_color=P["HOVER"],
-                        border_color=self.accent if on else P["BTN_LINE"], text_color=self.accent if on else P["MUTED"])
+            b.configure(fg_color=P["CARD2"] if on else P["BG"], hover_color=P["CARD"],
+                        border_color=P["BTN_LINE"] if on else P["BG"], text_color=P["TEXT"] if on else P["MUTED"])
 
     def _scope_keys(self):
         return [r[0] for r in self.device_rows if r[1] == self.light_scope]
@@ -2710,15 +2712,15 @@ class App(ctk.CTk):
         yield
         bar = ctk.CTkFrame(p, fg_color="transparent")
         yield
-        bar.pack(fill="x", pady=(0, 14))
+        bar.pack(fill="x", pady=(0, 12))
         yield
-        self.primary(bar, "⟳  Rescan", lambda: self._bg(self._full_rescan), height=38, width=120).pack(side="left")
+        self.secondary(bar, "Rescan", lambda: self._bg(self._full_rescan), height=28, width=76, font=F(12)).pack(side="left")
         yield
-        self.secondary(bar, "All on", lambda: self._set_all_devices(True), height=38, width=90).pack(side="left", padx=8)
+        self.secondary(bar, "All on", lambda: self._set_all_devices(True), height=28, width=64, font=F(12)).pack(side="left", padx=4)
         yield
-        self.secondary(bar, "All off", lambda: self._set_all_devices(False), height=38, width=90).pack(side="left")
+        self.secondary(bar, "All off", lambda: self._set_all_devices(False), height=28, width=64, font=F(12)).pack(side="left")
         yield
-        self.dev_summary = self.label(bar, "", 12, color=P["MUTED"])
+        self.dev_summary = self.label(bar, "", 11, color=P["FAINT"])
         yield
         self.dev_summary.pack(side="right")
         yield
@@ -2763,7 +2765,7 @@ class App(ctk.CTk):
             if key in self.settings.data.get("device_overrides", {}):
                 c.edit_btn.configure(text="Custom ✓")
             c.switch.configure(progress_color=self.accent)
-            c.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=6)
+            c.grid(row=i // 2, column=i % 2, sticky="ew", padx=(0 if i % 2 == 0 else 6, 6 if i % 2 == 0 else 0), pady=(0, 12))
             self.device_cards.append(c)
         self._update_dev_summary()
         if hasattr(self, "chip_row"):
@@ -2903,13 +2905,13 @@ class App(ctk.CTk):
     def _page_fans(self, p):
         h = self.header(p, "Fans", "Pick a profile or draw your own curve. Fans always speed up if things get too hot.")
         yield
-        self.fan_seg = PillSwitcher(p, values=hwm.PROFILES, command=self._set_fan_profile, height=36,
-                                              font=F(12, "bold"), corner_radius=6, fg_color=P["CARD"],
+        self.fan_seg = PillSwitcher(p, values=hwm.PROFILES, command=self._set_fan_profile, height=32,
+                                              font=F(12), corner_radius=6, fg_color=P["CARD"],
                                               unselected_color=P["CARD"], unselected_hover_color=P["CARD2"],
                                               selected_color=self.accent, selected_hover_color=self.accent,
                                               text_color=P["TEXT"])
         yield
-        self.fan_seg.pack(fill="x", pady=(0, 14))
+        self.fan_seg.pack(fill="x", pady=(0, 12))
         yield
         self.accent_widgets.append(("seg", self.fan_seg))
 
@@ -2922,48 +2924,48 @@ class App(ctk.CTk):
         yield
         cc = self.card(top)
         yield
-        cc.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        cc.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         yield
         row = ctk.CTkFrame(cc, fg_color="transparent")
         yield
-        row.pack(fill="x", padx=20, pady=(16, 0))
+        row.pack(fill="x", padx=16, pady=(12, 0))
         yield
-        self.caption(row, "Fan curve · CPU temperature").pack(side="left")
+        self.label(row, "Fan curve · CPU temperature", 12, color=P["MUTED"]).pack(side="left")
         yield
-        self.curve_hint = self.label(row, "", 10, color=P["MUTED"])
+        self.curve_hint = self.label(row, "", 10, color=P["FAINT"])
         yield
         self.curve_hint.pack(side="right")
         yield
-        self.curve = CurveEditor(cc, self._curve_changed, height=232)
+        self.curve = CurveEditor(cc, self._curve_changed, height=196)
         yield
-        self.curve.pack(fill="x", padx=12, pady=(6, 12))
+        self.curve.pack(fill="x", padx=12, pady=(4, 12))
 
         yield
-        tc = self.card(top, width=270)
+        tc = self.card(top, width=232)
         yield
         tc.grid(row=0, column=1, sticky="nsew")
         yield
-        self.caption(tc, "Temperatures").pack(fill="x", padx=20, pady=(16, 6))
+        self.label(tc, "Temperatures", 12, color=P["MUTED"], anchor="w").pack(fill="x", padx=16, pady=(12, 4))
         yield
         self.fan_temp_labels = {}
         yield
         for key, name in (("cpu_temp", "CPU"), ("gpu_temp", "GPU")):
             r = ctk.CTkFrame(tc, fg_color="transparent")
-            r.pack(fill="x", padx=20, pady=6)
-            self.label(r, name, 12, "bold", color=P["MUTED"]).pack(side="left")
-            v = self.label(r, "—", 30, "bold")
+            r.pack(fill="x", padx=16, pady=2)
+            self.label(r, name, 11, color=P["FAINT"]).pack(side="left", anchor="s", pady=(0, 6))
+            v = ctk.CTkLabel(r, text="—", font=F(26, display=True), text_color=P["TEXT"])
             v.pack(side="right")
             self.fan_temp_labels[key] = v
         yield
-        self.fan_note = self.label(tc, "", 11, color=P["MUTED"], wraplength=230, justify="left", anchor="w")
+        self.fan_note = self.label(tc, "", 11, color=P["FAINT"], wraplength=200, justify="left", anchor="w")
         yield
-        self.fan_note.pack(fill="x", padx=20, pady=(10, 16))
+        self.fan_note.pack(fill="x", padx=16, pady=(8, 12))
 
         yield
         _sc_fan_area = LightScroll(p, bg=P["BG"])
         self.fan_area = _sc_fan_area.inner
         yield
-        _sc_fan_area.pack(fill="both", expand=True, pady=(14, 0))
+        _sc_fan_area.pack(fill="both", expand=True, pady=(12, 0))
         yield
         self.fan_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="f")
         yield
@@ -3030,7 +3032,8 @@ class App(ctk.CTk):
             self.fan_cards = {}
             for i, (fid, f) in enumerate(sorted(fans.items(), key=lambda kv: (kv[1]["src"], kv[1]["name"]))):
                 c = FanCard(self.fan_area, f, self._fan_manual, self._fan_reset)
-                c.grid(row=i // 3, column=i % 3, sticky="ew", padx=6, pady=6)
+                c.grid(row=i // 3, column=i % 3, sticky="ew", pady=(0, 12),
+                       padx=(0 if i % 3 == 0 else 6, 0 if i % 3 == 2 else 6))
                 self.fan_cards[fid] = c
         for fid, f in fans.items():
             self.fan_cards[fid].update_fan(f, self.accent, prof == "Auto")
@@ -3083,128 +3086,108 @@ class App(ctk.CTk):
         (self.mon_over if name == "Overview" else self.mon_adv).tkraise()
 
     def _gauge_card(self, parent, title):
-        c = self.card(parent)
+        """Compact stat card: label, the one big number, three small readings. No mini chart."""
+        c = self.card(parent, height=112)
+        c.pack_propagate(False)
         top = ctk.CTkFrame(c, fg_color="transparent")
-        top.pack(fill="x", padx=18, pady=(16, 4))
-        self.caption(top, title).pack(side="left")
-        name = self.label(top, "", 10, color=P["MUTED"])
+        top.pack(fill="x", padx=16, pady=(12, 0))
+        self.label(top, title, 12, color=P["MUTED"]).pack(side="left")
+        name = self.label(top, "", 10, color=P["FAINT"])
         name.pack(side="right")
         mid = ctk.CTkFrame(c, fg_color="transparent")
-        mid.pack(fill="x", padx=14)
-        ring = Ring(mid, size=108)
-        ring.pack(side="left")
+        mid.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        big = ctk.CTkLabel(mid, text="—", font=F(26, display=True), text_color=P["TEXT"], anchor="sw", width=84)
+        big.pack(side="left", anchor="s")
+        ring = Ring(mid, size=8)                          # kept for the refresher; not shown
         stats = ctk.CTkFrame(mid, fg_color="transparent")
-        stats.pack(side="left", fill="both", expand=True, padx=(14, 4))
+        stats.pack(side="right", fill="x", expand=True, padx=(16, 0), anchor="s")
         rows = {}
+        mono = ctk.CTkFont(family=MONO, size=11)
         for k in ("a", "b", "c"):
             r = ctk.CTkFrame(stats, fg_color="transparent")
-            r.pack(fill="x", pady=3)
-            l = self.label(r, "", 11, color=P["MUTED"])
+            r.pack(fill="x")
+            l = self.label(r, "", 11, color=P["FAINT"], height=18)
             l.pack(side="left")
-            v = self.label(r, "—", 14, "bold")
+            v = self.label(r, "—", 11, font=mono, height=18)
             v.pack(side="right")
             rows[k] = (l, v)
-        spark = Sparkline(c, height=48)
-        spark.pack(fill="x", padx=14, pady=(8, 14))
-        return {"card": c, "ring": ring, "rows": rows, "spark": spark, "name": name}
+        spark = Sparkline(c, height=4)                    # kept for the refresher; not shown
+        return {"card": c, "ring": ring, "rows": rows, "spark": spark, "name": name, "big": big}
 
     def _build_overview(self, p):
         g = ctk.CTkFrame(p, fg_color="transparent")
-        yield
         g.pack(fill="both", expand=True)
-        yield
         for i in range(3):
             g.grid_columnconfigure(i, weight=1, uniform="o")
-        yield
         self.g_cpu = self._gauge_card(g, "Processor")
-        yield
         self.g_gpu = self._gauge_card(g, "Graphics")
-        yield
         self.g_ram = self._gauge_card(g, "Memory")
-        yield
         for i, gc in enumerate((self.g_cpu, self.g_gpu, self.g_ram)):
-            gc["card"].grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0 if i == 2 else 8))
+            gc["card"].grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0 if i == 2 else 6))
 
-        yield
-        net = self.card(g)
-        yield
-        net.grid(row=1, column=0, sticky="nsew", pady=(16, 0), padx=(0, 8))
-        yield
-        self.caption(net, "Network").pack(fill="x", padx=18, pady=(16, 4))
-        yield
+        # the main chart: processor load leads in the accent, graphics follows in grey
+        lc = self.card(g)
+        lc.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(12, 0), padx=(0, 6))
+        lt = ctk.CTkFrame(lc, fg_color="transparent")
+        lt.pack(fill="x", padx=16, pady=(12, 0))
+        self.label(lt, "Load · last minute", 12, color=P["MUTED"]).pack(side="left")
+        for name, col in (("Graphics", PURPLE), ("Processor", CYAN)):
+            self.label(lt, name, 11, color=P["MUTED"]).pack(side="right", padx=(4, 12 if name == "Graphics" else 12))
+            dot = tk.Canvas(lt, width=8, height=8, bg=P["CARD"], highlightthickness=0)
+            dot.create_oval(0, 0, 8, 8, fill=col, width=0)
+            dot.pack(side="right", pady=(2, 0))
+        self.load_chart = Sparkline(lc, height=260, color=CYAN)
+        self.load_chart.grid_lines = True
+        self.load_chart.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+
+        side = ctk.CTkFrame(g, fg_color="transparent")
+        side.grid(row=1, column=2, sticky="nsew", pady=(12, 0), padx=(6, 0))
+        mono = ctk.CTkFont(family=MONO, size=11)
+
+        net = self.card(side)
+        net.pack(fill="x")
+        nt = ctk.CTkFrame(net, fg_color="transparent")
+        nt.pack(fill="x", padx=16, pady=(12, 0))
+        self.label(nt, "Network", 12, color=P["MUTED"]).pack(side="left")
         nr = ctk.CTkFrame(net, fg_color="transparent")
-        yield
-        nr.pack(fill="x", padx=18)
-        yield
-        self.net_down = self.label(nr, "—", 20, color=CYAN)
-        yield
+        nr.pack(fill="x", padx=16, pady=(4, 0))
+        self.net_down = self.label(nr, "—", 12, font=mono)
         self.net_down.pack(side="left")
-        yield
-        self.net_up = self.label(nr, "—", 20, color=PURPLE)
-        yield
+        self.net_up = self.label(nr, "—", 12, color=P["MUTED"], font=mono)
         self.net_up.pack(side="right")
-        yield
-        self.net_spark = Sparkline(net, height=150, color=CYAN)
-        yield
-        self.net_spark.pack(fill="both", expand=True, padx=12, pady=(8, 14))
+        self.net_spark = Sparkline(net, height=40, color=CYAN)
+        self.net_spark.pack(fill="x", padx=12, pady=(4, 12))
 
-        yield
-        dk = self.card(g)
-        yield
-        dk.grid(row=1, column=1, sticky="nsew", pady=(16, 0), padx=8)
-        yield
+        dk = self.card(side)
+        dk.pack(fill="x", pady=(12, 0))
         top = ctk.CTkFrame(dk, fg_color="transparent")
-        yield
-        top.pack(fill="x", padx=18, pady=(16, 4))
-        yield
-        self.caption(top, "Storage").pack(side="left")
-        yield
-        self.disk_box = ctk.CTkFrame(dk, fg_color="transparent")
-        yield
-        self.disk_box.pack(fill="x", padx=18, pady=(4, 4))
-        yield
-        self.disk_rows = {}
-        yield
-        self.disk_chart = Sparkline(dk, height=80, color=CYAN)
-        yield
-        self.disk_chart.pack(fill="both", expand=True, padx=12, pady=(4, 0))
-        yield
-        io = ctk.CTkFrame(dk, fg_color="transparent")
-        yield
-        io.pack(pady=(2, 12))
-        yield
-        self.disk_r = self.label(io, "R —", 13, color=CYAN)
-        yield
+        top.pack(fill="x", padx=16, pady=(12, 0))
+        self.label(top, "Storage", 12, color=P["MUTED"]).pack(side="left")
+        io = ctk.CTkFrame(top, fg_color="transparent")
+        io.pack(side="right")
+        self.disk_r = self.label(io, "R —", 11, color=P["MUTED"], font=mono)
         self.disk_r.pack(side="left")
-        yield
-        self.label(io, "  ·  ", 13, color=P["FAINT"]).pack(side="left")
-        yield
-        self.disk_w = self.label(io, "W —", 13, color=PURPLE)
-        yield
-        self.disk_w.pack(side="left")
+        self.disk_w = self.label(io, "W —", 11, color=P["MUTED"], font=mono)
+        self.disk_w.pack(side="left", padx=(8, 0))
+        self.disk_box = ctk.CTkFrame(dk, fg_color="transparent")
+        self.disk_box.pack(fill="x", padx=16, pady=(4, 12))
+        self.disk_rows = {}
+        self.disk_chart = Sparkline(dk, height=4, color=CYAN)          # kept for the refresher; not shown
 
-        yield
-        sy = self.card(g)
-        yield
-        sy.grid(row=1, column=2, sticky="nsew", pady=(16, 0), padx=(8, 0))
-        yield
-        self.caption(sy, "System").pack(fill="x", padx=18, pady=(16, 4))
-        yield
+        sy = self.card(side)
+        sy.pack(fill="both", expand=True, pady=(12, 0))
+        self.label(sy, "System", 12, color=P["MUTED"], anchor="w").pack(fill="x", padx=16, pady=(12, 4))
         self.sys_rows = {}
-        yield
         for k, lab in (("uptime", "Uptime"), ("procs", "Processes"), ("cpu_power", "CPU power"),
                        ("gpu_power", "GPU power"), ("fans", "Fans"), ("os", "OS")):
             r = ctk.CTkFrame(sy, fg_color="transparent")
-            r.pack(fill="x", padx=18, pady=4)
-            self.label(r, lab, 11, color=P["MUTED"]).pack(side="left")
-            if k == "fans":
-                v = ctk.CTkLabel(r, text="—", font=F(13), text_color=CYAN, fg_color=P["SEL"], corner_radius=8, height=26)
-            else:
-                v = self.label(r, "—", 13)
+            r.pack(fill="x", padx=16)
+            self.label(r, lab, 11, color=P["FAINT"], height=22).pack(side="left")
+            v = self.label(r, "—", 11, font=mono, height=22)
             v.pack(side="right")
             self.sys_rows[k] = v
-        yield
         g.grid_rowconfigure(1, weight=1)
+        yield
 
     def _build_advanced(self, p):
         p.grid_columnconfigure(0, weight=2, uniform="a")
@@ -3389,6 +3372,8 @@ class App(ctk.CTk):
         l2.configure(text="Clock"); v2.configure(text=fmt((m.get("cpu_clock") or 0) / 1000 if m.get("cpu_clock") else None, " GHz", 2))
         l3.configure(text="Power"); v3.configure(text=fmt(m.get("cpu_power"), " W"))
         g["spark"].set(hist.get("cpu_load", []), 100, TEAL)
+        g["big"].configure(text=fmt(m.get("cpu_load"), "%"))
+        self.load_chart.set_multi([(hist.get("gpu_load", []) or [0, 0], PURPLE), (hist.get("cpu_load", []), CYAN)], 100)
         # GPU
         g = self.g_gpu
         g["name"].configure(text=(m.get("gpu_name") or "")[:26])
@@ -3399,6 +3384,7 @@ class App(ctk.CTk):
         vu, vt = m.get("vram_used"), m.get("vram_total")
         l3.configure(text="VRAM"); v3.configure(text=f"{vu/1024:.1f} / {vt/1024:.0f} GB" if vu and vt else fmt(vu, " MB"))
         g["spark"].set(hist.get("gpu_load", []) or [0, 0], 100, CYAN)
+        g["big"].configure(text=fmt(m.get("gpu_load"), "%"))
         # RAM
         g = self.g_ram
         g["ring"].set(m.get("ram_pct"), fmt(m.get("ram_pct"), "%"), "used", ("#60a5fa", BLUE))
@@ -3407,6 +3393,7 @@ class App(ctk.CTk):
         l2.configure(text="Total"); v2.configure(text=fmt(m.get("ram_total"), " GB", 1))
         l3.configure(text="Free"); v3.configure(text=fmt((m.get("ram_total") or 0) - (m.get("ram_used") or 0), " GB", 1) if m.get("ram_total") else "—")
         g["spark"].set(hist.get("ram_pct", []), 100, BLUE)
+        g["big"].configure(text=fmt(m.get("ram_pct"), "%"))
         # network
         def rate(v):
             return "—" if v is None else (f"{v:.1f} Mb/s" if v < 1000 else f"{v/1000:.2f} Gb/s")
@@ -3420,18 +3407,18 @@ class App(ctk.CTk):
         for mount, used, total, pct in m.get("disks", []):
             if mount not in self.disk_rows:
                 r = ctk.CTkFrame(self.disk_box, fg_color="transparent")
-                r.pack(fill="x", pady=5)
+                r.pack(fill="x", pady=(4, 0))
                 top = ctk.CTkFrame(r, fg_color="transparent")
                 top.pack(fill="x")
-                self.label(top, mount, 12, "bold").pack(side="left")
-                v = self.label(top, "", 11, color=P["MUTED"])
+                self.label(top, mount, 11).pack(side="left")
+                v = self.label(top, "", 11, color=P["FAINT"], font=ctk.CTkFont(family=MONO, size=10))
                 v.pack(side="right")
-                bar = GradientBar(r, height=6)
-                bar.pack(fill="x", pady=(5, 0))
+                bar = GradientBar(r, height=4)
+                bar.pack(fill="x", pady=(4, 0))
                 self.disk_rows[mount] = (v, bar)
             v, bar = self.disk_rows[mount]
             v.configure(text=f"{used:,.0f} / {total:,.0f} GB")
-            bar.set(pct / 100, *((BAD, BAD) if pct > 90 else (CYAN, PURPLE)))
+            bar.set(pct / 100, *((BAD, BAD) if pct > 90 else (P["MUTED"], P["MUTED"])))
         # system
         up = int(m.get("uptime") or 0)
         self.sys_rows["uptime"].configure(text=f"{up // 86400}d {up % 86400 // 3600}h {up % 3600 // 60}m")
@@ -3439,7 +3426,7 @@ class App(ctk.CTk):
         self.sys_rows["cpu_power"].configure(text=fmt(m.get("cpu_power"), " W"))
         self.sys_rows["gpu_power"].configure(text=fmt(m.get("gpu_power"), " W"))
         fans = s["fans"]
-        self.sys_rows["fans"].configure(text=f"  {len(fans)} • {s['profile']}  " if fans else "—")
+        self.sys_rows["fans"].configure(text=f"{len(fans)} · {s['profile']}" if fans else "—")
 
     def _refresh_hw(self):
         try:
@@ -3474,7 +3461,7 @@ class App(ctk.CTk):
         yield
         body = ctk.CTkFrame(p, fg_color="transparent")
         yield
-        body.pack(fill="both", expand=True)
+        body.pack(fill="x")
         yield
         body.grid_columnconfigure(0, weight=3, uniform="ov")
         yield
@@ -3489,19 +3476,19 @@ class App(ctk.CTk):
         yield
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
         yield
-        self.caption(left, "FPS overlay").pack(fill="x", padx=20, pady=(18, 6))
+        self.caption(left, "FPS overlay").pack(fill="x", padx=16, pady=(12, 6))
         yield
         self.overlay_sw = Switch(left, text="Show the overlay in games", font=F(13, "bold"), text_color=P["TEXT"],
                                  command=self._overlay_toggle)
         yield
-        self.overlay_sw.pack(anchor="w", padx=20, pady=4)
+        self.overlay_sw.pack(anchor="w", padx=16, pady=4)
         yield
         if cfg["enabled"]:
             self.overlay_sw.select()
         yield
         self.overlay_status = self.label(left, "Off", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=560)
         yield
-        self.overlay_status.pack(fill="x", padx=20, pady=(2, 10))
+        self.overlay_status.pack(fill="x", padx=16, pady=(2, 10))
 
         yield
         def seg(parent, values, current, cmd):
@@ -3514,21 +3501,21 @@ class App(ctk.CTk):
             return sb
 
         yield
-        self.caption(left, "Position").pack(fill="x", padx=20, pady=(10, 6))
+        self.caption(left, "Position").pack(fill="x", padx=16, pady=(10, 6))
         yield
-        seg(left, fpo.CORNERS, cfg["corner"], lambda v: self._overlay_set("corner", v)).pack(fill="x", padx=20)
+        seg(left, fpo.CORNERS, cfg["corner"], lambda v: self._overlay_set("corner", v)).pack(fill="x", padx=16)
         yield
-        self.caption(left, "Size").pack(fill="x", padx=20, pady=(16, 6))
+        self.caption(left, "Size").pack(fill="x", padx=16, pady=(16, 6))
         yield
-        seg(left, list(fpo.SIZES), cfg["size"], lambda v: self._overlay_set("size", v)).pack(fill="x", padx=20)
+        seg(left, list(fpo.SIZES), cfg["size"], lambda v: self._overlay_set("size", v)).pack(fill="x", padx=16)
         yield
-        self.caption(left, "Show").pack(fill="x", padx=20, pady=(16, 6))
+        self.caption(left, "Show").pack(fill="x", padx=16, pady=(16, 6))
         yield
         self.overlay_item_sw = {}
         yield
         for key, label in fpo.ITEMS:
             sw = Switch(left, text=label, font=F(12), text_color=P["TEXT"], command=lambda k=key: self._overlay_item(k))
-            sw.pack(anchor="w", padx=20, pady=4)
+            sw.pack(anchor="w", padx=16, pady=4)
             if cfg["items"].get(key):
                 sw.select()
             self.overlay_item_sw[key] = sw
@@ -3538,19 +3525,19 @@ class App(ctk.CTk):
         yield
         right.grid(row=0, column=1, sticky="nsew")
         yield
-        self.caption(right, "Preview").pack(fill="x", padx=20, pady=(18, 10))
+        self.caption(right, "Preview").pack(fill="x", padx=16, pady=(12, 8))
         yield
         stage = tk.Frame(right, bg=P["SIDE"], highlightthickness=1, highlightbackground=P["LINE"])
         yield
-        stage.pack(fill="x", padx=20)
+        stage.pack(fill="x", padx=16)
         yield
         self.overlay_preview = fpo.OverlayPanel(stage, self._overlay_colors(), FONT, outer=P["SIDE"])
         yield
         self.overlay_preview.pack(padx=24, pady=24, anchor="w")
         yield
-        self.overlay_preview_note = self.label(right, "", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=360)
+        self.overlay_preview_note = self.label(right, "", 11, color=P["FAINT"], anchor="w", justify="left", wraplength=280)
         yield
-        self.overlay_preview_note.pack(fill="x", padx=20, pady=(10, 4))
+        self.overlay_preview_note.pack(fill="x", padx=16, pady=(10, 4))
         yield
         self.label(right, "How it works\n"
                           "• FPS is measured with Intel PresentMon, which reads Windows' own graphics events. "
@@ -3559,7 +3546,7 @@ class App(ctk.CTk):
                           "• It shows over windowed and borderless-fullscreen games. Games in exclusive "
                           "fullscreen can cover it, so switch them to borderless.\n"
                           "• Clicks pass straight through it.",
-                   11, color=P["MUTED"], anchor="w", justify="left", wraplength=360).pack(fill="x", padx=20, pady=(8, 18))
+                   11, color=P["MUTED"], anchor="w", justify="left", wraplength=280).pack(fill="x", padx=16, pady=(8, 16))
 
     def _overlay_save(self):
         self.settings["overlay"] = self.overlay_cfg
@@ -3681,19 +3668,20 @@ class App(ctk.CTk):
             w.destroy()
         for i, (name, st) in enumerate(sorted(self.settings["profiles"].items())):
             c = self.card(self.prof_area)
-            c.grid(row=i // 3, column=i % 3, sticky="ew", padx=6, pady=6)
-            strip = GlowBar(c, height=24, thickness=7)
-            strip.pack(fill="x", padx=12, pady=(14, 4))
+            c.grid(row=i // 3, column=i % 3, sticky="ew", pady=(0, 12),
+                   padx=(0 if i % 3 == 0 else 6, 0 if i % 3 == 2 else 6))
+            strip = LedStrip(c, n=20, height=28)
+            strip.pack(fill="x", padx=8, pady=(8, 0))
             cols = eng.compute_colors("Rainbow Wave" if st["effect"] == "Color Cycle" else st["effect"],
                                       st["color"], max(st["brightness"], 40), 50, 16, 0)
             strip.after(60, lambda s=strip, c2=cols: s.show(c2))
-            self.label(c, name, 15, "bold", anchor="w").pack(fill="x", padx=18)
+            self.label(c, name, 13, "bold", anchor="w").pack(fill="x", padx=16)
             self.label(c, f"{st['effect']} · {hexcol(st['color']).upper()} · {st['brightness']}%", 11,
-                       color=P["MUTED"], anchor="w").pack(fill="x", padx=18)
+                       color=P["FAINT"], anchor="w").pack(fill="x", padx=16)
             r = ctk.CTkFrame(c, fg_color="transparent")
-            r.pack(fill="x", padx=14, pady=(10, 14))
-            self.secondary(r, "Load", lambda n=name: self._load_profile(n), height=32).pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(r, text="✕", width=34, height=32, corner_radius=16, fg_color=P["BTN"], hover_color="#4a1f28",
+            r.pack(fill="x", padx=16, pady=(8, 12))
+            self.secondary(r, "Load", lambda n=name: self._load_profile(n), height=28, font=F(12)).pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(r, text="✕", width=28, height=28, corner_radius=6, fg_color=P["BTN"], hover_color="#4a1f28",
                           text_color=P["MUTED"], command=lambda n=name: self._delete_profile(n)).pack(side="left", padx=(6, 0))
 
     # ---------------------------------------------------------------- Settings
@@ -3957,7 +3945,7 @@ class App(ctk.CTk):
             ph[k] = (now - t) * 1000
             t = now
         for n, item in self.nav.items():
-            item.set(n == name, self.accent)
+            item.set(n == name, self._led_color())
         mark("nav")
         # Swap pages with drawing frozen, so the old page stays on screen until the new one is fully laid
         # out and filled in, then it appears in a single repaint (no half-drawn frames).
@@ -4027,7 +4015,7 @@ class App(ctk.CTk):
         for card in self.device_cards:
             card.switch.configure(progress_color=acc)
         if hasattr(self, "nav"):
-            self.nav[self.current_page].set(True, acc)
+            self.nav[self.current_page].set(True, self._led_color())
         for sw in getattr(self, "home_switches", []):
             sw.configure(progress_color=acc)
 
@@ -4376,12 +4364,12 @@ class App(ctk.CTk):
         self.wheel.set_rgb(self.color)
         self.swatch.itemconfigure(self.swatch_item, fill=hexcol(self.color))
         self._sync_color_fields()
-        self.preview_label.configure(text=f"Live Preview - {self.effect}")
+        self.preview_label.configure(text=self.effect)
         self._update_accent()
 
     def _state_changed(self):
         st = self._current_state()
-        self.preview_label.configure(text=f"Live Preview - {self.effect}")
+        self.preview_label.configure(text=self.effect)
         if getattr(self, "light_scope", "All") != "All":
             ov = dict(self.settings.data.get("device_overrides", {}))
             for k in self._scope_keys():
@@ -4460,6 +4448,18 @@ class App(ctk.CTk):
             self._state_changed()
         except Exception:
             pass
+
+    def _led_color(self):
+        """The colour your lights are showing now (for the sidebar's LED dot)."""
+        if self.effect == "Off":
+            return P["FAINT"]
+        if self.effect in eng.USES_COLOR:
+            return hexcol(self.color)
+        try:
+            cols = eng.compute_colors(self.effect, self.color, 100, 50, 12, 0.0)
+            return hexcol(max(cols, key=lambda c: max(c) - min(c)))
+        except Exception:
+            return hexcol(self.color)
 
     def _set_effect(self, name):
         self.effect = name

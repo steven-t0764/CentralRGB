@@ -21,7 +21,8 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
 - **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
-- **8 themes** (Cyber Cyan, Ultraviolet Pulse, Emerald Matrix, Crimson Overclock, Nebula Glass, Tactical Mech, Bio-Neural, Cyber Glitch) that switch instantly, no restart. Smooth, anti-aliased dials, graphs, cards and buttons, and a startup animation with the logo
+- **A compact, quiet interface**: the default **Gunmetal** theme keeps every panel neutral so only your real lighting brings the colour, and the sidebar marks the open page with one lit LED in your current lighting colour
+- **9 themes** (Gunmetal, Cyber Cyan, Ultraviolet Pulse, Emerald Matrix, Crimson Overclock, Nebula Glass, Tactical Mech, Bio-Neural, Cyber Glitch) that switch instantly, no restart. Smooth, anti-aliased dials, graphs, cards and buttons, and a startup animation with the logo
 - **Clears conflicts for you**: when another RGB app (MSI Mystic Light, iCUE, Armoury Crate...) is holding your hardware, the Devices page offers to close it and re-detect your devices
 - **Lives in the system tray**: closing the window keeps your lighting and fan control running; right-click the tray icon to open or quit
 - **Edit by device type**: chips on the Lighting page (All Devices, RAM, GPU, Motherboard...) let you set the lighting for every device or just one kind
@@ -95,7 +96,7 @@ You can remove it separately from *Settings → Apps*.
   </tr>
   <tr>
     <td><img src="assets/screenshots/fans.png" alt="Fans page"><br><b>Fans</b>: profiles, a drag-able fan curve, live temperatures and per-fan control</td>
-    <td><img src="assets/screenshots/monitor.png" alt="Monitor overview"><br><b>Monitor</b>: CPU, GPU and memory gauges, live graphs, network, storage and system stats</td>
+    <td><img src="assets/screenshots/monitor.png" alt="Monitor overview"><br><b>Monitor</b>: CPU, GPU and memory at a glance, one big live load chart, network, storage and system stats</td>
   </tr>
   <tr>
     <td><img src="assets/screenshots/advanced.png" alt="Monitor advanced view"><br><b>Monitor → Advanced</b>: every sensor (value / min / max) plus full system details</td>
