@@ -48,7 +48,7 @@ jobs:
           pyinstaller --noconfirm --clean --onedir --windowed --uac-admin --distpath dist_app
           --collect-all customtkinter --collect-all pythonnet --collect-all clr_loader --hidden-import clr
           --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 --hidden-import encodings.idna --icon central_rgb.ico
-          --add-data "central_rgb.ico;." --add-data "central_rgb.png;." --add-data "presets;presets"
+          --add-data "central_rgb.ico;." --add-data "central_rgb.png;." --add-data "presets;presets" --add-data "fonts;fonts"
           --name "Central RGB" central_rgb.py
 
       - name: Build Central RGB.exe (portable single file)
@@ -56,7 +56,7 @@ jobs:
           pyinstaller --noconfirm --onefile --windowed --uac-admin
           --collect-all customtkinter --collect-all pythonnet --collect-all clr_loader --hidden-import clr
           --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 --hidden-import encodings.idna --icon central_rgb.ico
-          --add-data "central_rgb.ico;." --add-data "central_rgb.png;." --add-data "presets;presets"
+          --add-data "central_rgb.ico;." --add-data "central_rgb.png;." --add-data "presets;presets" --add-data "fonts;fonts"
           --name "Central RGB" central_rgb.py
 
       - name: Self-test (launch the app on this clean Windows machine)

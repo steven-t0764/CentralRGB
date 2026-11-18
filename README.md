@@ -20,7 +20,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click
-- **In-game FPS overlay**: FPS, 1% low, frame time and CPU/GPU temperatures on top of your games, measured with Intel PresentMon (nothing is injected into the game)
+- **In-game FPS overlay**: just the number, no box, in the Orbitron font. It turns green when the game is smooth (60+), amber when it dips (30–59) and red when it's low (under 30). Optional 1% low, frame time and CPU/GPU temperatures, measured with Intel PresentMon (nothing is injected into the game)
 - **A compact, quiet interface**: the default **Gunmetal** theme keeps every panel neutral so only your real lighting brings the colour, and the sidebar marks the open page with one lit LED in your current lighting colour
 - **9 themes** (Gunmetal, Cyber Cyan, Ultraviolet Pulse, Emerald Matrix, Crimson Overclock, Nebula Glass, Tactical Mech, Bio-Neural, Cyber Glitch) that switch instantly, no restart. Smooth, anti-aliased dials, graphs, cards and buttons, and a startup animation with the logo
 - **Clears conflicts for you**: when another RGB app (MSI Mystic Light, iCUE, Armoury Crate...) is holding your hardware, the Devices page offers to close it and re-detect your devices
@@ -281,6 +281,7 @@ CentralRGB/
 ├── rgb_engine.py         # OpenRGB setup, lighting effects, system check, settings
 ├── hw_monitor.py         # LibreHardwareMonitor sensors, fan logic, system details
 ├── fps_overlay.py        # in-game FPS overlay (PresentMon)
+├── fonts/                # Orbitron for the FPS counter (OFL 1.1, with its license)
 ├── presets/              # preview pictures for the preset effects (made by tools/make_preset_art.py)
 ├── win_effects.py        # dark, seamless title bar
 ├── central_rgb.ico/.png  # app icon
@@ -300,6 +301,7 @@ CentralRGB/
 | [OpenRGB](https://openrgb.org) | Talking to RGB hardware. GPL-2.0, downloaded on first run and run as a separate program, not bundled. |
 | [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) | Sensors and fan control. MPL-2.0, downloaded on first run, not bundled. |
 | [PresentMon](https://github.com/GameTechDev/PresentMon) | FPS measurement for the overlay. MIT, downloaded the first time the overlay is turned on. |
+| [Orbitron](https://github.com/theleagueof/orbitron) | The FPS counter's font, by Matt McInerney. SIL Open Font License 1.1, bundled unmodified in `fonts/` with its license. |
 | [PawnIO](https://pawnio.eu) | Low-level hardware access driver. The setup downloads and installs it if missing. |
 | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | Modern widgets |
 | [openrgb-python](https://github.com/jath03/openrgb-python) | OpenRGB SDK client |

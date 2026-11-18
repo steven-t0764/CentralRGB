@@ -14,7 +14,7 @@ FPS comes from Intel's open-source PresentMon (MIT). It listens to Windows' own 
 PresentMon is downloaded the first time the overlay is switched on.
 
 * FpsCounter  - runs PresentMon, reads its CSV stream and works out the FPS of the foreground app
-* OverlayPanel - the small stats panel (also used for the preview inside the app)
+* OverlayPanel - the counter: a bare number in Orbitron, no box (also used for the preview inside the app)
 * OverlayWindow - always-on-top, click-through window that holds the panel
 """
 from __future__ import annotations
@@ -73,6 +73,41 @@ IGNORED = {"dwm.exe", "explorer.exe", "central rgb.exe", "searchhost.exe", "shel
 
 CORNERS = ["Top left", "Top right", "Bottom left", "Bottom right"]
 SIZES = {"Small": 0.8, "Medium": 1.0, "Large": 1.3}
+
+# The counter: a bare number in Orbitron (SIL Open Font License, bundled unmodified in fonts/), coloured by
+# how smooth the game is running. No box: a thin dark outline keeps it readable on bright and dark scenes.
+COUNTER_FONT = "Orbitron"
+FPS_GOOD, FPS_OK = 60, 30                                    # green at 60+, amber 30-59, red below 30
+FPS_COLORS = {"good": "#6ee68c", "ok": "#ffbe46", "low": "#ff5555"}
+OUTLINE = "#0b0b0d"                                          # must differ from the window's see-through colour
+_font_loaded = None
+
+
+def load_counter_font() -> str | None:
+    """Make the bundled Orbitron available to this app only (nothing is installed). Returns its family name,
+    or None to fall back to the app font."""
+    global _font_loaded
+    if _font_loaded is not None:
+        return _font_loaded or None
+    _font_loaded = ""
+    try:
+        import sys
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        path = base / "fonts" / "Orbitron-Bold.ttf"
+        if not path.exists():
+            return None
+        if eng.IS_WIN:
+            FR_PRIVATE = 0x10
+            if ctypes.windll.gdi32.AddFontResourceExW(str(path), FR_PRIVATE, 0) <= 0:
+                return None
+        _font_loaded = COUNTER_FONT
+    except Exception:
+        return None
+    return _font_loaded
+
+
+def fps_color(v) -> str:
+    return FPS_COLORS["good"] if v >= FPS_GOOD else FPS_COLORS["ok"] if v >= FPS_OK else FPS_COLORS["low"]
 ITEMS = [("fps", "Frame rate (the number)"), ("low", "1% low"), ("frametime", "Frame time"),
          ("cpu", "CPU temperature and load"), ("gpu", "GPU temperature and load")]
 DEFAULTS = {"enabled": False, "corner": "Top left", "size": "Medium",
@@ -311,13 +346,15 @@ class FpsCounter:
 
 # ============================================================================ visuals
 class OverlayPanel(tk.Canvas):
-    """Small, sleek pill: the frame rate as a bare number, optional extras in small text beside it.
-    `colors` = dict(bg, line, text, muted, ok, warn, bad); `outer` is the colour around the pill."""
+    """The counter: the frame rate as a bare number (no box), optional extras in small text beside it.
+    `colors` = dict(bg, line, text, muted, ok, warn, bad); `outer` is the colour behind the text (see-through on
+    Windows)."""
 
     def __init__(self, master, colors, font, scale=1.0, outer=None):
         self.outer = outer or colors["bg"]
         super().__init__(master, bg=self.outer, highlightthickness=0)
-        self.c, self.font, self.scale = colors, font, scale
+        self.c, self.scale = colors, scale
+        self.font = load_counter_font() or font
         self._fonts = {}
 
     def _font(self, size, weight):
@@ -327,9 +364,15 @@ class OverlayPanel(tk.Canvas):
             self._fonts[key] = tkfont.Font(root=self, family=self.font, size=size, weight=weight)
         return self._fonts[key]
 
-    def _pill(self, w, h, r, fill, outline):
-        pts = [r, 0, w - r, 0, w, 0, w, r, w, h - r, w, h, w - r, h, r, h, 0, h, 0, h - r, 0, r, 0, 0]
-        self.create_polygon(pts, smooth=True, fill=fill, outline=outline)
+    def _outlined(self, x, y, text, font, fill, stroke):
+        """Text with a dark outline and a small drop shadow, so it reads on any game without a box."""
+        sh = stroke + 1
+        self.create_text(x + sh, y + sh, text=text, anchor="w", fill=OUTLINE, font=font)
+        for dx in range(-stroke, stroke + 1):
+            for dy in range(-stroke, stroke + 1):
+                if (dx or dy) and dx * dx + dy * dy <= stroke * stroke + 1:
+                    self.create_text(x + dx, y + dy, text=text, anchor="w", fill=OUTLINE, font=font)
+        self.create_text(x, y, text=text, anchor="w", fill=fill, font=font)
 
     def render(self, cfg, fps=None, metrics=None, stale=False):
         """fps: dict from FpsCounter.current() (or None); metrics: hardware monitor metrics."""
@@ -337,44 +380,47 @@ class OverlayPanel(tk.Canvas):
         items = cfg.get("items", {})
 
         def tcol(t):
-            return c["text"] if t is None else c["ok"] if t < 65 else c["warn"] if t < 82 else c["bad"]
+            return "#f2f2f4" if t is None or t < 70 else FPS_COLORS["ok"] if t < 85 else FPS_COLORS["low"]
 
         def num(v, unit="", nd=0):
             return "—" if v is None else f"{v:.{nd}f}{unit}"
 
+        light, dim = "#f2f2f4", "#c9cace"
         extras = []   # list of [(text, colour), ...] segments
         if items.get("low"):
-            extras.append([(num(fps["low"]) if fps else "—", c["text"]), (" low", c["muted"])])
+            extras.append([(num(fps["low"]) if fps else "—", fps_color(fps["low"]) if fps else light), (" low", dim)])
         if items.get("frametime"):
-            extras.append([(num(fps["ms"], "", 1) if fps else "—", c["text"]), (" ms", c["muted"])])
+            extras.append([(num(fps["ms"], "", 1) if fps else "—", light), (" ms", dim)])
         if items.get("cpu"):
-            extras.append([("CPU ", c["muted"]), (num(m.get("cpu_temp"), "°"), tcol(m.get("cpu_temp")))])
+            extras.append([("CPU ", dim), (num(m.get("cpu_temp"), "°"), tcol(m.get("cpu_temp")))])
         if items.get("gpu"):
-            extras.append([("GPU ", c["muted"]), (num(m.get("gpu_temp"), "°"), tcol(m.get("gpu_temp")))])
+            extras.append([("GPU ", dim), (num(m.get("gpu_temp"), "°"), tcol(m.get("gpu_temp")))])
         show_fps = items.get("fps") or not extras
 
-        big = self._font(max(10, int(18 * s)), "bold")
+        big = self._font(max(12, int(24 * s)), "bold")
         small = self._font(max(7, int(9 * s)), "bold")
-        padx, gap = int(11 * s), int(9 * s)
-        h = int(big.metrics("linespace") * 0.92) + int(8 * s)
-        x = padx
+        stroke = max(1, round(2 * s))
+        pad, gap = stroke + 3, int(10 * s)
+        h = big.metrics("linespace") + 2 * pad
+        x = pad
         self.delete("all")
         parts = []
         if show_fps:
             value = num(fps["fps"]) if fps else "—"
-            parts.append((x, value, big, c["muted"] if stale else c["text"]))
+            col = "#8a8c92" if stale or not fps else fps_color(fps["fps"])
+            parts.append((x, value, big, col, stroke))
             x += big.measure(value) + gap
         for segs in extras:
             for text, col in segs:
-                parts.append((x, text, small, col))
+                parts.append((x, text, small, col, max(1, stroke - 1)))
                 x += small.measure(text)
             x += gap
-        w = max(x - gap + padx, h)
-        self._pill(w, h, min(h // 2, int(10 * s)), c["bg"], c["line"])
-        for px, text, f, col in parts:
-            self.create_text(px, h / 2, text=text, anchor="w", fill=col, font=f)
-        self.configure(width=w + 1, height=h + 1)
-        return w + 1, h + 1
+        w = max(x - gap + pad + stroke + 1, h)
+        mid = h / 2
+        for px, text, f, col, st in parts:
+            self._outlined(px, mid, text, f, col, st)
+        self.configure(width=w, height=h)
+        return w, h
 
 
 class OverlayWindow(tk.Toplevel):
@@ -382,7 +428,7 @@ class OverlayWindow(tk.Toplevel):
     In front of the game while you play; when you tab out it stays on the game (just above it,
     not on top of every other app) and hides when the game is minimised or closed."""
     MARGIN = 12
-    KEY = "#010102"          # transparent colour around the rounded pill (Windows)
+    KEY = "#010102"          # see-through colour behind the number (Windows)
 
     def __init__(self, root, colors, font):
         super().__init__(root)
@@ -395,7 +441,7 @@ class OverlayWindow(tk.Toplevel):
         try:
             if eng.IS_WIN:
                 self.attributes("-transparentcolor", self.KEY)
-            self.attributes("-alpha", 0.9)
+            self.attributes("-alpha", 0.96)
         except tk.TclError:
             pass
         self._styled = False
