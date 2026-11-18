@@ -65,6 +65,7 @@ def main():
     ap.add_argument("--warmup", type=float, default=8.0, help="seconds to let graphs fill before capturing")
     ap.add_argument("--settle", type=float, default=1.5, help="seconds to wait after opening each page")
     ap.add_argument("--keep-open", action="store_true", help="leave the window open after capturing")
+    ap.add_argument("--effect", help="start with this lighting effect, e.g. Nebula or \"Rainbow Wave\"")
     ap.add_argument("--real-stats", action="store_true",
                     help="show this machine's real CPU/RAM/network/disk use instead of demo values")
     args = ap.parse_args()
@@ -74,6 +75,11 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="centralrgb-preview-"))
     os.environ["APPDATA"] = str(tmp / "roaming")          # fresh settings, never the real ones
     os.environ["LOCALAPPDATA"] = str(tmp / "local")
+    if args.effect:                                     # seed the saved lighting state
+        import json
+        (tmp / "roaming" / "CentralRGB").mkdir(parents=True, exist_ok=True)
+        (tmp / "roaming" / "CentralRGB" / "settings.json").write_text(json.dumps(
+            {"state": {"effect": args.effect, "color": [150, 0, 255], "brightness": 100, "speed": 50}}))
 
     import fake_openrgb
     import rgb_engine as eng

@@ -982,41 +982,55 @@ class ColorWheel(tk.Canvas):
 
 
 class LedStrip(tk.Canvas):
+    """Your LEDs as one smooth light line: a crisp rounded core in the real colours with a soft glow under it.
+    Drawn with Pillow (anti-aliased), so the edges stay clean at any size."""
+
     def __init__(self, master, n=24, height=40, bg=None, pill=False):
         bg = bg or P["CARD"]
         super().__init__(master, height=height, bg=bg, highlightthickness=0)
-        self.n, self.h, self.bgc, self.pill = n, height, hex2rgb(bg), pill
-        self.items, self.glows = [], []
+        self.n, self.h, self.bgc = n, height, hex2rgb(bg)
+        self._img = self._photo = None
+        self._size = None
+        self._last = None
         self.bind("<Configure>", lambda e=None: self._layout())
 
     def _layout(self):
-        self.delete("all")
-        self.items, self.glows = [], []
-        w = max(self.winfo_width(), 40)
-        step = w / self.n
-        cy = self.h / 2
-        if self.pill:   # continuous light bar
-            for i in range(self.n):
-                x0, x1 = i * step, (i + 1) * step + 1
-                self.glows.append(self.create_rectangle(x0, cy - 9, x1, cy + 9, width=0, fill=P["CARD"]))
-                self.items.append(self.create_rectangle(x0, cy - 3, x1, cy + 3, width=0, fill=P["CARD"]))
+        w, h = max(self.winfo_width(), 40), self.h
+        if self._size == (w, h):
             return
-        r = min(step * 0.26, self.h * 0.16)
-        for i in range(self.n):
-            cx = step * (i + 0.5)
-            self.glows.append(self.create_oval(cx - r * 2.2, cy - r * 2.2, cx + r * 2.2, cy + r * 2.2, width=0, fill=P["CARD"]))
-            self.items.append(self.create_oval(cx - r, cy - r, cx + r, cy + r, width=0, fill=P["CARD"]))
-        if getattr(self, "_last", None):                 # resized: redraw what was last shown
+        self._size = (w, h)
+        SS = 4                                                   # draw masks 4x larger, then shrink: smooth edges
+        core_t = max(3, round(h * 0.14))
+        pad = max(4, round(h * 0.3))
+        core = Image.new("L", (w * SS, h * SS), 0)
+        y0, y1 = (h - core_t) / 2 * SS, (h + core_t) / 2 * SS
+        ImageDraw.Draw(core).rounded_rectangle((pad * SS, y0, (w - pad) * SS, y1), radius=core_t * SS / 2, fill=255)
+        self._core_mask = core.resize((w, h), Image.LANCZOS)
+        glow = Image.new("L", (w, h), 0)
+        gt = max(core_t + 2, round(h * 0.42))
+        ImageDraw.Draw(glow).rounded_rectangle((pad, (h - gt) / 2, w - pad, (h + gt) / 2), radius=gt / 2, fill=150)
+        self._glow_mask = glow.filter(ImageFilter.GaussianBlur(max(2, h * 0.16)))
+        self._bg = Image.new("RGB", (w, h), self.bgc)
+        self._white = Image.new("RGB", (w, h), (255, 255, 255))
+        self.delete("all")
+        self._photo = ImageTk.PhotoImage(self._bg)
+        self.create_image(0, 0, image=self._photo, anchor="nw")
+        if self._last is not None:                               # resized: redraw what was last shown
             self.show(self._last)
 
     def show(self, colors):
         self._last = colors
-        n = len(self.items)
-        for i in range(n):
-            c = colors[int(i * len(colors) / n)] if colors else (0, 0, 0)
-            lit = max(c) > 20
-            self.itemconfigure(self.items[i], fill=hexcol(mix(c, (255, 255, 255), 0.25) if lit else mix(self.bgc, (60, 64, 76), 0.5)))
-            self.itemconfigure(self.glows[i], fill=hexcol(mix(self.bgc, c, 0.22 if lit else 0)))
+        if self._photo is None:
+            return
+        w, h = self._size
+        dim = mix(self.bgc, (60, 64, 76), 0.5)
+        cols = [c if max(c) > 20 else dim for c in (colors or [(0, 0, 0)])][:w]
+        row = Image.new("RGB", (len(cols), 1))
+        row.putdata([tuple(int(v) for v in c) for c in cols])
+        lit = row.resize((w, h), Image.BILINEAR)                 # colours blend smoothly from LED to LED
+        frame = Image.composite(Image.blend(self._bg, lit, 0.55), self._bg, self._glow_mask)
+        frame = Image.composite(Image.blend(lit, self._white, 0.22), frame, self._core_mask)
+        self._photo.paste(frame)
 
 
 class Sparkline(tk.Canvas):
@@ -1676,6 +1690,11 @@ class Tray:
 
 
 _instance_server = None
+
+
+def plural(n, word, many=None) -> str:
+    """plural(1, "fan") -> '1 fan', plural(3, "fan") -> '3 fans'."""
+    return f"{n} {word if n == 1 else (many or word + 's')}"
 
 
 def version_tuple(v) -> tuple:
@@ -2531,7 +2550,7 @@ class App(ctk.CTk):
     def _refresh_home(self, s):
         m, fans = s.get("metrics", {}), s.get("fans", {})
         rows = self.device_rows
-        self.home_status.configure(text=(f"{len(rows)} RGB devices · {sum(r[3] for r in rows)} LEDs · {len(fans)} fans"
+        self.home_status.configure(text=(f"{plural(len(rows), 'RGB device')} · {plural(sum(r[3] for r in rows), 'LED')} · {plural(len(fans), 'fan')}"
                                          if self.connected else "Connecting to your RGB hardware…"))
         big, sub = self.home_tiles["Lighting"]
         big.configure(text=self.effect)
@@ -3499,7 +3518,7 @@ class App(ctk.CTk):
             self.snap = s
             dot, oval, sub = self.status_rows["hw"]
             dot.itemconfigure(oval, fill={"ok": OK, "basic": WARN}.get(s["status"], WARN))
-            sub.configure(text={"ok": f"{len(s['sensors'])} sensors · {len(s['fans'])} fans",
+            sub.configure(text={"ok": f"{plural(len(s['sensors']), 'sensor')} · {plural(len(s['fans']), 'fan')}",
                                 "basic": "Basic stats only", "starting": "Loading…"}.get(s["status"], ""))
             if self._hidden():
                 pass                              # in the tray: keep the data, skip drawing
@@ -4361,7 +4380,7 @@ class App(ctk.CTk):
         rows = [(eng.device_key(d), eng.type_name(d), d.name, len(d.leds)) for d in self.engine.devices()]
         if rows != self.device_rows:
             self.q.put(("devices", rows))
-        self.status(f"{len(rows)} devices · {sum(r[3] for r in rows)} LEDs", "ok" if rows else "warn")
+        self.status(f"{plural(len(rows), 'device')} · {plural(sum(r[3] for r in rows), 'LED')}", "ok" if rows else "warn")
         if not quiet or initial:
             self.log(f"Found {len(rows)} RGB device(s).", "ok" if rows else "warn")
             for _, t, name, leds in rows:
