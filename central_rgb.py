@@ -2574,9 +2574,9 @@ class App(ctk.CTk):
                 col = tuple(int(v) for v in mix(c, (230, 230, 240), k)) if k else c
                 x = step * i + step / 2
                 it = sw.create_oval(x - 8, 3 + row * 22, x + 8, 19 + row * 22, fill=hexcol(col), outline=P["CARD"], width=2)
-                sw.tag_bind(it, "<Button-1>", lambda e, cl=col: self._set_color(cl))
-                sw.tag_bind(it, "<Enter>", lambda e, i2=it: sw.itemconfigure(i2, outline=P["TEXT"]))
-                sw.tag_bind(it, "<Leave>", lambda e, i2=it: sw.itemconfigure(i2, outline=P["CARD"]))
+                sw.tag_bind(it, "<Button-1>", lambda e=None, cl=col: self._set_color(cl))
+                sw.tag_bind(it, "<Enter>", lambda e=None, i2=it: sw.itemconfigure(i2, outline=P["TEXT"]))
+                sw.tag_bind(it, "<Leave>", lambda e=None, i2=it: sw.itemconfigure(i2, outline=P["CARD"]))
         yield
         hexrow = ctk.CTkFrame(cc, fg_color="transparent")
         yield
