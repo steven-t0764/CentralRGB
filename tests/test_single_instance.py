@@ -30,8 +30,10 @@ except Exception as e:  # pragma: no cover - needs tkinter/customtkinter
 class SingleInstance(unittest.TestCase):
     def setUp(self):
         self._port = cr.INSTANCE_PORT
-        SingleInstance._n = getattr(SingleInstance, "_n", 0) + 1     # a fresh port per test, away from the real one
-        cr.INSTANCE_PORT = 47000 + (os.getpid() % 200) * 5 + SingleInstance._n
+        import socket                                # a fresh port the OS says is free (never the real one)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            cr.INSTANCE_PORT = probe.getsockname()[1]
 
     def tearDown(self):
         cr.INSTANCE_PORT = self._port
