@@ -37,7 +37,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 ## See it in action
 
 <p align="center">
-  <img src="assets/demo.gif" alt="Demo: dragging the color wheel, switching effects, the Devices page, setting a fan curve, and the Monitor and Advanced sensor views" width="860">
+  <img src="assets/demo.gif" alt="Demo: the startup animation, dragging the color wheel, switching effects and picking the Aurora preset, the Devices page, choosing a fan profile and reshaping the curve, and the Monitor and Advanced views" width="860">
 </p>
 
 ---
