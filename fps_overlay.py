@@ -13,7 +13,8 @@ FPS comes from Intel's open-source PresentMon (MIT). It listens to Windows' own 
 (ETW), so nothing is injected into the game - that keeps it clear of anti-cheat systems.
 PresentMon is downloaded the first time the overlay is switched on.
 
-* FpsCounter  - runs PresentMon, reads its CSV stream and works out the FPS of the foreground app
+* FpsCounter  - runs PresentMon (restarting it if it stops), reads its CSV stream and keeps frame times per app
+* GameTracker - picks the game to follow and turns problems into plain-English status messages
 * OverlayPanel - the counter: a bare number in Orbitron, no box (also used for the preview inside the app)
 * OverlayWindow - always-on-top, click-through window that holds the panel
 """
@@ -124,6 +125,28 @@ def overlay_settings(settings) -> dict:
     return cfg
 
 
+# Programs that draw frames but are never "the game": launchers, anti-cheat helpers, chat/recording overlays
+# and RGB suites. If one of them is in front (Discord, SteelSeries GG, Steam...) the overlay stays on the game
+# instead of jumping to it.
+HELPERS = {"steam.exe", "steamwebhelper.exe", "gameoverlayui.exe", "epicgameslauncher.exe", "epicwebhelper.exe",
+           "easyanticheat.exe", "easyanticheat_eos.exe", "easyanticheat_eos_setup.exe", "start_protected_game.exe",
+           "eadesktop.exe", "eabackgroundservice.exe", "battle.net.exe", "ubisoftconnect.exe", "upc.exe",
+           "riotclientservices.exe", "riotclientux.exe", "galaxyclient.exe", "discord.exe", "overwolf.exe",
+           "medal.exe", "obs64.exe", "nvidia overlay.exe", "nvidia app.exe", "gamebar.exe",
+           "gamebarftserver.exe", "xboxgamebarwidgets.exe", "xboxpcappft.exe", "rtss.exe", "msiafterburner.exe",
+           "msi center.exe", "msi.centralserver.exe", "mysticlight.exe", "steelseriesgg.exe",
+           "steelseriesggclient.exe", "steelseriesengine.exe", "steelseriesprism.exe", "razer synapse 3.exe",
+           "razerappengine.exe", "icue.exe", "lghub.exe", "armourycrate.exe", "openrgb.exe"}
+MIN_FRAMES = 3          # frames in the last second before a process counts as "drawing"
+WAIT_SECS = 4.0         # a game-like window in front with no frames this long -> tell the user
+RESTART_DELAYS = (2, 5, 10)   # seconds before restarting PresentMon after it stops on its own
+
+
+def is_helper(name: str) -> bool:
+    n = (name or "").lower()
+    return n in IGNORED or n in HELPERS or n.startswith("easyanticheat")
+
+
 def foreground_pid() -> int:
     if not eng.IS_WIN:
         return 0
@@ -143,6 +166,31 @@ def foreground_window() -> tuple[int, int]:
         return int(hwnd or 0), int(pid.value)
     except Exception:
         return 0, 0
+
+
+def process_name(pid: int) -> str:
+    try:
+        import psutil
+        return psutil.Process(pid).name()
+    except Exception:
+        return ""
+
+
+def process_family(pid: int) -> set[int]:
+    """The parent and all children of a process. A game is sometimes drawn by a different exe than the one that
+    owns the window (a bootstrapper or anti-cheat launcher that starts the real game as a child)."""
+    out: set[int] = set()
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        out.update(c.pid for c in p.children(recursive=True))
+        parent = p.ppid()
+        if parent:
+            out.add(parent)
+    except Exception:
+        pass
+    out.discard(pid)
+    return out
 
 
 class _RECT(ctypes.Structure):
@@ -172,6 +220,37 @@ def game_window_state(hwnd: int):
         return None
 
 
+def monitor_rect(hwnd: int):
+    """(x, y, w, h) of the monitor that holds most of this window, or None."""
+    if not eng.IS_WIN or not hwnd:
+        return None
+    try:
+        from ctypes import wintypes as wt
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+        u = _u32()
+        u.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
+        u.MonitorFromWindow.restype = wt.HMONITOR
+        u.GetMonitorInfoW.argtypes = [wt.HMONITOR, ctypes.POINTER(MONITORINFO)]
+        mon = u.MonitorFromWindow(hwnd, 2)                      # MONITOR_DEFAULTTONEAREST
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not mon or not u.GetMonitorInfoW(mon, ctypes.byref(mi)):
+            return None
+        r = mi.rcMonitor
+        return r.left, r.top, r.right - r.left, r.bottom - r.top
+    except Exception:
+        return None
+
+
+def covers_monitor(rect, monitor, share=0.9) -> bool:
+    """True when a window fills (almost) its whole monitor - how fullscreen and borderless games look."""
+    if not isinstance(rect, tuple) or not monitor:
+        return False
+    return rect[2] >= monitor[2] * share and rect[3] >= monitor[3] * share
+
+
 def frame_stats(frames, now, window=1.0, low_window=10.0):
     """frames: iterable of (timestamp, ms_between_presents). Returns (fps, one_percent_low_fps, frame_ms)."""
     recent = [ms for t, ms in frames if now - t <= window and ms > 0]
@@ -183,19 +262,108 @@ def frame_stats(frames, now, window=1.0, low_window=10.0):
     return 1000.0 / avg_ms, 1000.0 / worst, avg_ms
 
 
+def pick_game(fg_pid, fg_name, presenting, related=(), own_pid=None):
+    """Which process to show FPS for, given the window in front.
+    presenting: {pid: (name, frames_in_last_second)} from FpsCounter.presenting(); related: process_family(fg_pid).
+    Returns a pid, or None to keep whatever was picked before (desktop, helper apps, this app, nothing drawing)."""
+    own_pid = os.getpid() if own_pid is None else own_pid
+    if not fg_pid or fg_pid == own_pid or (fg_name or "").lower() in IGNORED:
+        return None
+
+    def drawing(pid):
+        name, n = presenting.get(pid, ("", 0))
+        return n >= MIN_FRAMES and pid != own_pid and not is_helper(name)
+
+    if drawing(fg_pid) and not is_helper(fg_name):
+        return fg_pid
+    family = [p for p in related if p != fg_pid and drawing(p)]
+    if family:                     # window belongs to a launcher/bootstrapper; its child draws the frames
+        return max(family, key=lambda p: presenting[p][1])
+    return None
+
+
+ERROR_SHORT = {"admin": "PresentMon needs admin", "download": "Couldn't download PresentMon",
+               "blocked": "PresentMon was blocked", "crashed": "PresentMon keeps stopping",
+               "sessions": "Too many trace sessions", "windows": "FPS overlay is Windows-only",
+               "other": "FPS counter unavailable"}
+
+
+def classify_pm_exit(text: str, returncode) -> tuple[str, str]:
+    """Turn PresentMon's own error output into (kind, plain-English message)."""
+    t = (text or "").lower()
+    if "access denied" in t or "performance log users" in t or "administrat" in t or "elevat" in t:
+        return "admin", ("PresentMon needs administrator rights to read Windows' graphics events. Run Central RGB "
+                         "as administrator (or add your Windows account to the 'Performance Log Users' group and "
+                         "sign out and back in), then switch the overlay off and on.")
+    if "too many" in t or "no system resources" in t or "1450" in t:
+        return "sessions", ("Windows has run out of graphics trace sessions (other monitoring or RGB apps use them "
+                            "too). Close other overlay/monitoring tools or restart the PC.")
+    if "already running" in t or "already exists" in t:
+        return "crashed", "Another FPS counter session with the same name was in the way."
+    first = next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+    detail = f": {first[:160]}" if first else f" (exit code {returncode})" if returncode not in (None, 0) else ""
+    return "crashed", f"PresentMon stopped unexpectedly{detail}."
+
+
+def classify_launch_error(e: BaseException) -> tuple[str, str]:
+    """Why PresentMon couldn't even be started."""
+    code = getattr(e, "winerror", None)
+    if code == 193:                                      # not a valid program: half-downloaded or damaged file
+        return "corrupt", "The downloaded PresentMon is damaged."
+    if code == 225 or "virus" in str(e).lower():
+        return "blocked", ("Your antivirus blocked PresentMon (Intel's FPS tool). Allow it in Windows Security, "
+                           "then switch the overlay off and on.")
+    if code == 5 or isinstance(e, PermissionError):
+        return "admin", "Windows refused to start PresentMon (access denied). Run Central RGB as administrator."
+    if code == 2 or isinstance(e, FileNotFoundError):
+        return "blocked", ("PresentMon disappeared from disk (often removed by antivirus). Allow it in Windows "
+                           "Security, then switch the overlay off and on.")
+    return "other", f"FPS counter unavailable: {e}"
+
+
+def status_text(status, kind="", message="", *, fps=None, game_name="", exclusive=False, waiting_name=""):
+    """What to tell the user. Returns (level, overlay_note, page_text); level is off/info/ok/warn/bad.
+    overlay_note is the short line drawn in the overlay itself ('' = just the number)."""
+    if status == "off":
+        return "off", "", "Off"
+    if status == "starting":
+        return "info", "Starting FPS counter…", message or "Starting the FPS counter (the first time it downloads PresentMon)…"
+    if status == "restarting":
+        return "warn", "FPS counter restarting…", message or "PresentMon stopped; restarting it…"
+    if status == "error":
+        return "bad", ERROR_SHORT.get(kind, ERROR_SHORT["other"]), message or ERROR_SHORT.get(kind, "")
+    name = game_name or (fps or {}).get("name") or "Your game"
+    if exclusive:
+        return "warn", "Exclusive fullscreen hides overlays", (
+            f"{name} is in exclusive fullscreen, so no overlay can show on top of it. "
+            "Switch the game to Borderless (or Windowed) fullscreen in its display settings.")
+    if fps:
+        return "ok", "", f"Tracking {fps['name']}: {fps['fps']:.0f} FPS"
+    if waiting_name:
+        return "warn", "No frames from this game yet", (
+            f"{waiting_name} is in front, but Windows hasn't reported any frames from it yet. This is normal on "
+            "menus and loading screens for a few seconds. If it lasts, the game may be using exclusive fullscreen, "
+            "or another program may be holding Windows' graphics trace.")
+    return "ok", "", "Running. Open a game and it will appear on it."
+
+
 class FpsCounter:
-    """Runs PresentMon and keeps recent frame times per process."""
+    """Runs PresentMon (restarting it if it stops on its own) and keeps recent frame times per process."""
 
     def __init__(self, log):
         self.log = log
         self.proc: subprocess.Popen | None = None
+        self._proc_ev: threading.Event | None = None
         self.lock = threading.Lock()
+        self._life = threading.Lock()        # start and stop never overlap (a late stop used to kill a new start)
         self.modes: dict[int, str] = {}
-        self.frames: dict[int, collections.deque] = {}
+        self.frames: dict[tuple, collections.deque] = {}       # (pid, swap chain) -> (time, ms)
         self.names: dict[int, str] = {}
-        self.status, self.message = "off", ""
+        self.status, self.kind, self.message = "off", "", ""
+        self.last_row = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._pm_text: collections.deque = collections.deque(maxlen=40)   # PresentMon's non-CSV output
 
     # ---------------- PresentMon binary
     @staticmethod
@@ -208,7 +376,8 @@ class FpsCounter:
         for base in (eng.app_dir(), eng.app_dir() / "PresentMon", self.pm_dir()):
             if base.is_dir():
                 for f in sorted(base.glob("PresentMon*.exe"), reverse=True):
-                    return f
+                    if "service" not in f.name.lower() and f.stat().st_size > 100_000:
+                        return f
         return None
 
     def download(self) -> Path:
@@ -237,75 +406,159 @@ class FpsCounter:
 
     # ---------------- lifecycle
     def start(self):
-        if self._thread and self._thread.is_alive():
+        if self._thread and self._thread.is_alive() and not self._stop.is_set():
             return
-        self._stop.clear()
-        self.status, self.message = "starting", "Starting the FPS counter…"
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._stop = stop = threading.Event()          # each run has its own stop flag
+        self.status, self.kind, self.message = "starting", "", "Starting the FPS counter…"
+        self._thread = threading.Thread(target=self._run, args=(stop,), daemon=True)
         self._thread.start()
 
     def stop(self):
-        self._stop.set()
-        p, self.proc = self.proc, None
-        if p and p.poll() is None:
-            try:
-                p.terminate()
-            except Exception:
-                pass
-        exe = self.find_exe() if eng.IS_WIN else None
-        if exe:   # make sure the Windows trace session is closed too
-            eng.run_quiet([str(exe), "--terminate_existing_session", "--session_name", SESSION], timeout=10)
-        with self.lock:
-            self.frames.clear()
-        self.status, self.message = "off", ""
+        self._shutdown(self._stop)
 
-    def _run(self):
+    def stop_async(self):
+        """Stop without blocking the window. The run being stopped is fixed right now, so a start() straight
+        after can't be cancelled by this stop finishing late."""
+        ev = self._stop
+        ev.set()
+        threading.Thread(target=self._shutdown, args=(ev,), daemon=True).start()
+
+    def _shutdown(self, ev):
+        ev.set()
+        with self._life:
+            if self._proc_ev is ev:            # only ever stop the PresentMon that belongs to this run
+                p, self.proc, self._proc_ev = self.proc, None, None
+                if p and p.poll() is None:
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
+            newer = self._stop is not ev and not self._stop.is_set()
+            exe = self.find_exe() if eng.IS_WIN and not newer else None
+            if exe:   # make sure the Windows trace session is closed too (not if a new run already owns it)
+                eng.run_quiet([str(exe), "--terminate_existing_session", "--session_name", SESSION], timeout=10)
+        if not newer:
+            with self.lock:
+                self.frames.clear()
+            self.status, self.kind, self.message = "off", "", ""
+
+    def _fail(self, stop, kind, message):
+        if not stop.is_set():
+            self.status, self.kind, self.message = "error", kind, message
+            self.log(message, "warn")
+
+    def _run(self, stop):
+        if not eng.IS_WIN:
+            return self._fail(stop, "windows", "The FPS overlay is Windows-only.")
         try:
-            if not eng.IS_WIN:
-                raise RuntimeError("The FPS overlay is Windows-only.")
             exe = self.find_exe() or self.download()
-            cmd = [str(exe), "--output_stdout", "--no_console_stats", "--stop_existing_session",
-                   "--session_name", SESSION, "--no_track_gpu", "--no_track_input"]
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                         errors="replace", bufsize=1, creationflags=eng.NO_WINDOW)
-            self.status, self.message = "running", "FPS counter running"
-            self.log("FPS counter started (PresentMon).")
-            self.read_stream(self.proc.stdout)
-            if not self._stop.is_set():
-                self.status, self.message = "error", "PresentMon stopped unexpectedly (is another copy running?)"
-                self.log(self.message)
         except Exception as e:
-            if not self._stop.is_set():
-                self.status, self.message = "error", f"FPS counter unavailable: {e}"
-                self.log(self.message)
+            return self._fail(stop, "download", f"Couldn't download PresentMon, the free Intel tool that measures FPS "
+                                                f"({e}). Check your internet connection, then switch the overlay off and on.")
+        if not eng.is_admin():
+            self.log("Central RGB isn't running as administrator; PresentMon may be refused access.", "warn")
+        attempts, redownloaded = 0, False
+        while not stop.is_set():
+            started = time.monotonic()
+            try:
+                rc, text = self._run_once(exe, stop)
+            except OSError as e:
+                kind, msg = classify_launch_error(e)
+                if kind == "corrupt" and not redownloaded:
+                    redownloaded = True
+                    try:
+                        exe.unlink()
+                        exe = self.download()
+                        continue
+                    except Exception as e2:
+                        return self._fail(stop, "download", f"{msg} Downloading it again failed ({e2}).")
+                return self._fail(stop, kind, msg)
+            if stop.is_set():
+                return
+            kind, msg = classify_pm_exit(text, rc)
+            if kind in ("admin", "sessions"):
+                return self._fail(stop, kind, msg)
+            if time.monotonic() - started > 60:
+                attempts = 0                       # it had been running fine for a while
+            if attempts >= len(RESTART_DELAYS):
+                return self._fail(stop, "crashed", f"{msg} It stopped {attempts + 1} times in a row, so Central RGB "
+                                                   "gave up. Switch the overlay off and on to try again.")
+            delay = RESTART_DELAYS[attempts]
+            attempts += 1
+            self.status, self.kind, self.message = "restarting", kind, f"{msg} Restarting it in {delay} s…"
+            self.log(self.message, "warn")
+            if stop.wait(delay):
+                return
 
-    def read_stream(self, stream):
-        """Parse PresentMon's CSV stream. Columns are found by name, so column order doesn't matter."""
+    def _run_once(self, exe, stop):
+        """Run PresentMon until it exits. Returns (exit code, its error output)."""
+        cmd = [str(exe), "--output_stdout", "--no_console_stats", "--stop_existing_session",
+               "--session_name", SESSION, "--no_track_gpu", "--no_track_input"]
+        with self._life:                       # wait for a stop() that's still closing the old session
+            if stop.is_set():
+                return 0, ""
+            self._pm_text.clear()
+            self._proc_ev = stop
+            p = self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                             errors="replace", bufsize=1, creationflags=eng.NO_WINDOW)
+        threading.Thread(target=self._drain, args=(p.stderr,), daemon=True).start()
+        if not stop.is_set():
+            self.status, self.kind, self.message = "running", "", "FPS counter running"
+            self.log("FPS counter started (PresentMon).")
+        self.read_stream(p.stdout, stop)
+        try:
+            rc = p.wait(timeout=5)
+        except Exception:
+            rc = None
+        time.sleep(0.2)                        # let the stderr reader catch the last lines
+        return rc, "\n".join(self._pm_text)
+
+    def _drain(self, stream):
+        try:
+            for line in stream:
+                if line.strip():
+                    self._pm_text.append(line.strip())
+        except Exception:
+            pass
+
+    def read_stream(self, stream, stop=None):
+        """Parse PresentMon's CSV stream. Columns are found by name, so column order doesn't matter, and a new
+        header (PresentMon restarted, or a different version) is picked up again."""
+        stop = stop or self._stop
         cols = None
         for line in stream:
-            if self._stop.is_set():
+            if stop.is_set():
                 break
             parts = line.rstrip("\r\n").split(",")
+            if "Application" in parts and "ProcessID" in parts:
+                ms_col = next((c for c in ("MsBetweenPresents", "msBetweenPresents", "FrameTime", "MsBetweenAppStart")
+                               if c in parts), None)
+                cols = None if ms_col is None else (
+                    parts.index("Application"), parts.index("ProcessID"), parts.index(ms_col),
+                    parts.index("PresentMode") if "PresentMode" in parts else None,
+                    parts.index("SwapChainAddress") if "SwapChainAddress" in parts else None)
+                continue
             if cols is None:
-                if "Application" in parts and "ProcessID" in parts:
-                    ms_col = next((c for c in ("MsBetweenPresents", "FrameTime", "msBetweenPresents") if c in parts), None)
-                    if ms_col:
-                        cols = (parts.index("Application"), parts.index("ProcessID"), parts.index(ms_col),
-                                parts.index("PresentMode") if "PresentMode" in parts else None)
+                if line.strip():
+                    self._pm_text.append(line.strip())
                 continue
             try:
                 name, pid, ms = parts[cols[0]], int(parts[cols[1]]), float(parts[cols[2]])
-                if cols[3] is not None:
-                    self.modes[pid] = parts[cols[3]]
+                chain = parts[cols[4]] if cols[4] is not None else ""
             except (ValueError, IndexError):
+                continue
+            if not (0 < ms < 5000):
                 continue
             now = time.monotonic()
             with self.lock:
-                dq = self.frames.get(pid)
+                if cols[3] is not None:
+                    self.modes[pid] = parts[cols[3]]
+                dq = self.frames.get((pid, chain))
                 if dq is None:
-                    dq = self.frames[pid] = collections.deque(maxlen=6000)
-                    self.names[pid] = name
+                    dq = self.frames[(pid, chain)] = collections.deque(maxlen=16000)
+                self.names[pid] = name
                 dq.append((now, ms))
+                self.last_row = now
 
     # ---------------- reading
     def mode(self, pid) -> str:
@@ -318,12 +571,34 @@ class FpsCounter:
         on top of it. 'Hardware: Legacy Flip' / 'Legacy Copy' are exclusive; flip/composed modes are not."""
         return "Legacy" in (mode or "")
 
+    def _main_chain(self, pid, now):
+        """Frames of the swap chain that draws the most (a game can have extra ones for overlays or a launcher
+        view; mixing them made the number jump around)."""
+        best, best_n = None, -1
+        for (p, _chain), dq in self.frames.items():
+            if p != pid or not dq:
+                continue
+            n = sum(1 for t, _ in reversed(dq) if now - t <= 1.0) if now - dq[-1][0] <= 1.0 else 0
+            if n > best_n or (n == best_n and best is not None and dq[-1][0] > best[-1][0]):
+                best, best_n = dq, n
+        return best, max(best_n, 0)
+
+    def presenting(self) -> dict[int, tuple[str, int]]:
+        """{pid: (name, frames in the last second)} for every process drawing right now."""
+        now = time.monotonic()
+        out = {}
+        with self.lock:
+            for pid in {p for p, _ in self.frames}:
+                _dq, n = self._main_chain(pid, now)
+                if n:
+                    out[pid] = (self.names.get(pid, ""), n)
+        return out
+
     def alive(self, pid) -> bool:
         """True while this process has drawn a frame in the last 15 seconds."""
         now = time.monotonic()
         with self.lock:
-            dq = self.frames.get(pid)
-            return bool(dq) and now - dq[-1][0] <= 15
+            return any(p == pid and dq and now - dq[-1][0] <= 15 for (p, _c), dq in self.frames.items())
 
     def current(self, pid=None):
         """Stats for the foreground app: {'name', 'fps', 'low', 'ms'} or None when it isn't rendering."""
@@ -332,8 +607,11 @@ class FpsCounter:
         with self.lock:
             for k in [k for k, dq in self.frames.items() if not dq or now - dq[-1][0] > 15]:
                 self.frames.pop(k, None)
-                self.names.pop(k, None)
-            dq = self.frames.get(pid)
+            live = {p for p, _ in self.frames}
+            for p in [p for p in self.names if p not in live]:
+                self.names.pop(p, None)
+                self.modes.pop(p, None)
+            dq, _n = self._main_chain(pid, now)
             name = self.names.get(pid, "")
             frames = list(dq) if dq else []
         if not frames or pid == os.getpid() or name.lower() in IGNORED:
@@ -342,6 +620,73 @@ class FpsCounter:
         if st is None:
             return None
         return {"name": name, "fps": st[0], "low": st[1], "ms": st[2]}
+
+
+class GameTracker:
+    """Picks the game to follow and works out what the overlay and the Overlay page should say.
+    Kept apart from the window code so it can be tested with a fake PresentMon."""
+
+    def __init__(self, counter, *, family=process_family, window_state=None, name_of=process_name,
+                 own_pid=None, clock=time.monotonic):
+        self.counter, self.family, self.name_of, self.clock = counter, family, name_of, clock
+        self.window_state = window_state or game_window_state
+        self.own_pid = os.getpid() if own_pid is None else own_pid
+        self.pid = self.hwnd = self.fg_pid = None
+        self.last = None
+        self._wait = (None, 0.0)
+        self._family_cache = (None, 0.0, set())
+
+    def _family(self, pid, now):
+        cpid, at, fam = self._family_cache
+        if cpid != pid or now - at > 2.0:
+            fam = self.family(pid)
+            self._family_cache = (pid, now, fam)
+        return fam
+
+    def reset(self):
+        self.pid = self.hwnd = self.fg_pid = self.last = None
+        self._wait = (None, 0.0)
+
+    def update(self, fg_hwnd, fg_pid, fg_gamelike=False) -> dict:
+        """fg_gamelike: the window in front fills its monitor (fullscreen/borderless). Returns a dict with
+        pid, hwnd, fps, stale, in_front, exclusive, level, note (short, for the overlay) and text (for the page)."""
+        c, now = self.counter, self.clock()
+        fps, stale, waiting_name = None, False, ""
+        if c.status != "running":
+            self.reset()
+        else:
+            presenting = c.presenting()
+            fg_name = c.names.get(fg_pid) or (self.name_of(fg_pid) if fg_pid else "")
+            related = () if fg_pid in presenting else self._family(fg_pid, now) if fg_pid else ()
+            pick = pick_game(fg_pid, fg_name, presenting, related, self.own_pid)
+            if pick and pick != self.pid:
+                self.pid, self.hwnd, self.fg_pid, self.last = pick, fg_hwnd, fg_pid, None      # a new game is in front
+            elif pick and fg_hwnd and fg_hwnd != self.hwnd and self.window_state(self.hwnd) is None:
+                self.hwnd = fg_hwnd       # same game, new window (resolution or display-mode change recreates it)
+            if self.pid and (not c.alive(self.pid) or self.window_state(self.hwnd) is None):
+                self.pid = self.hwnd = self.fg_pid = self.last = None                            # game closed
+            if self.pid:
+                fps = c.current(self.pid)
+                if fps:
+                    self.last = fps
+                else:                         # backgrounded games often pause drawing: keep the last number, dimmed
+                    fps, stale = self.last, True
+            # A fullscreen window is in front but nothing is being measured for it
+            if (fg_gamelike and fg_pid and fg_pid != self.own_pid and not pick and fg_pid != self.fg_pid
+                    and not is_helper(fg_name)):
+                if self._wait[0] != fg_pid:
+                    self._wait = (fg_pid, now)
+                if now - self._wait[1] >= WAIT_SECS:
+                    waiting_name = fg_name or "This game"
+            else:
+                self._wait = (None, 0.0)
+        exclusive = bool(self.pid) and c.exclusive(c.mode(self.pid))
+        level, note, text = status_text(c.status, c.kind, c.message, fps=fps,
+                                        game_name=(fps or {}).get("name", ""), exclusive=exclusive,
+                                        waiting_name=waiting_name)
+        in_front = bool(self.pid) and fg_pid in (self.pid, self.fg_pid)
+        return {"pid": self.pid, "hwnd": self.hwnd, "fps": fps, "stale": stale, "in_front": in_front,
+                "exclusive": exclusive, "level": level, "note": note, "text": text}
 
 
 # ============================================================================ visuals
@@ -374,8 +719,9 @@ class OverlayPanel(tk.Canvas):
                     self.create_text(x + dx, y + dy, text=text, anchor="w", fill=OUTLINE, font=font)
         self.create_text(x, y, text=text, anchor="w", fill=fill, font=font)
 
-    def render(self, cfg, fps=None, metrics=None, stale=False):
-        """fps: dict from FpsCounter.current() (or None); metrics: hardware monitor metrics."""
+    def render(self, cfg, fps=None, metrics=None, stale=False, note=""):
+        """fps: dict from FpsCounter.current() (or None); metrics: hardware monitor metrics;
+        note: a short status line ('PresentMon needs admin'...) drawn after the number instead of failing silently."""
         c, s, m = self.c, self.scale * SIZES.get(cfg.get("size"), 1.0), metrics or {}
         items = cfg.get("items", {})
 
@@ -415,6 +761,9 @@ class OverlayPanel(tk.Canvas):
                 parts.append((x, text, small, col, max(1, stroke - 1)))
                 x += small.measure(text)
             x += gap
+        if note:
+            parts.append((x, note, small, FPS_COLORS["ok"], max(1, stroke - 1)))
+            x += small.measure(note) + gap
         w = max(x - gap + pad + stroke + 1, h)
         mid = h / 2
         for px, text, f, col, st in parts:
@@ -501,13 +850,13 @@ class OverlayWindow(tk.Toplevel):
             return False
         return bool(_u32().GetWindowLongPtrW(self.hwnd, -20) & 0x8)        # WS_EX_TOPMOST
 
-    def update_overlay(self, cfg, fps, metrics, game_hwnd=0, game_in_front=True, stale=False):
+    def update_overlay(self, cfg, fps, metrics, game_hwnd=0, game_in_front=True, stale=False, note=""):
         rect = game_window_state(game_hwnd) if eng.IS_WIN else (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
         if rect is None or rect == "minimized":
             self.hide()
             return
         gx, gy, gw, gh = rect
-        w, h = self.panel.render(cfg, fps, metrics, stale=stale)
+        w, h = self.panel.render(cfg, fps, metrics, stale=stale, note=note)
         corner = cfg.get("corner", "Top left")
         x = gx + self.MARGIN if "left" in corner else gx + gw - w - self.MARGIN
         y = gy + self.MARGIN if "Top" in corner else gy + gh - h - self.MARGIN
