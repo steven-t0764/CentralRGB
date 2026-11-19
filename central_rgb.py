@@ -1903,6 +1903,8 @@ class App(ctk.CTk):
         self.sensor_items: dict[str, str] = {}
         self.connected = False
         self.current_page = "Home"
+        self._switching, self._pending_page = False, None   # page switch in progress / the latest one asked for
+        self._pinned, self._restoring = None, False
         self.snap = self.monitor.snapshot()
 
         self.splash = None                       # the logo animation now runs in SplashProcess
@@ -2185,6 +2187,39 @@ class App(ctk.CTk):
         if e.widget is self and self._was_minimized:
             self._was_minimized = False
             self._ignore_resize_until = time.time() + 0.6
+            self._restore_drawn()
+
+    def _restore_drawn(self):
+        """Back from the taskbar. Minimizing shrinks the window to nothing, so Windows throws its picture away and
+        puts up an empty (black) one when it comes back, while Tk only draws a moment later, widget by widget; on a
+        240 Hz screen every one of those half-drawn moments gets its own frame. So the window is hidden from the
+        screen for that moment (Windows 8+), drawn completely in one go, and only then shown."""
+        if self._restoring:
+            return
+        self._restoring = True
+        cloaked = fx.cloak(self, True)
+        if cloaked:
+            self.after(1000, lambda: fx.cloak(self, False))     # never left hidden, whatever happens below
+        try:
+            self._refresh_page(self.current_page, self.snap)   # pages skip drawing while minimized: catch up first
+            self._paint_now()
+        except Exception:
+            pass
+        finally:
+            if cloaked:
+                fx.dwm_flush()
+                fx.cloak(self, False)
+            self._restoring = False
+
+    def _paint_now(self):
+        """Do all the drawing that is waiting, right now. Tk answers Windows' requests to repaint at once but draws
+        later, widget by widget, spread over several screen frames; this does it all in one go."""
+        if self._hidden():
+            return
+        try:
+            self.update()
+        except tk.TclError:
+            pass
 
     def _repaint_and_show(self):
         try:
@@ -2213,6 +2248,7 @@ class App(ctk.CTk):
             page = self.pages.get(self.current_page)
             if page is not None and page.winfo_manager() == "place":
                 page.place_configure(relwidth=0, relheight=0, width=page.winfo_width(), height=page.winfo_height())
+                self._pinned = page
             for n, pg in self.pages.items():
                 if n != self.current_page and pg.winfo_manager():
                     pg.place_forget()
@@ -2224,13 +2260,19 @@ class App(ctk.CTk):
         """Resize finished: lay the page out once at the new size, shown in a single repaint."""
         self._resize_job = None
         page = self.pages.get(self.current_page)
+        pinned, self._pinned = self._pinned, None
         h = fx.freeze(self._holder)
         try:
             if page is not None:
                 page.place_configure(relwidth=1, relheight=1, width=0, height=0)
+            # the page pinned when the resize began, if another page was opened meanwhile: back to full size,
+            # or it would reappear later at the old window size
+            if pinned is not None and pinned is not page and pinned.winfo_manager() == "place":
+                pinned.place_configure(relwidth=1, relheight=1, width=0, height=0)
             self.update_idletasks()
         finally:
             fx.thaw(h)
+        self._paint_now()
 
     def _reveal(self):
         """Show the finished window: drawn while fully transparent, then faded in as the logo leaves."""
@@ -4019,6 +4061,29 @@ class App(ctk.CTk):
     def show_page(self, name, animate=True):
         if name not in self.pages:
             return
+        if self._switching:
+            # a switch is still being drawn and a click arrived meanwhile: never start a second switch on top of
+            # it (that left pages half-built); open the latest page asked for as soon as this one is done
+            self._pending_page = name
+            return
+        self._switching = True
+        try:
+            self._swap_page(name)
+        finally:
+            self._switching = False
+        nxt, self._pending_page = self._pending_page, None
+        if nxt is not None and nxt != self.current_page:
+            self.show_page(nxt)
+
+    def _refresh_page(self, name, s):
+        if name == "Home":
+            self._refresh_home(s)
+        elif name == "Monitor":
+            self._refresh_monitor(s)
+        elif name == "Fans":
+            self._refresh_fans(s)
+
+    def _swap_page(self, name):
         self.current_page = name
         page = self.pages[name]
         ph, t = {}, time.perf_counter()
@@ -4039,21 +4104,22 @@ class App(ctk.CTk):
                 page.place(relx=0, rely=0, relwidth=1, relheight=1)
             page.tkraise()
             mark("raise")
-            if name == "Home":
-                self._refresh_home(self.snap)
-            elif name == "Monitor":
-                self._refresh_monitor(self.snap)
-            elif name == "Fans":
-                self._refresh_fans(self.snap)
+            try:
+                self._refresh_page(name, self.snap)
+            except tk.TclError:
+                pass
+            except Exception as e:                # a bad reading must never stop the page from opening
+                self.log(f"Couldn't refresh the {name} page: {e}", "warn")
             mark("refresh")
             self.update_idletasks()
             mark("layout")
         finally:
             fx.thaw(h)
             mark("paint")
-        if h:
-            self.update_idletasks()
-            mark("after")
+        # thaw only asks for a repaint; Tk does the actual drawing afterwards, widget by widget. Do it now, in one
+        # go, so the page appears complete instead of over several screen frames.
+        self._paint_now()
+        mark("after")
         self._switch_phases = ph
 
     def _update_accent(self):

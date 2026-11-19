@@ -147,3 +147,29 @@ def thaw(h: int):
                        RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME)
     except Exception:
         pass
+
+
+# ---- hide the window from the screen while it is being drawn (Windows 8+)
+DWMWA_CLOAK = 13
+
+
+def cloak(root, on: bool) -> bool:
+    """Hide (on=True) or show the window on screen while it stays open and can still be drawn (DWM cloaking).
+    Used for a moment while the window comes back from the taskbar, so it only appears once it is fully drawn.
+    Returns True if it worked; does nothing off Windows or on Windows 7."""
+    if not IS_WIN or win_build() < 9200:
+        return False
+    try:
+        return _dwm_set(_hwnd(root), DWMWA_CLOAK, 1 if on else 0) == 0
+    except Exception:
+        return False
+
+
+def dwm_flush():
+    """Wait until Windows has put the latest drawing on screen (at most one screen refresh)."""
+    if not IS_WIN:
+        return
+    try:
+        ctypes.windll.dwmapi.DwmFlush()
+    except Exception:
+        pass

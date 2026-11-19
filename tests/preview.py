@@ -58,6 +58,34 @@ def _demo_stats(hwm):
     hwm.HardwareMonitor._basic_metrics = demo
 
 
+def start_app(tmp: Path, effect: str | None = None, real_stats: bool = False):
+    """Build the real app on simulated hardware, with its settings in the temporary folder `tmp`.
+    Returns (central_rgb module, App). Also used by restore_check.py."""
+    os.environ["APPDATA"] = str(tmp / "roaming")          # fresh settings, never the real ones
+    os.environ["LOCALAPPDATA"] = str(tmp / "local")
+    if effect:                                          # seed the saved lighting state
+        import json
+        (tmp / "roaming" / "CentralRGB").mkdir(parents=True, exist_ok=True)
+        (tmp / "roaming" / "CentralRGB" / "settings.json").write_text(json.dumps(
+            {"state": {"effect": effect, "color": [150, 0, 255], "brightness": 100, "speed": 50}}))
+
+    import fake_openrgb
+    import rgb_engine as eng
+    fake_openrgb.install(eng)
+    eng.OpenRGBManager.find_exe = lambda self: None
+    import central_rgb as app_mod
+    from fake_lhm import FakeLHM
+
+    class _NoSplash:                                    # the splash is a separate process; skip it
+        def __init__(self, *a, **k):
+            raise RuntimeError("no splash in previews")
+    app_mod.SplashProcess = _NoSplash
+    app_mod.App.TEST_BACKEND = FakeLHM()
+    if not real_stats:
+        _demo_stats(app_mod.hwm)
+    return app_mod, app_mod.App()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("out", nargs="?", default=str(HERE / "preview_out"))
@@ -73,35 +101,13 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix="centralrgb-preview-"))
-    os.environ["APPDATA"] = str(tmp / "roaming")          # fresh settings, never the real ones
-    os.environ["LOCALAPPDATA"] = str(tmp / "local")
-    if args.effect:                                     # seed the saved lighting state
-        import json
-        (tmp / "roaming" / "CentralRGB").mkdir(parents=True, exist_ok=True)
-        (tmp / "roaming" / "CentralRGB" / "settings.json").write_text(json.dumps(
-            {"state": {"effect": args.effect, "color": [150, 0, 255], "brightness": 100, "speed": 50}}))
-
-    import fake_openrgb
-    import rgb_engine as eng
-    fake_openrgb.install(eng)
-    eng.OpenRGBManager.find_exe = lambda self: None
-    import central_rgb as app_mod
-    from fake_lhm import FakeLHM
-
-    class _NoSplash:                                    # the splash is a separate process; skip it
-        def __init__(self, *a, **k):
-            raise RuntimeError("no splash in previews")
-    app_mod.SplashProcess = _NoSplash
-    app_mod.App.TEST_BACKEND = FakeLHM()
-    if not args.real_stats:
-        _demo_stats(app_mod.hwm)
+    app_mod, app = start_app(tmp, args.effect, args.real_stats)
 
     pages = [n for n, *_ in app_mod.NAV]
     if args.pages:
         want = [p.strip().lower() for p in args.pages.split(",")]
         pages = [p for p in pages if p.lower() in want]
 
-    app = app_mod.App()
     app.monitor.INTERVAL = 0.2                          # fill the graphs quickly
     saved = []
 

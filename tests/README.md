@@ -9,6 +9,7 @@ preview script goes in this folder.**
 | `fake_lhm.py` | Simulated LibreHardwareMonitor: CPU, GPU, motherboard and SSD sensors, plus 5 controllable fans (one is an AIO pump). |
 | `test_fan_safety.py` | Checks the fan-safety rules: fans never below 20 %, pumps never below 70 %, all fans to 100 % at 90 °C, and fans handed back to the BIOS on Auto and on close. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |
+| `restore_check.py` | Minimizes and restores the window and switches pages rapidly on the fake hardware, grabbing frames as it goes (`restore.gif`, `switch.gif`, before/after screenshots) and checking the last page clicked is the one shown, fully laid out. Run it on Windows to record the real restore. `test_page_switch.py` runs it under Xvfb. |
 | `record_demo.py` | Records the README's "See it in action" GIF: a scripted mouse tour of the real app on the fake hardware (Linux, needs Xvfb, xdotool and ffmpeg). Copy its output to `assets/demo.gif`. |
 
 ## Run the tests
