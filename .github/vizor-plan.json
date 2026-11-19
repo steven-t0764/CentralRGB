@@ -1,0 +1,80 @@
+{
+  "schema": "vizor.plan/1",
+  "repository": "steven-t0764/CentralRGB",
+  "id": "bugfix-1",
+  "phases": [
+    {
+      "id": "bugs",
+      "tasks": [
+        {
+          "key": "ram-detect",
+          "agent": "gretchen",
+          "title": "Bug 2: Corsair Vengeance RGB DDR4 RAM is not detected",
+          "body": "User's PC: AMD Ryzen 7 5800X3D, MSI B550-A PRO (MS-7C56) motherboard, Corsair Vengeance RGB DDR4 3200 MHz 64 GB (4 x 16 GB), 240 Hz monitor (Samsung Odyssey G40B) plus a second Acer XFA240, Windows 11. Other RGB software running: MSI Center / Mystic Light and SteelSeries GG / SteelSeries Engine. Central RGB currently detects only a Razer Huntsman V2 TKL and the MSI B550-A PRO, no RAM. Home shows only 1 RGB device and the four RAM sticks never appear.",
+          "assignment": "Branch: test-ram-detect. Find out plainly why the Corsair Vengeance RGB DDR4 3200 sticks are missing. Check: which Corsair DDR4 RGB models OpenRGB supports and how they are detected (SMBus/I2C on AMD B550, piix4 bus); whether the OpenRGB version Central RGB uses needs PawnIO on Windows and whether Central RGB installs and starts it; whether OpenRGB/Central RGB run with admin rights; and whether MSI Mystic Light (MSI Center) or SteelSeries GG holding the SMBus blocks detection (Central RGB already warns that Mystic Light holds the motherboard and RAM lighting). Read rgb_engine.py, central_rgb.py (Devices page, the other-RGB-software warning) and central_rgb.iss. If it can be fixed in the app, fix it on this branch (for example: detect that RAM is blocked and tell the user exactly why and what to change, keep Mystic Light from grabbing the RAM after Close them, retry RAM detection once the bus is free) without restarting OpenRGB in a loop. Add a fake Corsair Vengeance RGB DDR4 device to tests/fake_openrgb.py and a test for the new behaviour. RULES FOR THIS TASK: Start from the latest main. Work only on the branch named above and push it to origin; do NOT open a pull request (PRs into main auto-merge). Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS) and do not touch the DDR5 once-per-boot RAM guard (it lives on the test-ddr5 branch; leave it alone). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Put any new test, fake device or helper script in tests/ and commit it. Before you finish: python -m py_compile every changed .py file and run python -m unittest discover tests; both must pass. In your result, write plain-English findings (cause, what you changed, what could not be verified without the real PC) and link the final commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [],
+          "paths": [],
+          "priority": 10
+        },
+        {
+          "key": "ram-flicker",
+          "agent": "pluto",
+          "title": "Bug 3: RAM lighting flickers with all effects",
+          "body": "User's PC: AMD Ryzen 7 5800X3D, MSI B550-A PRO (MS-7C56) motherboard, Corsair Vengeance RGB DDR4 3200 MHz 64 GB (4 x 16 GB), 240 Hz monitor (Samsung Odyssey G40B) plus a second Acer XFA240, Windows 11. Other RGB software running: MSI Center / Mystic Light and SteelSeries GG / SteelSeries Engine. Central RGB currently detects only a Razer Huntsman V2 TKL and the MSI B550-A PRO, no RAM. When the RAM does show up, its lighting flickers with every effect, worse with some effects than others.",
+          "assignment": "Branch: fix-ram-flicker. Find the cause of the RAM flicker and fix it without restarting OpenRGB or rescanning. Check each suspect in rgb_engine.py and report which ones apply: another program (MSI Mystic Light, SteelSeries GG, iCUE) writing to the RAM at the same time; the update rate Central RGB pushes to the sticks (four sticks share one slow SMBus, so per-frame updates can starve or tear); Direct versus hardware/static mode for each effect; sending the full LED set when nothing changed. Explain why some effects flicker more than others. Fix it (for example: a lower, steady update rate for DRAM devices only, skip unchanged frames, use hardware modes where an effect allows it), keep the other devices smooth, and add a test in tests/ that checks DRAM updates are rate-limited and unchanged frames are skipped. The earlier repaint-and-overlay work added 'steadier RGB RAM during animations'; look at what it did and why it is not enough. RULES FOR THIS TASK: Start from the latest main. Work only on the branch named above and push it to origin; do NOT open a pull request (PRs into main auto-merge). Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS) and do not touch the DDR5 once-per-boot RAM guard (it lives on the test-ddr5 branch; leave it alone). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Put any new test, fake device or helper script in tests/ and commit it. Before you finish: python -m py_compile every changed .py file and run python -m unittest discover tests; both must pass. In your result, write plain-English findings (cause, what you changed, what could not be verified without the real PC) and link the final commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "ram-detect"
+          ],
+          "paths": [],
+          "priority": 10
+        },
+        {
+          "key": "fps-intermittent",
+          "agent": "bastion",
+          "title": "Bug 4: FPS counter only works sometimes",
+          "body": "User's PC: AMD Ryzen 7 5800X3D, MSI B550-A PRO (MS-7C56) motherboard, Corsair Vengeance RGB DDR4 3200 MHz 64 GB (4 x 16 GB), 240 Hz monitor (Samsung Odyssey G40B) plus a second Acer XFA240, Windows 11. Other RGB software running: MSI Center / Mystic Light and SteelSeries GG / SteelSeries Engine. Central RGB currently detects only a Razer Huntsman V2 TKL and the MSI B550-A PRO, no RAM. Tested in THE FINALS and Rocket League, both in fullscreen windowed (borderless). The counter works only some of the time in both games.",
+          "assignment": "Branch: fix-fps-counter. Find out why the FPS counter in fps_overlay.py is intermittent and fix it. Check: PresentMon starting (first-time download, already running, needing admin, crashing or exiting silently); picking the right game process (foreground window vs. the game's process, launchers and anti-cheat helper processes, games that hand off to another exe); borderless fullscreen windowed vs. exclusive fullscreen; Easy Anti-Cheat in THE FINALS and the overlay window order (topmost overlay being covered or hidden after alt-tab); 240 Hz and two monitors (game on a different monitor than the overlay). Fix what can be fixed. For anything that cannot be fixed, make the app tell the user why (on the Overlay page and in the overlay itself, e.g. 'PresentMon needs admin', 'No frames from this game yet', 'Exclusive fullscreen hides overlays') instead of failing silently. Add tests in tests/ for process selection and the new status messages using fake PresentMon CSV output. RULES FOR THIS TASK: Start from the latest main. Work only on the branch named above and push it to origin; do NOT open a pull request (PRs into main auto-merge). Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS) and do not touch the DDR5 once-per-boot RAM guard (it lives on the test-ddr5 branch; leave it alone). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Put any new test, fake device or helper script in tests/ and commit it. Before you finish: python -m py_compile every changed .py file and run python -m unittest discover tests; both must pass. In your result, write plain-English findings (cause, what you changed, what could not be verified without the real PC) and link the final commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "ram-flicker"
+          ],
+          "paths": [],
+          "priority": 10
+        },
+        {
+          "key": "restore-flicker",
+          "agent": "gretchen",
+          "title": "Bug 5: Black flicker when restoring from the taskbar and when switching pages quickly",
+          "body": "User's PC: AMD Ryzen 7 5800X3D, MSI B550-A PRO (MS-7C56) motherboard, Corsair Vengeance RGB DDR4 3200 MHz 64 GB (4 x 16 GB), 240 Hz monitor (Samsung Odyssey G40B) plus a second Acer XFA240, Windows 11. Other RGB software running: MSI Center / Mystic Light and SteelSeries GG / SteelSeries Engine. Central RGB currently detects only a Razer Huntsman V2 TKL and the MSI B550-A PRO, no RAM. Restoring the Central RGB window from the taskbar flashes black. Switching between pages in the sidebar quickly also glitches a little. During setup, clicking Settings in the sidebar sometimes did not open the page at all.",
+          "assignment": "Branch: fix-restore-flicker. This was meant to be fixed in 2.3.x: find that fix (the <Map>/<Unmap> handlers, _on_map/_on_unmap and the pause-drawing-then-repaint-once code near the maximize/restore handling in central_rgb.py, plus win_effects.py) and explain plainly why it is not enough on a 240 Hz Windows 11 PC. Fix the black flash on restore from the taskbar and the glitch when switching pages quickly (for example: keep the last frame visible until the new page is fully laid out, ignore overlapping page switches, never leave a page half-built), and make sure a sidebar click always opens its page. Do not restyle anything. Add a scripted check in tests/ (using tests/harness.py and tests/preview.py on the simulated hardware) that minimizes and restores the window and switches pages rapidly, and saves before/after screenshots or frames, so the restore can be recorded. RULES FOR THIS TASK: Start from the latest main. Work only on the branch named above and push it to origin; do NOT open a pull request (PRs into main auto-merge). Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS) and do not touch the DDR5 once-per-boot RAM guard (it lives on the test-ddr5 branch; leave it alone). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Put any new test, fake device or helper script in tests/ and commit it. Before you finish: python -m py_compile every changed .py file and run python -m unittest discover tests; both must pass. In your result, write plain-English findings (cause, what you changed, what could not be verified without the real PC) and link the final commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "fps-intermittent"
+          ],
+          "paths": [],
+          "priority": 10
+        },
+        {
+          "key": "final-review",
+          "agent": "fabian",
+          "title": "Review all four bug-fix branches",
+          "body": "Independent review of the bug 2-5 branches before anything goes to main.",
+          "assignment": "Branch: review-bugfixes (for your report only). Check out test-ram-detect, fix-ram-flicker, fix-fps-counter and fix-restore-flicker in turn. For each: run python -m unittest discover tests, confirm the fan safety rules and the DDR5 guard are unchanged, confirm no Claude/Anthropic attribution lines in its commits, confirm nothing outside the bug was restyled, and note any conflicts between the four branches when merged together in that order. Write docs/review-bugfixes.md with one section per branch (verdict: ready / needs changes, and why), commit it on review-bugfixes, push. RULES FOR THIS TASK: Start from the latest main. Work only on the branch named above and push it to origin; do NOT open a pull request (PRs into main auto-merge). Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS) and do not touch the DDR5 once-per-boot RAM guard (it lives on the test-ddr5 branch; leave it alone). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Put any new test, fake device or helper script in tests/ and commit it. Before you finish: python -m py_compile every changed .py file and run python -m unittest discover tests; both must pass. In your result, write plain-English findings (cause, what you changed, what could not be verified without the real PC) and link the final commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "restore-flicker"
+          ],
+          "paths": [],
+          "priority": 10
+        }
+      ]
+    }
+  ]
+}
