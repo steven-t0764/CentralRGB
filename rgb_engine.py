@@ -508,6 +508,75 @@ class OpenRGBManager:
         return False
 
 
+# --------------------------------------------------------------------------- RGB RAM check
+# RAM sticks Windows reports ("Manufacturer PartNumber", filled in by system_check). Empty off Windows.
+RAM_INVENTORY: list[str] = []
+
+# Part numbers of RGB memory lines OpenRGB drives over the SMBus. Used only to notice that RGB RAM is
+# installed but OpenRGB found none of it; a stick that isn't listed here just isn't checked.
+RGB_RAM_PARTS = (
+    (re.compile(r"^CMR\d", re.I), "Corsair Vengeance RGB"),           # e.g. CMR16GX4M2C3200C16 (DDR4)
+    (re.compile(r"^CMW\d", re.I), "Corsair Vengeance RGB Pro"),
+    (re.compile(r"^CMN\d", re.I), "Corsair Vengeance RGB Pro SL"),
+    (re.compile(r"^CMG\d", re.I), "Corsair Vengeance RGB RS"),
+    (re.compile(r"^CMH\d", re.I), "Corsair Vengeance RGB DDR5"),
+    (re.compile(r"^CMT\d", re.I), "Corsair Dominator Platinum RGB"),
+    (re.compile(r"^F[45]-\S*(GTZR|GTZN|GTZRX|TR5|GTZ5RK|TZ5RK|TZ5NR)", re.I), "G.Skill Trident Z RGB"),
+)
+
+# Vendor apps known to drive RAM lighting themselves. While one runs it uses the same SMBus as OpenRGB,
+# and OpenRGB's RAM probe fails or is skipped.
+SMBUS_APPS = {"MSI Center / Mystic Light", "MSI Mystic Light", "Corsair iCUE", "ASUS Armoury Crate",
+              "ASUS Aura / Armoury Crate lighting service", "Gigabyte RGB Fusion", "Gigabyte Control Center",
+              "SignalRGB", "ASRock Polychrome", "HyperX NGENUITY", "Thermaltake RGB Plus"}
+
+
+def rgb_ram_sticks(rams=None) -> list[str]:
+    """The installed sticks that are RGB memory OpenRGB can light, as friendly names (one per stick)."""
+    out = []
+    for entry in (RAM_INVENTORY if rams is None else rams):
+        words = str(entry).split()
+        part = words[-1] if words else ""
+        for pat, name in RGB_RAM_PARTS:
+            if pat.search(part):
+                out.append(name)
+                break
+    return out
+
+
+def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, conflicts=None) -> dict | None:
+    """If Windows reports RGB RAM but OpenRGB found no RAM device, explain why and what to change.
+
+    found_types: the device type names OpenRGB reported ("RAM", "Motherboard"...).
+    Returns None when there's nothing to report, else {"sticks", "names", "reasons", "blockers", "summary"}:
+    reasons are plain sentences, blockers the vendor apps holding the SMBus (they can be closed)."""
+    sticks = rgb_ram_sticks(rams)
+    if not sticks or "RAM" in set(found_types):
+        return None
+    admin = is_admin() if admin is None else admin
+    pawnio = pawnio_installed() if pawnio is None else pawnio
+    conflicts = find_conflicts() if conflicts is None else conflicts
+    blockers = sorted(n for n in conflicts if n in SMBUS_APPS)
+    reasons = []
+    if not admin:
+        reasons.append("Central RGB isn't running as administrator, so OpenRGB can't open the SMBus the RAM "
+                       "lighting sits on. Right-click Central RGB > Run as administrator.")
+    if not pawnio:
+        reasons.append("The PawnIO driver isn't installed. OpenRGB 1.x reaches RGB RAM through it - install "
+                       "it (Settings > Install PawnIO), then restart Windows.")
+    if blockers:
+        reasons.append(", ".join(blockers) + " is using the RAM's SMBus, so OpenRGB can't detect the sticks. "
+                       "Press Close them: its services are stopped and set to start manually, then the RAM is "
+                       "detected again.")
+    if not reasons:
+        reasons.append("Nothing obvious is blocking the SMBus. Restart Windows (a vendor driver may still hold "
+                       "it), keep MSI Center / Mystic Light from starting with Windows, and check that OpenRGB "
+                       "on its own finds the RAM.")
+    names = ", ".join(sorted(set(sticks)))
+    summary = f"{len(sticks)} RGB RAM stick(s) installed ({names}) but none were found."
+    return {"sticks": len(sticks), "names": names, "reasons": reasons, "blockers": blockers, "summary": summary}
+
+
 # --------------------------------------------------------------------------- system check
 def system_check() -> list[tuple[str, str]]:
     """Returns [(level, message)], level in {'ok','warn','info','bad'}."""
@@ -559,6 +628,7 @@ def system_check() -> list[tuple[str, str]]:
             out.append(("info", f"Graphics card: {g}"))
         rams = inv.get("ram") or []
         rams = [rams] if isinstance(rams, str) else rams
+        RAM_INVENTORY[:] = [str(x) for x in rams]
         if rams:
             out.append(("info", f"RAM sticks: {len(rams)} ({', '.join(sorted(set(rams)))})"))
     except Exception:
