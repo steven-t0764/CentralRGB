@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "id": "ui-fixes-1",
+  "title": "UI fixes 1: RAM detection, missing RGB devices, taskbar flicker",
+  "repository": "steven-t0764/CentralRGB",
+  "outcome": "RGB RAM and all other OpenRGB-supported devices appear in Central RGB and can be lit, and the device boxes no longer flicker when the window is restored from the Windows taskbar.",
+  "exitCriteria": [
+    "RAM modules with RGB show up as RAM devices and take colour changes (on simulated hardware in tests; the fix explains what real hardware needs, e.g. admin and PawnIO).",
+    "Every device the OpenRGB server reports is listed in the app, including ones reported late or after a rescan.",
+    "Minimising/restoring or switching away and back via the taskbar redraws the device boxes once, with no visible flicker.",
+    "The windows check passes on every merged PR, and the existing fan-safety tests still pass."
+  ],
+  "assumptions": [
+    "Device detection goes through the bundled OpenRGB SDK server (rgb_engine.py OpenRGBManager / LightingEngine); fixes stay inside Central RGB and do not patch OpenRGB itself.",
+    "Real hardware is not available to workers; behaviour is proven with the fake OpenRGB / LHM servers in tests/ and the preview harness."
+  ],
+  "phases": [
+    {
+      "key": "fixes",
+      "title": "Detection and flicker fixes",
+      "tasks": [
+        {
+          "key": "detect-root-cause",
+          "title": "Find why RGB RAM and other devices are not detected",
+          "agent": "bastion",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [],
+          "assignment": "Research only, no code changes. Find the root cause of two user reports: (1) RAM modules and their RGB are not detected, (2) other RGB devices still do not show up in the app. Trace the whole path: how OpenRGBManager in rgb_engine.py finds/launches the OpenRGB server (arguments, admin elevation, PawnIO driver check, replace_visible_copy, child_env), LightingEngine.connect/rescan/devices/set_excluded, device_key/type_name, device_models.py, and how central_rgb.py builds the device list (any filtering by type, excluded keys, or a list built before the server has finished detecting). Use tests/fake_openrgb.py and tests/harness.py to reproduce: e.g. a DRAM device, a device that appears only after the first scan, and device types the UI may not map. Post a short artifact with: each root cause with file:line, a reproduction, and the proposed fix split into (a) RAM-specific changes and (b) general device-listing changes, naming the exact files each fix touches. Evidence: a pinned link to the artifact."
+        },
+        {
+          "key": "detect-review",
+          "title": "Fabian checks the detection root cause and fix plan",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": ["detect-root-cause"],
+          "assignment": "Review Bastion's detect-root-cause artifact before any detection code is merged. RAM RGB is written over the SMBus, so a wrong change can make sticks misbehave: confirm each root cause against the code yourself, check the reproductions are real, and check the proposed fixes do not stream frames to DRAM devices (keep the existing DRAM throttling in LightingEngine.run), do not weaken admin/PawnIO checks, and do not touch fan-control code in hw_monitor.py. Say clearly which proposed changes are approved, which must change, and which files each fix may touch. Evidence: a pinned link to your review comment or artifact."
+        },
+        {
+          "key": "fix-taskbar-flicker",
+          "title": "Stop device boxes flickering when restored from the taskbar",
+          "agent": "pluto",
+          "gate": "merge",
+          "checks": ["windows"],
+          "paths": ["central_rgb.py", "tests/test_window_restore.py"],
+          "dependsOn": [],
+          "assignment": "Fix: the device boxes flicker when the user tabs out of and back into the app via the Windows taskbar. Look at the main window's <Map>/<Unmap>/<Configure> handlers (_on_map, _on_unmap, _on_resize around central_rgb.py:1914-1917), the deiconify paths, and the device card widgets' <Configure>/<Map> bindings that redraw or re-layout (e.g. the canvas _fit/_sync and per-card _render/_layout). Likely causes: a full re-layout or re-render of every card on Map/Configure even when size did not change, cards being destroyed and rebuilt on restore, or redraws not being coalesced. Make restore redraw at most once and skip work when geometry is unchanged; keep the frosted-glass look and the corner-lift behaviour. Only change central_rgb.py and add tests/test_window_restore.py (unittest, runs on Windows CI under python -m unittest discover tests) that simulates unmap/map/configure with unchanged size and asserts cards are not rebuilt and redraws are coalesced. Do not touch rgb_engine.py, device_models.py or tests/fakes*. Evidence: the PR, plus before/after preview captures from the central-rgb preview harness if you can produce them."
+        },
+        {
+          "key": "fix-ram-detection",
+          "title": "Detect RGB RAM modules and light them",
+          "agent": "gretchen",
+          "gate": "merge",
+          "checks": ["windows"],
+          "paths": ["rgb_engine.py", "device_models.py", "tests/fake_openrgb.py", "tests/fakes.py", "tests/test_ram_detection.py"],
+          "dependsOn": ["detect-review"],
+          "assignment": "Implement the RAM-specific fixes that Fabian approved in detect-review (read both the detect-root-cause artifact and Fabian's review first; follow Fabian's corrections). Make RGB RAM modules detected and controllable: e.g. correct OpenRGB server launch/elevation, PawnIO handling, waiting for/rescanning after SMBus detection, and DRAM device mapping in device_models.py, as the review decided. Keep the existing DRAM write throttling. Only touch the listed files. Add tests/test_ram_detection.py using the fake OpenRGB server with one or more DRAM devices (including one that appears after the first scan if that was a root cause) and assert they are listed as RAM and receive colour updates. Run python -m unittest discover tests locally before opening the PR. Evidence: the PR."
+        },
+        {
+          "key": "fix-device-listing",
+          "title": "Show every RGB device OpenRGB reports",
+          "agent": "pluto",
+          "gate": "merge",
+          "checks": ["windows"],
+          "paths": ["rgb_engine.py", "device_models.py", "central_rgb.py", "tests/fake_openrgb.py", "tests/fakes.py", "tests/test_device_listing.py"],
+          "dependsOn": ["detect-review", "fix-ram-detection", "fix-taskbar-flicker"],
+          "assignment": "Implement the general device-listing fixes Fabian approved in detect-review, on top of the merged RAM and flicker fixes (pull main first; these files were just changed). Every device the OpenRGB server reports must appear in the app: handle device types without a model/icon mapping (fall back to a generic card instead of dropping it), devices reported late or after a rescan, and any stale excluded-key or filtering logic the root cause named. Do not undo the flicker fix in central_rgb.py: new devices should add a card without rebuilding all cards. Only touch the listed files. Add tests/test_device_listing.py with the fake OpenRGB server reporting a mix of types (keyboard, mouse, LED strip, cooler, an unknown type, and one added later) and assert all are listed. Evidence: the PR."
+        },
+        {
+          "key": "verify-fixes",
+          "title": "Fabian verifies all three fixes together on main",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": ["fix-taskbar-flicker", "fix-ram-detection", "fix-device-listing"],
+          "assignment": "Verify on main after all three PRs merged: run python -m unittest discover tests, then run the app on simulated hardware (central-rgb preview harness / tests/preview.py) with RAM plus a mix of other devices, and minimise/restore the window several times. Confirm RAM and every other simulated device appear and change colour, and restoring does not flicker or rebuild cards. Also confirm the windows check passed on the merge commits. Post a short verification artifact with screenshots or a clip and a pass/fail per original report (RAM, other devices, flicker); open follow-up notes for anything that only real hardware can prove. Evidence: a pinned link to the artifact."
+        }
+      ]
+    }
+  ]
+}
