@@ -2822,6 +2822,13 @@ class App(ctk.CTk):
                            "and RAM lighting).", 12, color=P["MUTED"], anchor="w", justify="left",
                    wraplength=760).pack(fill="x")
         yield
+        # warning when RGB RAM is installed but OpenRGB found none, with the exact reason(s)
+        self.ram_bar = SmoothFrame(p, fg_color="#2a2112", corner_radius=8)
+        self.ram_title = self.label(self.ram_bar, "", 13, "bold", anchor="w", color="#ffd166")
+        self.ram_title.pack(fill="x", padx=16, pady=(10, 0))
+        self.ram_text = self.label(self.ram_bar, "", 12, color=P["MUTED"], anchor="w", justify="left", wraplength=780)
+        self.ram_text.pack(fill="x", padx=16, pady=(2, 10))
+        yield
         _sc_dev_area = LightScroll(p, bg=P["BG"])
         self.dev_area = _sc_dev_area.inner
         yield
@@ -2832,6 +2839,7 @@ class App(ctk.CTk):
         self.dev_empty = self.label(self.dev_area, "Scanning for devices…", 14, color=P["MUTED"])
         yield
         self.dev_empty.grid(row=0, column=0, columnspan=2, pady=50)
+        self._update_ram_bar(getattr(self, "_ram_diag", None))
 
     def _fill_devices(self, rows):
         self.device_rows = rows
@@ -3979,6 +3987,7 @@ class App(ctk.CTk):
             self._show_checks(self._last_checks)
         if getattr(self, "_conflicts", None) is not None:
             self._update_conflict_bar(self._conflicts)
+        self._update_ram_bar(getattr(self, "_ram_diag", None))
         if self.sysinfo:
             self._show_sysinfo(self.sysinfo)
         try:                                                     # activity log comes back too
@@ -4198,6 +4207,8 @@ class App(ctk.CTk):
                     self._show_checks(item[1])
                 elif kind == "conflicts":
                     self._update_conflict_bar(item[1])
+                elif kind == "ram":
+                    self._update_ram_bar(item[1])
                 elif kind == "need_openrgb":
                     self._ask_for_openrgb()
                 elif kind == "disconnected":
@@ -4291,6 +4302,45 @@ class App(ctk.CTk):
         elif self.conflict_bar.winfo_manager():
             self.conflict_bar.pack_forget()
 
+    def _update_ram_bar(self, diag):
+        self._ram_diag = diag
+        if not hasattr(self, "ram_bar"):
+            return
+        if diag:
+            self.ram_title.configure(text="RGB RAM not detected: " + diag["summary"])
+            self.ram_text.configure(text="\n".join("• " + r for r in diag["reasons"]))
+            if not self.ram_bar.winfo_manager():
+                self.ram_bar.pack(fill="x", pady=(0, 12), before=self.dev_area.master.master)
+        elif self.ram_bar.winfo_manager():
+            self.ram_bar.pack_forget()
+
+    def _check_ram(self):
+        """After hardware detection: if Windows reports RGB RAM but OpenRGB found none, say exactly why.
+        Right after Close them freed the SMBus, the RAM is re-detected once more (never in a loop)."""
+        found = [eng.type_name(d) for d in self.engine.devices()]
+        try:
+            diag = eng.diagnose_missing_ram(found)
+        except Exception as e:
+            self.log(f"Couldn't check the RGB RAM: {e}", "warn")
+            return None
+        if diag != getattr(self, "_ram_diag", None):
+            if diag:
+                self.log("RGB RAM not detected: " + diag["summary"], "warn")
+                for r in diag["reasons"]:
+                    self.log("  " + r, "warn")
+            elif getattr(self, "_ram_diag", None):
+                self.log("RGB RAM detected.", "ok")
+        self.q.put(("ram", diag))
+        self._ram_diag = diag
+        if diag and not diag["blockers"] and getattr(self, "_ram_retry", False):
+            self._ram_retry = False                    # one retry per Close them, so no restart loop
+            self.log("The SMBus is free now - detecting the RAM once more.", "info")
+            time.sleep(3.0)
+            self._full_rescan()
+        elif not diag:
+            self._ram_retry = False
+        return diag
+
     def _close_conflicts(self):
         names = sorted(getattr(self, "_conflicts", {}) or eng.find_conflicts())
         if not names:
@@ -4304,8 +4354,11 @@ class App(ctk.CTk):
         self.conflict_btn.configure(state="disabled", text="Closing…")
 
         def work():
-            for line in eng.close_conflicts(self.log):
+            closed = eng.close_conflicts(self.log)
+            for line in closed:
                 self.log(line, "ok")
+            if closed and getattr(self, "_ram_diag", None):
+                self._ram_retry = True             # RAM was blocked: allow one extra detection pass
             left = eng.find_conflicts()
             self.q.put(("call", lambda: (self.conflict_btn.configure(state="normal", text="Close them"),
                                          self._update_conflict_bar(left))))
@@ -4365,6 +4418,7 @@ class App(ctk.CTk):
             elif time.time() - t0 > min_wait and time.time() - last_change > quiet_for:
                 break
         self.log(f"Hardware detection finished: {count} device(s) after {time.time() - t0:.0f} s.", "info")
+        self._check_ram()
 
     def _rescan(self, initial=False, quiet=False):
         if not self.engine.client:

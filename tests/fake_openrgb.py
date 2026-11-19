@@ -13,6 +13,7 @@ reports a set of demo RGB devices, so Central RGB can run on a machine with no R
 
     import fake_openrgb
     fake_openrgb.install()      # before creating central_rgb.App()
+    fake_openrgb.install(devices=fake_openrgb.B550_PC, ram_blocked=True)   # RAM hidden, as when the SMBus is held
 
 The devices only record what they were told (mode, colors); nothing is sent anywhere.
 """
@@ -41,6 +42,24 @@ DEMO_DEVICES = [
     ("Logitech G502 X Plus", DeviceType.MOUSE, "Logitech",
      [("Logo", 1), ("Strip", 8)], ("Direct", "Static", "Breathing", "Off")),
 ]
+
+# Corsair Vengeance RGB DDR4 (the original, non-Pro line: part numbers CMR...). OpenRGB's "Corsair
+# Vengeance" detector finds each stick on the SMBus (AMD: the piix4 bus) at addresses 0x58-0x5F.
+CORSAIR_VENGEANCE_DDR4 = [
+    (f"Corsair Vengeance RGB DDR4 (DIMM {i})", DeviceType.DRAM, "Corsair",
+     [("Corsair Vengeance RGB", 1)], ("Direct", "Static", "Breathing", "Color Pulse", "Off"))
+    for i in range(1, 5)
+]
+# What Windows reports for those four sticks (Win32_PhysicalMemory "Manufacturer PartNumber").
+CORSAIR_VENGEANCE_DDR4_WMI = ["Corsair CMR64GX4M4C3200C16"] * 4
+
+# A Ryzen PC on an MSI B550 board with four Vengeance RGB DDR4 sticks and a USB keyboard.
+B550_PC = [
+    ("MSI B550-A PRO (MS-7C56)", DeviceType.MOTHERBOARD, "MSI",
+     [("JRGB1", 1), ("JRAINBOW1", 30), ("Onboard LEDs", 6)], ("Direct", "Static", "Breathing", "Rainbow", "Off")),
+    ("Razer Huntsman V2 Tenkeyless", DeviceType.KEYBOARD, "Razer",
+     [("Keyboard", 87)], ("Direct", "Static", "Spectrum Cycle", "Off")),
+] + CORSAIR_VENGEANCE_DDR4
 
 
 class FakeDevice:
@@ -95,10 +114,16 @@ class FakeDevice:
 
 
 class FakeClient:
-    """Drop-in for openrgb.OpenRGBClient(host, port, name)."""
+    """Drop-in for openrgb.OpenRGBClient(host, port, name).
+
+    DEVICES is the device list it reports. RAM_BLOCKED leaves the RAM sticks out, the way OpenRGB misses
+    them when another app holds the SMBus (or PawnIO / admin rights are missing)."""
+    DEVICES = DEMO_DEVICES
+    RAM_BLOCKED = False
 
     def __init__(self, address="127.0.0.1", port=6742, name="test", protocol_version=None):
-        self.devices = [FakeDevice(i, *d) for i, d in enumerate(DEMO_DEVICES)]
+        devs = [d for d in self.DEVICES if not (self.RAM_BLOCKED and d[1] == DeviceType.DRAM)]
+        self.devices = [FakeDevice(i, *d) for i, d in enumerate(devs)]
         self.ee_devices = []
         self.profiles = []
 
@@ -109,10 +134,13 @@ class FakeClient:
         pass
 
 
-def install(eng=None):
-    """Point Central RGB's lighting engine at the fake devices. Pass rgb_engine, or it's imported."""
+def install(eng=None, devices=None, ram_blocked=False):
+    """Point Central RGB's lighting engine at the fake devices. Pass rgb_engine, or it's imported.
+    devices picks the device list (DEMO_DEVICES by default); ram_blocked hides its RAM sticks."""
     if eng is None:
         import rgb_engine as eng
+    FakeClient.DEVICES = DEMO_DEVICES if devices is None else devices
+    FakeClient.RAM_BLOCKED = ram_blocked
     eng.OpenRGBClient = FakeClient
     eng.OpenRGBManager.server_running = staticmethod(lambda timeout=0.5: True)
     eng.OpenRGBManager.replace_visible_copy = lambda self: False
