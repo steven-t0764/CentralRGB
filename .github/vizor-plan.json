@@ -1,0 +1,63 @@
+{
+  "id": "ui-fixes-1",
+  "title": "UI fixes 1: RAM and RGB device detection, tab-back flicker",
+  "repository": "steven-t0764/CentralRGB",
+  "phases": [
+    {
+      "key": "fixes",
+      "title": "Find and fix the detection gaps and the tab-back flicker",
+      "tasks": [
+        {
+          "key": "detection-audit",
+          "title": "Find why RAM and other RGB devices are not detected",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "paths": [],
+          "dependsOn": [],
+          "assignment": "Steven reports that RAM modules (and their RGB) are not detected, and that other RGB devices still do not show up in Central RGB. Find the root causes before anyone changes code. Read the detection path end to end: OpenRGBManager in rgb_engine.py (how OpenRGB is found, started with --server, restarted, and whether its SMBus/DRAM detectors can run: admin rights, PawnIO driver, OpenRGB settings or profile files that disable detectors), LightingEngine.connect/devices/rescan in rgb_engine.py, and the connect and rescan flow in central_rgb.py (_startup, _connect_flow_locked, _rescan, _full_rescan_locked, and how the device list and cards are built from engine.devices()). Check in particular: whether the SDK client connects and lists devices before OpenRGB has finished detecting (OpenRGB detects devices progressively, and RAM over SMBus comes late), whether later device-list updates from OpenRGB are ever picked up, whether devices are filtered out by type (e.g. DeviceType.DRAM or types the openrgb library does not know), excluded/broken keys, or name/key collisions in device_key(). Use tests/fake_openrgb.py to reproduce what you can. Do not change code. Deliver a short written report as a pinned artifact or gist: each root cause with file:line, how you confirmed it, and the concrete fix you recommend, split into (a) RAM-specific causes and (b) causes affecting other devices, so the builders can act on it."
+        },
+        {
+          "key": "tab-flicker",
+          "title": "Stop the device boxes flickering when tabbing back in via the taskbar",
+          "agent": "bastion",
+          "gate": "merge",
+          "checks": ["windows"],
+          "paths": ["central_rgb.py", "win_effects.py", "tests/test_tab_flicker.py"],
+          "dependsOn": [],
+          "assignment": "The device boxes (cards) flicker when Steven tabs out of Central RGB and back in through the Windows taskbar (focus change and minimize/restore via the taskbar button). Find what redraws on that path and make the return seamless. Start with the window's <Map>/<Unmap>/<Configure> handlers in central_rgb.py (_on_unmap, _on_map, _on_resize, _resize_done, _repaint_and_show, the fade-in), any FocusIn/Activate handling, and the window effects in win_effects.py (Mica/acrylic re-application on activation). Likely causes to check: the restore being treated as a resize (pages place_forget'd and re-laid out), device cards or their canvases fully rebuilt or re-rendered on Map/Configure, a fade or alpha reset on activation, and backdrop effects re-applied on focus change. Keep the existing fix for the black flash after minimize. Only change central_rgb.py and win_effects.py, plus a new tests/test_tab_flicker.py that drives the handlers (simulated Unmap/Map/Configure/focus events) and asserts the device cards are not destroyed, re-placed or redrawn when the size did not change. Use the central-rgb-preview skill to capture before/after evidence (screenshots or a short clip of minimize/restore and focus out/in). Open a PR, wait for the windows check to pass, then deliver."
+        },
+        {
+          "key": "ram-detect",
+          "title": "Detect RAM modules and drive their RGB",
+          "agent": "gretchen",
+          "gate": "merge",
+          "checks": ["windows"],
+          "paths": ["rgb_engine.py", "tests/fake_openrgb.py", "tests/test_device_detection.py"],
+          "dependsOn": ["detection-audit"],
+          "assignment": "Fix RAM module detection so RGB RAM shows up and can be lit, following the RAM-specific root causes in Fabian's detection-audit report (read it first on the detection-audit issue). Keep the change inside rgb_engine.py: e.g. starting OpenRGB so its SMBus/DRAM detectors run, waiting for OpenRGB's detection to finish (or re-reading the device list once it does) before treating the list as complete, and recognising DRAM devices and types the openrgb library does not know. Keep the existing RAM safeguards (last_ram_push throttling, no 30 fps streaming to SMBus sticks). If the cause needs the PawnIO driver or admin rights, make the diagnostics in rgb_engine.py say so clearly rather than failing silently. Extend tests/fake_openrgb.py so it can report devices that appear late and DRAM devices, and add tests/test_device_detection.py covering: RAM present at start, RAM that appears after the first listing, and unknown device types. Do not touch central_rgb.py (Pluto's task follows and owns the UI side). Open a PR, wait for the windows check to pass, then deliver."
+        },
+        {
+          "key": "device-detect",
+          "title": "Make every RGB device OpenRGB finds show up in the app",
+          "agent": "pluto",
+          "gate": "merge",
+          "checks": ["windows"],
+          "paths": ["rgb_engine.py", "central_rgb.py", "tests/fake_openrgb.py", "tests/test_device_detection.py"],
+          "dependsOn": ["detection-audit", "ram-detect", "tab-flicker"],
+          "assignment": "Fix the remaining causes, from Fabian's detection-audit report part (b), for RGB devices that OpenRGB knows about but Central RGB does not show. Build on Gretchen's merged ram-detect change and Bastion's merged tab-flicker change (pull main first). Likely areas: the connect and rescan flow in central_rgb.py (_connect_flow_locked, _rescan, _full_rescan_locked) only reading the device list once, the device list / cards not being rebuilt when new devices arrive, devices dropped by type filters, excluded or broken keys, and device_key() collisions in rgb_engine.py that merge two devices into one. When the device list changes, add or remove cards without rebuilding unchanged ones, so Bastion's flicker fix still holds. Add cases to tests/test_device_detection.py (using tests/fake_openrgb.py) for: several devices of the same model, a device that appears after startup and must get a card, and a device type the openrgb library does not know. Use the central-rgb-preview skill to capture a screenshot of the Devices page with the simulated hardware showing every device. Open a PR, wait for the windows check to pass, then deliver."
+        },
+        {
+          "key": "fixes-verify",
+          "title": "Verify all three fixes together on main",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "paths": [],
+          "dependsOn": ["tab-flicker", "ram-detect", "device-detect"],
+          "assignment": "With tab-flicker, ram-detect and device-detect merged, verify the three fixes together on the latest main. Run python -m unittest discover tests -v and report the counts. Use the central-rgb-preview skill on simulated hardware to confirm: RAM modules appear and take colour changes, every simulated RGB device has a card on the Devices page, including ones that appear after startup, and minimize/restore through the taskbar and focus out/in do not make the device boxes flicker (screenshots or a short clip). Check that each merged PR stayed inside its listed files and that the windows check passed on the merge commits. Deliver a short verification report as a pinned artifact, listing anything that still needs Steven to try on his real PC (real SMBus RAM cannot be simulated)."
+        }
+      ]
+    }
+  ]
+}
