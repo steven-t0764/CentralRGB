@@ -46,5 +46,6 @@ Open an [issue](../../issues) and include:
    - To try a build on a real PC before merging, push it to the `test` branch: it publishes a **Test build (not a release)** pre-release with the .exe and installer.
 4. Anything that touches **fan control** must keep the safety limits: the minimum speeds, the 90 °C override, and handing fans back to the BIOS on exit. `python -m unittest discover tests` checks them.
 5. Put any new test, fake device or preview script in the `tests/` folder.
+6. Add a plain-English line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) and update the README if anything you changed is visible to users. AI agents working in this repo follow [CLAUDE.md](CLAUDE.md).
 
 By contributing, you agree that your contribution is licensed under the project's [GPL-3.0-or-later](LICENSE) license.
