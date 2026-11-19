@@ -5,3 +5,4 @@ dist_app/
 installer/
 *.spec
 tests/preview_out/
+.vizor/

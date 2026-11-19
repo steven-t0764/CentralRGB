@@ -1,0 +1,36 @@
+{
+  "repository": "steven-t0764/CentralRGB",
+  "port": 4390,
+  "dispatchLabel": "vizor:dispatch",
+  "agents": {
+    "gretchen": {
+      "name": "Gretchen",
+      "label": "gretchen",
+      "trustedManagers": [
+        "steven-t0764"
+      ]
+    },
+    "pluto": {
+      "name": "Pluto",
+      "label": "pluto",
+      "trustedManagers": [
+        "steven-t0764"
+      ]
+    },
+    "bastion": {
+      "name": "Bastion",
+      "label": "bastion",
+      "trustedManagers": [
+        "steven-t0764"
+      ]
+    },
+    "fabian": {
+      "name": "Fabian",
+      "label": "fabian",
+      "trustedManagers": [
+        "steven-t0764"
+      ]
+    }
+  },
+  "autonomy": "brazy"
+}
