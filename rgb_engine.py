@@ -1009,7 +1009,7 @@ class LightingEngine(threading.Thread):
         names = sorted(n for n in find_conflicts() if n in RAM_WRITERS)
         if names:
             self.log(f"RGB RAM: {', '.join(names)} is also writing to the RAM sticks, which makes them flicker. "
-                     "Close it with 'Close them' on the Home page.")
+                     "Close it with 'Close them' on the Devices page.")
 
     def _prepare(self, dev, animated: bool) -> str:
         """Pick a mode for the device. Returns 'per_led', 'slow' or 'hw_static'.
@@ -1103,6 +1103,10 @@ class LightingEngine(threading.Thread):
                 self.dirty = False
                 now = time.time()
                 ram_every = max(1, round(self.FPS / DRAM_FPS))
+                # One stick per tick: with more sticks than ticks in a RAM period, the cycle stretches so no two
+                # sticks ever share a tick on the bus (4 sticks at 30 fps -> each stick 7.5 times a second).
+                n_ram = sum(1 for d in self.targets() if getattr(d, "type", None) == DeviceType.DRAM)
+                ram_cycle = max(ram_every, n_ram)
                 ram_idx = 0
                 for idx, dev in enumerate(self.targets()):
                     key = device_key(dev)
@@ -1119,7 +1123,7 @@ class LightingEngine(threading.Thread):
                         ram_idx += 1
                         if not self.ram_conflict_checked:
                             self._check_ram_conflicts()
-                        if (self.frame + ram_idx) % ram_every:
+                        if self.frame % ram_cycle != (ram_idx - 1) % ram_cycle:
                             if dev_dirty:
                                 self.ram_pending.add(key)
                             continue

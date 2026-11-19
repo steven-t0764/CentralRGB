@@ -14,6 +14,8 @@ preview script goes in this folder.**
 | `test_ram_updates.py` | Checks the RGB RAM flicker fix: RAM gets a steady, lower update rate with the sticks taking turns, unchanged RAM frames are skipped, Breathing runs in the sticks' own hardware mode, and other devices keep the full rate. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |
 | `restore_check.py` | Minimizes and restores the window and switches pages rapidly on the fake hardware, grabbing frames as it goes (`restore.gif`, `switch.gif`, before/after screenshots) and checking the last page clicked is the one shown, fully laid out. Run it on Windows to record the real restore. `test_page_switch.py` runs it under Xvfb. |
+| `preview_user_pc.py` | Runs the preview on a simulated copy of the user's PC: MSI B550-A PRO, Razer Huntsman V2 TKL, four Corsair Vengeance RGB DDR4 sticks hidden as if MSI Center held the bus, with MSI Center and SteelSeries GG "running". `--ram-visible` shows the sticks. |
+| `preview_overlay_notes.py` | Screenshots the Overlay page preview showing each FPS-counter status note (PresentMon needs admin, no frames yet, exclusive fullscreen). |
 | `record_demo.py` | Records the README's "See it in action" GIF: a scripted mouse tour of the real app on the fake hardware (Linux, needs Xvfb, xdotool and ffmpeg). Copy its output to `assets/demo.gif`. |
 
 ## Run the tests

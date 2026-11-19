@@ -115,7 +115,7 @@ class RamUpdateTests(unittest.TestCase):
             e.frame += 1
             self.clock.t += 1 / e.FPS
             written = sum(d.writes - b for d, b in zip(sticks, before))
-            self.assertLessEqual(written, 2, "all sticks written in the same tick")
+            self.assertLessEqual(written, 1, "two sticks written in the same tick")
 
     def test_changes_to_ram_wait_for_their_slot_but_arrive(self):
         sticks = ram_sticks(1)
