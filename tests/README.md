@@ -8,6 +8,8 @@ preview script goes in this folder.**
 | `fake_openrgb.py` | Simulated OpenRGB with 8 demo devices (motherboard, GPU, 2 RAM sticks, fan LEDs, AIO cooler, keyboard, mouse). `install()` points the lighting engine at it. |
 | `test_ram_detect.py` | RGB RAM that Windows reports but OpenRGB misses (4x Corsair Vengeance RGB DDR4 on an MSI B550 board, `fake_openrgb.B550_PC`): the app names the cause (admin, PawnIO, Mystic Light holding the SMBus) and retries detection once after Close them. |
 | `fake_lhm.py` | Simulated LibreHardwareMonitor: CPU, GPU, motherboard and SSD sensors, plus 5 controllable fans (one is an AIO pump). |
+| `fake_presentmon.py` | Fake PresentMon CSV output (1.x and 2.x column layouts) and error text, for the FPS overlay tests. |
+| `test_fps_overlay.py` | FPS overlay: reading PresentMon output, picking the game (launchers, Discord/SteelSeries in front, recreated windows) and the status messages shown when it can't count. |
 | `test_fan_safety.py` | Checks the fan-safety rules: fans never below 20 %, pumps never below 70 %, all fans to 100 % at 90 °C, and fans handed back to the BIOS on Auto and on close. |
 | `test_ram_updates.py` | Checks the RGB RAM flicker fix: RAM gets a steady, lower update rate with the sticks taking turns, unchanged RAM frames are skipped, Breathing runs in the sticks' own hardware mode, and other devices keep the full rate. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |

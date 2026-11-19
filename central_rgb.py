@@ -421,10 +421,6 @@ def _frame_init(self, master, *args, **kw):
 ctk.CTkFrame.__init__ = _frame_init
 
 
-class _SkipStatus(Exception):
-    """Internal: the overlay status line was already filled in."""
-
-
 class SmoothButton(tk.Canvas):
     """Rounded button drawn with Pillow (anti-aliased fill and outline), in place of CustomTkinter buttons
     whose 1px outlines come out uneven on Windows. Takes the same options this app uses with CTkButton."""
@@ -3660,66 +3656,55 @@ class App(ctk.CTk):
         if on:
             self.fps.start()
         else:
-            self._bg(self.fps.stop)
+            self.fps.stop_async()       # flag set now, so switching back on right away can't be undone by it
             if self.overlay_win is not None:
                 self.overlay_win.destroy()
                 self.overlay_win = None
 
     def _overlay_tick(self):
-        """Follow the game: pick the app you're playing, then keep the overlay on it even after you tab out."""
+        """Follow the game: pick the app you're playing, then keep the overlay on it even after you tab out.
+        Anything that stops the counter (PresentMon refused, crashed, no frames...) is shown on this page and in
+        the overlay itself instead of the overlay just vanishing."""
         try:
             cfg, metrics = self.overlay_cfg, self.snap.get("metrics", {})
-            running = cfg["enabled"] and self.fps.status == "running"
-            fps, stale = None, False
-            if running:
-                fg_hwnd, fg_pid = fpo.foreground_window()
-                if fg_pid and fg_pid != getattr(self, "_game_pid", None) and self.fps.current(fg_pid):
-                    self._game_pid, self._game_hwnd, self._game_last = fg_pid, fg_hwnd, None   # a new game is in front
-                pid = getattr(self, "_game_pid", None)
-                if pid and (not self.fps.alive(pid) or fpo.game_window_state(self._game_hwnd) is None and eng.IS_WIN):
-                    self._game_pid = pid = None                                              # game closed
-                if pid:
-                    fps = self.fps.current(pid)
-                    if fps:
-                        self._game_last = fps
-                    else:                         # backgrounded games often pause drawing: keep the last number, dimmed
-                        fps, stale = self._game_last, True
-            if cfg["enabled"] and running and getattr(self, "_game_pid", None):
+            if not hasattr(self, "game_tracker"):
+                self.game_tracker = fpo.GameTracker(self.fps)
+            fg_hwnd, fg_pid = fpo.foreground_window()
+            fg_rect = fpo.game_window_state(fg_hwnd) if fg_hwnd and fg_pid != os.getpid() else None
+            gamelike = fpo.covers_monitor(fg_rect, fpo.monitor_rect(fg_hwnd)) if fg_rect else False
+            st = self.game_tracker.update(fg_hwnd, fg_pid, gamelike) if cfg["enabled"] else None
+            fps = st["fps"] if st else None
+            target = None
+            if st and st["pid"]:
+                target, in_front = st["hwnd"], st["in_front"]
+            elif st and st["note"] and gamelike:      # nothing to measure, but say why on the fullscreen app in front
+                target, in_front = fg_hwnd, True
+            if target:
                 if self.overlay_win is None:
                     self.overlay_win = fpo.OverlayWindow(self, self._overlay_colors(), FONT)
-                mode = self.fps.mode(self._game_pid)
-                key = (self._game_pid, fpo.FpsCounter.exclusive(mode))
+                gp = st["pid"]
+                mode = self.fps.mode(gp) if gp else ""
+                key = (gp, st["exclusive"], st["note"])
                 if key != getattr(self, "_overlay_logged", None):
                     self._overlay_logged = key
                     name = (fps or {}).get("name") or "the game"
-                    self.log(f"Overlay attached to {name} (pid {self._game_pid}, display mode: {mode or 'unknown'}, "
-                             f"window {fpo.game_window_state(self._game_hwnd)}).")
-                    if key[1]:
-                        self.log(f"{name} is in exclusive fullscreen, so no overlay window can appear on top of it. "
-                                 "Switch the game to Borderless (or Windowed) fullscreen in its display settings.", "warn")
-                in_front = fpo.foreground_window()[1] == self._game_pid
-                self.overlay_win.update_overlay(cfg, fps, metrics, self._game_hwnd, in_front, stale)
+                    if gp:
+                        self.log(f"Overlay attached to {name} (pid {gp}, display mode: {mode or 'unknown'}, "
+                                 f"window {fpo.game_window_state(target)}).")
+                    if st["note"]:
+                        self.log(f"Overlay: {st['text']}", "warn")
+                self.overlay_win.update_overlay(cfg, fps, metrics, target, in_front, st["stale"], st["note"])
             elif self.overlay_win is not None:
                 self.overlay_win.hide()
             if self.current_page == "Overlay":
                 sample = fps or {"name": "", "fps": 144, "low": 112, "ms": 6.9}
-                self.overlay_preview.render(cfg, sample, metrics)
+                self.overlay_preview.render(cfg, sample, metrics, note=st["note"] if st else "")
                 self.overlay_preview_note.configure(
                     text=f"Live: {fps['name']}" if fps else "Sample numbers. Live numbers show here while a game is running.")
-                st = self.fps.status
-                gp = getattr(self, "_game_pid", None)
-                if st == "running" and gp and fpo.FpsCounter.exclusive(self.fps.mode(gp)):
-                    self.overlay_status.configure(
-                        text=f"{(fps or {}).get('name', 'Your game')} is in exclusive fullscreen, so the overlay can't show "
-                             "on top of it. Switch the game to Borderless (or Windowed) fullscreen.", text_color=WARN)
-                    raise _SkipStatus
+                level, text = (st["level"], st["text"]) if st else ("off", "Off")
                 self.overlay_status.configure(
-                    text={"off": "Off", "starting": "Starting the FPS counter (first time downloads PresentMon)…",
-                          "running": (f"Tracking {fps['name']}: {fps['fps']:.0f} FPS" if fps else
-                                      "Running. Open a game and it will appear on it."),
-                          "error": self.fps.message}.get(st, ""),
-                    text_color=BAD if st == "error" else OK if st == "running" else P["MUTED"])
-        except (tk.TclError, _SkipStatus):
+                    text=text, text_color={"bad": BAD, "warn": WARN, "ok": OK}.get(level, P["MUTED"]))
+        except tk.TclError:
             pass
         except Exception:
             traceback.print_exc()
