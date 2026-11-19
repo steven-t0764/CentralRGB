@@ -34,7 +34,7 @@ import zipfile
 from pathlib import Path
 
 from openrgb import OpenRGBClient
-from openrgb.utils import DeviceType, ModeColors, RGBColor
+from openrgb.utils import DeviceType, ModeColors, ModeFlags, RGBColor
 
 # Newer OpenRGB versions may report device types this library doesn't know yet.
 # Map anything unknown to UNKNOWN instead of crashing.
@@ -162,6 +162,21 @@ CONFLICTING_APPS = {
     "polychromergb.exe": "ASRock Polychrome",
     "openrgbwrapper.exe": "ASRock Polychrome",
 }
+
+
+# Of those, the ones that also write to RGB RAM over the motherboard's SMBus. Two programs writing the
+# same sticks at once makes them flicker, whatever Central RGB does.
+RAM_WRITERS = {"Corsair iCUE", "MSI Center / Mystic Light", "MSI Mystic Light", "ASUS Armoury Crate",
+               "ASUS Aura / Armoury Crate lighting service", "Gigabyte RGB Fusion", "Gigabyte Control Center",
+               "SignalRGB", "HyperX NGENUITY", "ASRock Polychrome", "Thermaltake RGB Plus"}
+
+# RGB RAM: every stick shares one slow SMBus (often behind a driver like PawnIO), so it gets its own,
+# lower and steady frame rate, small changes are held back, and the sticks take turns on the bus.
+DRAM_FPS = 10
+DRAM_MIN_CHANGE = 4          # a RAM frame is only sent if some LED moved at least this much (0-255)
+# Built-in effects the RAM can run by itself (its own hardware mode), so nothing is streamed at all.
+HW_EFFECT_MODES = {"Breathing": ("breathing",),
+                   "Color Cycle": ("spectrum cycle", "color cycle", "colour cycle", "rainbow")}
 
 
 def find_conflicts() -> dict[str, list[int]]:
@@ -793,8 +808,10 @@ class LightingEngine(threading.Thread):
         self.dirty = True
         self.prepared: dict[str, bool] = {}   # device key -> True if per-LED capable
         self.last_slow_push: dict[str, float] = {}
-        self.last_ram_push: dict[str, float] = {}
         self.last_sent: dict[str, list] = {}
+        self.frame = 0                         # main-loop tick counter (RAM runs on every Nth tick)
+        self.ram_conflict_checked = False
+        self.ram_pending: set[str] = set()     # RAM sticks with a change still waiting for their bus slot
         self._stop_evt = threading.Event()
         self.paused = False
 
@@ -810,6 +827,7 @@ class LightingEngine(threading.Thread):
             self.prepared.clear()
             self.broken.clear()
             self.dirty = True
+            self.ram_conflict_checked = False
             return True
 
     def disconnect(self):
@@ -879,6 +897,50 @@ class LightingEngine(threading.Thread):
         return next((m for m in dev.modes if m.name.lower() == "static"
                      and m.color_mode in (ModeColors.MODE_SPECIFIC, ModeColors.PER_LED)), None)
 
+    @staticmethod
+    def _hw_effect_mode(dev, st):
+        """RGB RAM only: the stick's own hardware mode for this effect, if it can run it the way Central RGB
+        would. The stick then animates by itself and nothing is streamed over the SMBus, so it can't flicker."""
+        if getattr(dev, "type", None) != DeviceType.DRAM:
+            return None
+        effect = RENAMED.get(st.get("effect"), st.get("effect"))
+        for want in HW_EFFECT_MODES.get(effect, ()):
+            m = next((m for m in dev.modes if m.name.lower() == want), None)
+            if m is None:
+                continue
+            flags = getattr(m, "flags", 0) or 0
+            if effect == "Breathing" and m.color_mode == ModeColors.MODE_SPECIFIC:
+                return m
+            if (effect == "Color Cycle" and m.color_mode in (ModeColors.NONE, ModeColors.RANDOM)
+                    and (st.get("brightness", 100) >= 100 or flags & ModeFlags.HAS_BRIGHTNESS)):
+                return m
+        return None
+
+    @staticmethod
+    def _push_hw_effect(dev, m, st):
+        """Start a hardware effect once: speed, brightness and colour mapped onto the mode's own ranges."""
+        flags = getattr(m, "flags", 0) or 0
+        b = max(0, min(100, st.get("brightness", 100)))
+
+        def span(lo, hi, pct):
+            return int(round(lo + (hi - lo) * pct / 100))
+        if flags & ModeFlags.HAS_SPEED and m.speed_min is not None and m.speed_max is not None:
+            m.speed = span(m.speed_min, m.speed_max, max(0, min(100, st.get("speed", 50))))
+        if flags & ModeFlags.HAS_BRIGHTNESS and m.brightness_min is not None and m.brightness_max is not None:
+            m.brightness, b = span(m.brightness_min, m.brightness_max, b), 100
+        if m.color_mode == ModeColors.MODE_SPECIFIC:
+            col = compute_colors("Static", st["color"], b, 0, 1, 0)[0]
+            m.colors = [RGBColor(*col)] * max(1, m.colors_max or 1)
+        dev.set_mode(m)
+
+    def _check_ram_conflicts(self):
+        """Once per connection: warn if another program is also writing to the RAM."""
+        self.ram_conflict_checked = True
+        names = sorted(n for n in find_conflicts() if n in RAM_WRITERS)
+        if names:
+            self.log(f"RGB RAM: {', '.join(names)} is also writing to the RAM sticks, which makes them flicker. "
+                     "Close it with 'Close them' on the Home page.")
+
     def _prepare(self, dev, animated: bool) -> str:
         """Pick a mode for the device. Returns 'per_led', 'slow' or 'hw_static'.
 
@@ -922,6 +984,16 @@ class LightingEngine(threading.Thread):
         else:
             dev.set_color(rgb[0])
 
+    def _unchanged(self, key, cols, is_ram: bool) -> bool:
+        """True if cols needn't be sent: identical to the last frame sent, or for RAM, no LED moved by
+        DRAM_MIN_CHANGE or more (tiny steps aren't visible but each one costs a full SMBus write)."""
+        last = self.last_sent.get(key)
+        if last is None or len(last) != len(cols):
+            return False
+        if not is_ram:
+            return last == cols
+        return all(abs(a - b) < DRAM_MIN_CHANGE for p, q in zip(last, cols) for a, b in zip(p, q))
+
     def targets(self) -> list:
         skip = self.excluded | self.broken
         return [d for d in self.devices() if device_key(d) not in skip]
@@ -949,55 +1021,86 @@ class LightingEngine(threading.Thread):
         return results
 
     # ---- main loop
+    def step(self):
+        """One tick of the lighting loop: work out and send this frame's colours."""
+        with self.lock:
+            base = dict(self.state)
+            ov = self.overrides
+            client = self.client
+            dirty = self.dirty
+            any_animated = is_animated(base["effect"]) or any(is_animated(o.get("effect", "")) for o in ov.values())
+            if client and not self.paused and (any_animated or dirty or self.ram_pending):
+                self.dirty = False
+                now = time.time()
+                ram_every = max(1, round(self.FPS / DRAM_FPS))
+                ram_idx = 0
+                for idx, dev in enumerate(self.targets()):
+                    key = device_key(dev)
+                    st = ov.get(key) or base            # a device can have its own lighting
+                    animated = is_animated(st["effect"])
+                    is_ram = getattr(dev, "type", None) == DeviceType.DRAM
+                    dev_dirty = dirty or key in self.ram_pending
+                    if not animated and not dev_dirty:
+                        continue
+                    if is_ram:
+                        # Every stick shares one slow SMBus, so RAM gets a steady, lower rate (counted in loop
+                        # ticks, so timing jitter can't make it uneven) and the sticks take turns on the bus.
+                        # This applies to changes too (e.g. dragging a slider); they wait for the next slot.
+                        ram_idx += 1
+                        if not self.ram_conflict_checked:
+                            self._check_ram_conflicts()
+                        if (self.frame + ram_idx) % ram_every:
+                            if dev_dirty:
+                                self.ram_pending.add(key)
+                            continue
+                        self.ram_pending.discard(key)
+                    hw = self._hw_effect_mode(dev, st) if animated else None
+                    pkey = (key, animated, hw is not None)
+                    if hw is not None:
+                        # the RAM runs this effect itself: one write when something changes, then nothing
+                        if not dev_dirty and pkey in self.prepared:
+                            continue
+                        self.prepared = {k: v for k, v in self.prepared.items() if k[0] != key}
+                        self.prepared[pkey] = "hw_effect"
+                        self.last_sent.pop(key, None)
+                        try:
+                            self._push_hw_effect(dev, hw, st)
+                        except (ConnectionError, OSError):
+                            raise
+                        except Exception as e:
+                            self.log(f"  {dev.name}: {e}")
+                            self.broken.add(key)
+                        continue
+                    if pkey not in self.prepared:
+                        self.prepared = {k: v for k, v in self.prepared.items() if k[0] != key}
+                        self.prepared[pkey] = self._prepare(dev, animated)
+                    how = self.prepared[pkey]
+                    if how == "slow" and animated:
+                        # mode-specific devices are slow to update; ~2 updates/second
+                        if now - self.last_slow_push.get(key, 0) < 0.5:
+                            continue
+                        self.last_slow_push[key] = now
+                    cols = compute_colors(st["effect"], st["color"], st["brightness"],
+                                          st["speed"], len(dev.leds), now, offset=idx * 0.07)
+                    if not dev_dirty and self._unchanged(key, cols, is_ram):
+                        continue                    # nothing (visible) changed for this device: don't write
+                    self.last_sent[key] = cols
+                    try:
+                        self._push(dev, cols, how)
+                    except (ConnectionError, OSError):
+                        raise
+                    except Exception as e:
+                        self.log(f"  {dev.name}: {e}")
+                        self.broken.add(key)  # stop retrying a broken device
+
     def run(self):
         while not self._stop_evt.is_set():
             try:
-                with self.lock:
-                    base = dict(self.state)
-                    ov = self.overrides
-                    client = self.client
-                    dirty = self.dirty
-                    any_animated = is_animated(base["effect"]) or any(is_animated(o.get("effect", "")) for o in ov.values())
-                    if client and not self.paused and (any_animated or dirty):
-                        self.dirty = False
-                        now = time.time()
-                        for idx, dev in enumerate(self.targets()):
-                            key = device_key(dev)
-                            st = ov.get(key) or base            # a device can have its own lighting
-                            animated = is_animated(st["effect"])
-                            if not animated and not dirty:
-                                continue
-                            if animated and not dirty and getattr(dev, "type", None) == DeviceType.DRAM:
-                                # RGB RAM is driven over the SMBus; streaming 30 frames a second makes some sticks
-                                # (e.g. Corsair Vengeance Pro) glitch now and then. ~15 a second still looks smooth.
-                                if now - self.last_ram_push.get(key, 0) < 1 / 15:
-                                    continue
-                                self.last_ram_push[key] = now
-                            pkey = (key, animated)
-                            if pkey not in self.prepared:
-                                self.prepared = {k: v for k, v in self.prepared.items() if k[0] != key}
-                                self.prepared[pkey] = self._prepare(dev, animated)
-                            how = self.prepared[pkey]
-                            if how == "slow" and animated:
-                                # mode-specific devices are slow to update; ~2 updates/second
-                                if now - self.last_slow_push.get(key, 0) < 0.5:
-                                    continue
-                                self.last_slow_push[key] = now
-                            cols = compute_colors(st["effect"], st["color"], st["brightness"],
-                                                  st["speed"], len(dev.leds), now, offset=idx * 0.07)
-                            if not dirty and self.last_sent.get(key) == cols:
-                                continue                    # nothing changed for this device: don't write
-                            self.last_sent[key] = cols
-                            try:
-                                self._push(dev, cols, how)
-                            except (ConnectionError, OSError):
-                                raise
-                            except Exception as e:
-                                self.log(f"  {dev.name}: {e}")
-                                self.broken.add(key)  # stop retrying a broken device
+                self.step()
             except (ConnectionError, OSError) as e:
                 with self.lock:
                     self.client = None
                 self.log(f"Lost connection to OpenRGB ({e}).")
                 self.on_disconnect()
+            self.frame += 1
             time.sleep(1 / self.FPS)
