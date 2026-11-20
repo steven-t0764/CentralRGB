@@ -315,6 +315,38 @@ def on_color(hex_color) -> str:
     return "#0f1117" if lum > 0.6 else "#ffffff"
 
 
+# ----------------------------------------------------------------------------- light-mode helpers
+# Each returns exactly what Dark has always used, so the dark look of every theme is unchanged.
+def slider_hover(button_hex) -> str:
+    """Slider knob colour while hovered or dragged: white in Dark; in Light a deeper shade of the knob, because a
+    white knob vanishes on the near-white cards."""
+    if APPEARANCE != "light":
+        return "white"
+    return hexcol(mix(hex2rgb(button_hex), hex2rgb(P["TEXT"]), 0.35))
+
+
+def swatch_outline(rgb) -> str:
+    """Outline for a colour swatch. Dark: the card colour (a gap, as before). Light: a thin line so a white or
+    near-white swatch still shows; a stronger one when the swatch barely differs from the card."""
+    if APPEARANCE != "light":
+        return P["CARD"]
+    if contrast(hexcol(rgb), P["CARD"]) < 1.5:
+        return hexcol(mix(hex2rgb(P["BTN_LINE"]), hex2rgb(P["MUTED"]), 0.5))
+    return P["BTN_LINE"]
+
+
+def led_on(rgb, bg_rgb):
+    """How a dimmed LED colour is drawn on a panel. Dark: as is (it blends into the dark panel). Light: brightness
+    is treated as opacity over the panel, so a Breathing low point fades into the card instead of a black bar."""
+    if APPEARANCE != "light":
+        return tuple(rgb)
+    v = max(rgb) / 255
+    if v <= 0:
+        return tuple(rgb)
+    full = tuple(c / v for c in rgb)
+    return mix(bg_rgb, full, v)
+
+
 _BASE_SOLID = dict(SOLID)                 # the default theme, so it can be switched back to live
 _BASE_COLORS = (CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W)
 DEFAULT_ACCENT = CYAN
@@ -691,7 +723,9 @@ class PresetEditor(ctk.CTkToplevel):
 
         app.label(self, "Speed", 13, "bold").pack(anchor="w", pady=(14, 0), **pad)
         self.speed = Slider(self, from_=0, to=100, number_of_steps=100, height=18, progress_color=CYAN,
-                            button_color="#ffffff", button_hover_color="#ffffff", fg_color=P["TRACK"])
+                            button_color="#ffffff" if APPEARANCE != "light" else CYAN,
+                            button_hover_color="#ffffff" if APPEARANCE != "light" else slider_hover(CYAN),
+                            fg_color=P["TRACK"])
         self.speed.set(d.get("speed", 50))
         self.speed.pack(fill="x", pady=(6, 0), **pad)
 
@@ -1125,7 +1159,10 @@ class LedStrip(tk.Canvas):
             return
         w, h = self._size
         dim = mix(self.bgc, (60, 64, 76), 0.5)
-        cols = [c if max(c) > 20 else dim for c in (colors or [(0, 0, 0)])][:w]
+        if APPEARANCE == "light":                                # dimmed LEDs fade into the panel, not to black
+            cols = [led_on(c, self.bgc) if max(c) > 0 else dim for c in (colors or [(0, 0, 0)])][:w]
+        else:
+            cols = [c if max(c) > 20 else dim for c in (colors or [(0, 0, 0)])][:w]
         row = Image.new("RGB", (len(cols), 1))
         row.putdata([tuple(int(v) for v in c) for c in cols])
         lit = row.resize((w, h), Image.BILINEAR)                 # colours blend smoothly from LED to LED
@@ -1164,7 +1201,8 @@ class Sparkline(tk.Canvas):
         if getattr(self, "grid_lines", False):                # muted guides at 25 / 50 / 75 %
             for q in (0.25, 0.5, 0.75):
                 y = (h - 3 - (h - 10) * q) * k
-                d.line([(0, y), (W, y)], fill=imix(bgc, (255, 255, 255), 0.05), width=k)
+                d.line([(0, y), (W, y)], fill=imix(bgc, (255, 255, 255), 0.05) if APPEARANCE != "light"
+                        else imix(bgc, (0, 0, 0), 0.07), width=k)
         for vals, color in series:
             rgb = hex2rgb(color)
             fkey = (W, H, color, bgc)
@@ -1460,8 +1498,11 @@ class GlowBar(tk.Canvas):
             return
         self._last = key
         w, h = self._size
-        lit = [tuple(int(v) for v in (mix(c, (255, 255, 255), 0.08) if max(c) > 20 else mix(self.bgc, c, 0.5)))
-               for c in colors]
+        if APPEARANCE == "light":                                # dimmed colours fade into the card, not to black
+            lit = [tuple(int(v) for v in led_on(c, self.bgc)) for c in colors]
+        else:
+            lit = [tuple(int(v) for v in (mix(c, (255, 255, 255), 0.08) if max(c) > 20 else mix(self.bgc, c, 0.5)))
+                   for c in colors]
         strip = Image.new("RGB", (len(lit), 1))
         strip.putdata(lit)
         colour = strip.resize((w, 1), Image.BILINEAR).resize((w, h), Image.NEAREST)
@@ -1647,7 +1688,11 @@ class EffectTile(tk.Canvas):
     def show(self, colors):
         for i, it in enumerate(self.bars):
             c = colors[int(i * len(colors) / len(self.bars))]
-            self.itemconfigure(it, fill=hexcol(c) if max(c) > 10 else P["TRACK"])
+            if APPEARANCE == "light":                         # dimmed colours fade into the tile, not to black
+                fill = hexcol(led_on(c, hex2rgb(P["CARD2"]))) if max(c) > 0 else P["TRACK"]
+            else:
+                fill = hexcol(c) if max(c) > 10 else P["TRACK"]
+            self.itemconfigure(it, fill=fill)
 
     def select(self, on, accent):
         if (on, accent) != (self.selected, self.accent):
@@ -1728,7 +1773,7 @@ class FanCard(SmoothFrame):
         self.pct = ctk.CTkLabel(mid, text="", font=ctk.CTkFont(family=MONO, size=11), text_color=P["MUTED"])
         self.pct.pack(side="right")
         self.slider = Slider(self, from_=hwm.FAN_FLOOR, to=100, height=14, fg_color=P["TRACK"],
-                                    button_color=P["TEXT"], button_hover_color="white", command=self._slide)
+                                    button_color=P["TEXT"], button_hover_color=slider_hover(P["TEXT"]), command=self._slide)
         self.slider.pack(fill="x", padx=12, pady=(6, 12))
 
     def _slide(self, v):
@@ -2427,7 +2472,8 @@ class App(ctk.CTk):
         s.configure("Dark.Treeview.Heading", background=P["CARD2"], foreground=P["MUTED"], borderwidth=0,
                     relief="flat", font=(FONT, 10, "bold"), padding=(8, 6))
         s.map("Dark.Treeview.Heading", background=[("active", P["LINE"])])
-        s.map("Dark.Treeview", background=[("selected", P["CARD2"])], foreground=[("selected", P["TEXT"])])
+        sel = P["SEL"] if APPEARANCE == "light" else P["CARD2"]   # light: CARD2 is too close to CARD to see
+        s.map("Dark.Treeview", background=[("selected", sel)], foreground=[("selected", P["TEXT"])])
         s.layout("Dark.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
         s.configure("Dark.Vertical.TScrollbar", background=P["CARD2"], troughcolor=P["CARD"], borderwidth=0,
                     arrowcolor=P["MUTED"], relief="flat")
@@ -2480,7 +2526,7 @@ class App(ctk.CTk):
         val = self.label(top, f"{value}{unit}", 12, color=P["TEXT"], font=ctk.CTkFont(family=MONO, size=11))
         val.pack(side="right")
         s = Slider(row, from_=lo, to=hi, number_of_steps=hi - lo, height=16, progress_color=self.accent,
-                          button_color=self.accent, button_hover_color="white", fg_color=P["TRACK"])
+                          button_color=self.accent, button_hover_color=slider_hover(self.accent), fg_color=P["TRACK"])
         s.set(value)
         s.configure(command=lambda v: (val.configure(text=f"{int(v)}{unit}"), cmd(int(v))))
         s.pack(fill="x", pady=(4, 0))
@@ -2778,10 +2824,10 @@ class App(ctk.CTk):
             for i, c in enumerate(SWATCHES):
                 col = tuple(int(v) for v in mix(c, (230, 230, 240), k)) if k else c
                 x = step * i + step / 2
-                it = sw.create_oval(x - 8, 3 + row * 22, x + 8, 19 + row * 22, fill=hexcol(col), outline=P["CARD"], width=2)
+                it = sw.create_oval(x - 8, 3 + row * 22, x + 8, 19 + row * 22, fill=hexcol(col), outline=swatch_outline(col), width=2)
                 sw.tag_bind(it, "<Button-1>", lambda e=None, cl=col: self._set_color(cl))
                 sw.tag_bind(it, "<Enter>", lambda e=None, i2=it: sw.itemconfigure(i2, outline=P["TEXT"]))
-                sw.tag_bind(it, "<Leave>", lambda e=None, i2=it: sw.itemconfigure(i2, outline=P["CARD"]))
+                sw.tag_bind(it, "<Leave>", lambda e=None, i2=it, cl=col: sw.itemconfigure(i2, outline=swatch_outline(cl)))
         yield
         hexrow = ctk.CTkFrame(cc, fg_color="transparent")
         yield
@@ -3127,7 +3173,7 @@ class App(ctk.CTk):
         sw = tk.Canvas(controls, height=30, bg=P["CARD"], highlightthickness=0)
         sw.pack(fill="x", pady=(6, 4))
         for i, c in enumerate(SWATCHES):
-            it = sw.create_rectangle(i * 34, 3, i * 34 + 26, 27, fill=hexcol(c), outline=P["CARD"], width=2)
+            it = sw.create_rectangle(i * 34, 3, i * 34 + 26, 27, fill=hexcol(c), outline=swatch_outline(c), width=2)
             sw.tag_bind(it, "<Button-1>", lambda e, col=c: (choose(color=list(col)) if state["effect"] in eng.USES_COLOR
                                                             else (fxm.set("Static"), choose(color=list(col), effect="Static"))))
         self.label(controls, "Colors apply to the Static and Breathing effects.", 12, color=P["FAINT"], anchor="w").pack(fill="x", pady=(0, 10))
@@ -4135,6 +4181,9 @@ class App(ctk.CTk):
         _apply_theme(key, appearance)
         THEME = key
         ctk.set_appearance_mode(appearance)
+        # title bar and the colour Windows clears to switch now, before anything is rebuilt, so nothing is
+        # cleared to the old (dark) panel colour while the new widgets draw
+        self._window_effects()
         page = self.current_page
         rows = list(self.device_rows)
         if self.overlay_win is not None:
@@ -4300,7 +4349,7 @@ class App(ctk.CTk):
                 if kind == "button":
                     w.configure(fg_color=acc, hover_color=hov, text_color=on_color(acc))
                 elif kind == "slider":
-                    w.configure(progress_color=acc, button_color=acc)
+                    w.configure(progress_color=acc, button_color=acc, button_hover_color=slider_hover(acc))
                 elif kind == "seg":
                     w.configure(selected_color=acc, selected_hover_color=hov)
             except tk.TclError:
