@@ -32,7 +32,7 @@ Open an [issue](../../issues) and include:
 | `central_rgb.py` | Window, pages and custom-drawn widgets |
 | `rgb_engine.py` | Finding, downloading and starting OpenRGB, lighting effects, system check, settings |
 | `hw_monitor.py` | LibreHardwareMonitor sensors, fan-curve logic and safety limits, system details |
-| `win_effects.py` | Dark title bar, title bar colors, flicker-free redraws |
+| `win_effects.py` | Dark title bar, title bar colors, flicker-free redraws (no black flashes on restore or page switch) |
 | `updater.py` | In-app updates: finds the newest real release, downloads and SHA-256-checks it, installs or swaps it after a normal close |
 | `central_rgb.iss` | Inno Setup installer (including the optional PawnIO driver install) |
 | `tests/` | Simulated hardware, the fan-safety tests and a page-by-page preview (see [tests/README.md](tests/README.md)) |

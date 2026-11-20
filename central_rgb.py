@@ -2290,17 +2290,20 @@ class App(ctk.CTk):
             show()
 
     def _fade_in(self, a):
-        a = min(1.0, a + 0.12)
+        # ends at fx.OPAQUE, not 1.0: on Windows exactly 100 % makes Tk erase and redraw the whole window (a black
+        # flash of every widget) and lets Windows drop the window's picture, so restoring it showed black
+        a = min(fx.OPAQUE, a + 0.12)
         try:
             self.attributes("-alpha", a)
         except tk.TclError:
             return
-        if a < 1.0:
+        if a < fx.OPAQUE:
             self.after(16, lambda: self._fade_in(a))
 
     def _window_effects(self):
         fx.dark_titlebar(self)
         fx.titlebar_colors(self, P["BG"], P["LINE"], P["TEXT"])   # seamless title bar on Windows 11
+        fx.panel_background(self, P["BG"])     # anything Windows clears before Tk draws shows the panel colour
 
     def _set_icon(self):
         try:

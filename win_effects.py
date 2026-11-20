@@ -7,7 +7,8 @@
 # GNU General Public License for more details: <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Windows window styling: dark title bar and (Windows 11) title bar colours that match the app.
+Windows window styling: dark title bar and (Windows 11) title bar colours that match the app, plus the
+helpers that keep the window from flashing black while Tk draws (thaw, OPAQUE, panel_background).
 The glass and opacity helpers below are no longer used by the app. Safe no-ops on other systems / older Windows.
 
 How the glass works with Tk: DWM blurs whatever is behind the window and the window's
@@ -136,17 +137,62 @@ def freeze(widget) -> int:
         return 0
 
 
+# What thaw asks Windows to do. No RDW_ERASE: Tk answers a repaint request at once but draws a moment later, so
+# erasing first left every label, card and sidebar item as an empty (black) box until Tk got to it. Without the
+# erase the old picture stays on screen until the caller has Tk draw the new one over it (App._paint_now).
+# No RDW_UPDATENOW either: the caller does the drawing, all in one go, right after.
+THAW_FLAGS = RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_FRAME
+
+
 def thaw(h: int):
-    """Turn drawing back on and repaint the whole area in one go."""
+    """Turn drawing back on and mark the whole area for repainting; the old picture stays until it is redrawn."""
     if not h:
         return
     try:
         u = ctypes.windll.user32
         u.SendMessageW(wintypes.HWND(h), WM_SETREDRAW, 1, 0)
-        u.RedrawWindow(wintypes.HWND(h), None, None,
-                       RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME)
+        u.RedrawWindow(wintypes.HWND(h), None, None, THAW_FLAGS)
     except Exception:
         pass
+
+
+# ---- never show black while Tk is still drawing
+# Fully opaque as far as the eye can tell (254 of 255), but it keeps the window "layered". Windows then keeps the
+# window's last picture itself: coming back from the taskbar shows that picture instead of an empty black window,
+# and Tk no longer erases and redraws the whole window (every widget black for a moment) each time a fade-in ends,
+# which it does when the opacity goes back to exactly 100 %. Off Windows it is simply 1.0.
+OPAQUE = 254 / 255 if IS_WIN else 1.0
+
+GCLP_HBRBACKGROUND = -10
+_panel_brush = 0
+
+
+def panel_background(root, hex_colour: str) -> bool:
+    """Make Windows clear the app's windows to the panel colour instead of black whenever it clears them before
+    Tk has drawn (the window class background brush). Returns True if it was set; does nothing off Windows."""
+    global _panel_brush
+    if not IS_WIN:
+        return False
+    try:
+        u, g = ctypes.windll.user32, ctypes.windll.gdi32
+        hx = hex_colour.lstrip("#")
+        cref = int(hx[0:2], 16) | (int(hx[2:4], 16) << 8) | (int(hx[4:6], 16) << 16)
+        g.CreateSolidBrush.restype = wintypes.HBRUSH
+        brush = g.CreateSolidBrush(wintypes.COLORREF(cref))
+        if not brush:
+            return False
+        setter = getattr(u, "SetClassLongPtrW", None) or u.SetClassLongW     # 32-bit Python has only the latter
+        setter.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        setter.restype = ctypes.c_size_t
+        inner = root.winfo_id()                       # Tk's own window class (every widget shares it)
+        for h in {_hwnd(root), inner}:                # and the outer window with the title bar
+            setter(wintypes.HWND(h), GCLP_HBRBACKGROUND, brush)
+        old, _panel_brush = _panel_brush, brush
+        if old:
+            g.DeleteObject(wintypes.HGDIOBJ(old))     # the previous theme's brush
+        return True
+    except Exception:
+        return False
 
 
 # ---- hide the window from the screen while it is being drawn (Windows 8+)
