@@ -6,7 +6,7 @@ and Pillow, on the simulated hardware in `tests/`.
 
 ## Verdict
 
-**The regression is fixed.** One small leftover was found and fixed in **#48**: the sidebar highlight moved before
+**The regression is fixed.** One small leftover was found and fixed in **#48** (merged): the sidebar highlight moved before
 the page did.
 
 | What was reported in #42 | On `main` now |
@@ -63,7 +63,7 @@ it: six frames with "Lighting" lit in the sidebar over the Home page.
 **#48** sets the highlight after the layout pass, right before the page is raised, so the same `_paint_now` draws
 both. `restore_check.py` now fails if the target's highlight is already set when the layout pass runs. It fails on
 the old code (6 of 16 switches) and passes with the fix. The full suite (154 tests) passes, and the frames show the
-sidebar changing together with the page. The `windows` check runs on the PR. Trade-off: on a page's first visit,
+sidebar changing together with the page. #48 passed the `windows` check and merged into `main` on 2026-11-20, after I brought it up to date with 2.4.0. 171 tests pass on that branch. Trade-off: on a page's first visit,
 the highlight now waits until the page is ready (about 30–170 ms), instead of lighting up at once.
 
 ## Rules that must not break
