@@ -22,7 +22,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **Profiles** to save your favorite looks and switch between them in one click
 - **In-game FPS overlay**: just the number, no box, in the Orbitron font. It turns green when the game is smooth (60+), amber when it dips (30–59) and red when it's low (under 30). Optional 1% low, frame time and CPU/GPU temperatures, measured with Intel PresentMon (nothing is injected into the game)
 - **A compact, quiet interface**: the default **Gunmetal** theme keeps every panel neutral so only your real lighting brings the colour, and the sidebar marks the open page with one lit LED in your current lighting colour
-- **9 themes** (Gunmetal, Cyber Cyan, Ultraviolet Pulse, Emerald Matrix, Crimson Overclock, Nebula Glass, Tactical Mech, Bio-Neural, Cyber Glitch) that switch instantly, no restart. Smooth, anti-aliased dials, graphs, cards and buttons, and a startup animation with the logo
+- **9 themes** (Gunmetal, Cyber Cyan, Ultraviolet Pulse, Emerald Matrix, Crimson Overclock, Nebula Glass, Tactical Mech, Bio-Neural, Cyber Glitch), each in **Dark** or **Light** appearance, that switch instantly, no restart. Smooth, anti-aliased dials, graphs, cards and buttons, and a startup animation with the logo
 - **Clears conflicts for you**: when another RGB app (MSI Mystic Light, iCUE, Armoury Crate...) is holding your hardware, the Devices page offers to close it and re-detect your devices
 - **Lives in the system tray**: closing the window keeps your lighting and fan control running; right-click the tray icon to open or quit
 - **Edit by device type**: chips on the Lighting page (All Devices, RAM, GPU, Motherboard...) let you set the lighting for every device or just one kind
@@ -155,6 +155,7 @@ A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sid
 
 - A navy palette with cyan and purple accents. **Settings → Accent color** switches between Cyan (default), your Windows accent color, or your lighting color.
 - Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
+- **Settings → Appearance** switches every theme between Dark (default) and Light: bright panels, dark text and a deeper shade of the theme's accent, with a light title bar on Windows. It applies straight away, without a restart.
 - Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
 
 ### 2. Lighting: `rgb_engine.py`
@@ -248,7 +249,7 @@ EMERGENCY_TEMP = 90   # CPU or GPU at 90 °C or more -> every fan to 100 %
 | Monitor → Advanced | Search and filter every sensor, copy full system details to the clipboard |
 | Overlay | A small pill that shows your frame rate as a plain number, pinned to a corner of the game window. It stays on the game when you tab out and hides when the game is minimized or closed. Optional extras: 1% low, frame time, CPU and GPU temperature. Works over windowed and borderless-fullscreen games; exclusive fullscreen can cover it. |
 | Profiles | Save the current look under a name, then load or delete it later |
-| Settings | System check, accent color (Cyan, Windows or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
+| Settings | System check, theme, appearance (Dark or Light), accent color (Cyan, Windows or match lighting), startup animation, RAM temperature reading, start with Windows, reapply lighting on launch, activity log |
 
 > [!IMPORTANT]
 > Animated effects and custom fan profiles only run while Central RGB is open. Closing the window offers to **minimize instead**. If you quit, the lights stay on their last frame and the fans go back to BIOS control.
