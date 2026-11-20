@@ -75,6 +75,37 @@
           "priority": 10
         }
       ]
+    },
+    {
+      "id": "test-run",
+      "tasks": [
+        {
+          "key": "run-tests",
+          "agent": "bastion",
+          "title": "Run the Central RGB test suite on latest main",
+          "body": "Steven asked for a test run. Assumption: this means running the full automated test suite (and confirming the Windows CI check) on the latest main and reporting the results; no code changes.",
+          "assignment": "Branch: test-run-report (for your report only). On the latest main: python -m py_compile every .py file in the repo root and tests/, then run xvfb-run -a python -m unittest discover tests -v and keep the full output. Also look up the most recent 'windows' check run of the Build Central RGB workflow on main and note its result and link. Write docs/test-run.md with: the main commit tested, pass/fail/skip/error counts, the name and traceback of any failing test, the windows check result with its link, and a one-line plain-English verdict. Commit it on test-run-report and push. Do not fix failures in this task; list them so a follow-up can be planned. In your result, link the commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. RULES FOR THIS TASK: Start from the latest main. Do not change any source file and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules and the DDR5 once-per-boot RAM guard exactly as they are.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [],
+          "paths": [],
+          "priority": 10
+        },
+        {
+          "key": "run-tests-review",
+          "agent": "fabian",
+          "title": "Check the test-run report",
+          "body": "Independent check of Bastion's test-run report before it is accepted.",
+          "assignment": "Check out test-run-report. Re-run xvfb-run -a python -m unittest discover tests on the same main commit named in docs/test-run.md and confirm the counts and any failures match. Confirm tests/test_fan_safety.py ran and passed, that the windows check link points at that main commit, and that the branch changes only docs/test-run.md with no Claude/Anthropic attribution lines. Add a short 'Review' section to docs/test-run.md (verdict: confirmed / does not match, and why), commit on test-run-report, push, and link the commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. RULES FOR THIS TASK: Start from the latest main. Do not change any source file and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules and the DDR5 once-per-boot RAM guard exactly as they are.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "run-tests"
+          ],
+          "paths": [],
+          "priority": 10
+        }
+      ]
     }
   ]
 }
