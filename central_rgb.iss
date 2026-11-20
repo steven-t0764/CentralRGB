@@ -70,6 +70,8 @@ Filename: "{app}\{#AppExe}"; Parameters: "--restarted"; Flags: nowait shellexec;
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM ""{#AppExe}"" /F"; Flags: runhidden; RunOnceId: "StopApp"
+; with DDR5 RAM the hidden OpenRGB keeps running after the app closes; stop only Central RGB's own copy
+Filename: "powershell.exe"; Parameters: "-NoProfile -Command ""Get-Process OpenRGB -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '{localappdata}\CentralRGB\*' } | Stop-Process -Force"""; Flags: runhidden; RunOnceId: "StopOpenRGB"
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN CentralRGB /F"; Flags: runhidden; RunOnceId: "RemoveStartupTask"
 
 [UninstallDelete]

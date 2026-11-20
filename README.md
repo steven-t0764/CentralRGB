@@ -93,6 +93,16 @@ You can remove it separately from *Settings → Apps*.
 > [!TIP]
 > Close other RGB and fan apps (Corsair iCUE, ASUS Armoury Crate, MSI Mystic Light, Gigabyte RGB Fusion, NZXT CAM, SignalRGB, Razer Synapse, Logitech G HUB and others). They fight over the same hardware. **Settings → System check** tells you if any of them are running.
 
+### DDR5 RGB RAM
+
+Central RGB lights DDR5 RGB RAM only through OpenRGB, the same way as DDR4: it never writes to the RAM's SPD or SMBus itself. What works depends on OpenRGB.
+
+- **OpenRGB 1.0 or newer with PawnIO is needed.** Central RGB downloads the newest stable OpenRGB from openrgb.org on first run (or uses the one you installed). Older OpenRGB versions used the WinRing0 driver, which Windows 11 blocks; the Devices page then says **DDR5 RAM not supported by this OpenRGB**.
+- **DDR5 RGB kits Central RGB recognises** (whether OpenRGB lights one depends on the OpenRGB version, the kit *and* the board; check [openrgb.org/devices.html](https://openrgb.org/devices.html)): Kingston FURY Beast / Renegade RGB DDR5, Corsair Vengeance RGB DDR5 and Dominator Platinum / Titanium RGB DDR5, G.Skill Trident Z5 RGB / Z5 Neo RGB, TeamGroup T-Force Delta RGB DDR5 and XPG Lancer RGB DDR5. OpenRGB reaches them over the motherboard's SMBus through PawnIO on both Intel (i801) and AMD (piix4) boards.
+- **Once per boot.** On many PCs OpenRGB only finds DDR5 RGB RAM on its first hardware search after the PC starts, and searching again can make the sticks unreadable until a full shutdown. So with DDR5, Central RGB starts its hidden OpenRGB once and keeps it running (also after you close the app), **Rescan** asks before searching again, and **Close them** doesn't restart OpenRGB once the RAM is found.
+- **If the RAM isn't found**: shut the PC down fully (hold Shift while you click Shut down, so Fast Startup doesn't skip the power-off), turn it on and open Central RGB before any other RGB app. The **DDR5 RGB RAM not detected** note on the Devices page lists what's blocking it (admin rights, PawnIO, MSI Center / iCUE / another app holding the SMBus, an earlier search this boot). If nothing is blocking it and it's still missing after a full shutdown, OpenRGB doesn't support that kit on that board yet, and Central RGB can't light it either.
+- Once found, the sticks get every effect, one stick at a time on the shared bus at the steady RAM rate, using their own Static, Breathing and Color Cycle modes where they have them.
+
 ---
 
 ## Screenshots
@@ -276,6 +286,7 @@ py central_rgb.py
 | Problem | Fix |
 |---|---|
 | RGB RAM or motherboard lighting is missing | If the Devices page shows **Other RGB software is running**, press **Close them** (on MSI boards, Mystic Light holds the motherboard and RAM lighting; all MSI Center services and LEDKeeper2 are stopped, then your devices are re-detected once). The **RGB RAM not detected** note under it lists every cause it found: not admin, no **PawnIO** (rerun the installer, or get it from pawnio.eu), an OpenRGB older than 1.0, or an OpenRGB you started yourself (quit it, then press **Rescan**). Give it about 30 seconds |
+| DDR5 RGB RAM is missing | See [DDR5 RGB RAM](#ddr5-rgb-ram): DDR5 lighting is usually only found on the first search after a full shutdown. Shut down fully (Shift + Shut down), turn on, open Central RGB first. The Devices page says when OpenRGB doesn't support the kit |
 | An RGB mouse is missing | The Devices page shows **Mouse not detected** with the mouse's USB ID. If its own app (SteelSeries GG, Razer Synapse, G HUB, iCUE) is running, press **Close them** and keep that app from starting with Windows. If it still doesn't show, OpenRGB doesn't support that model yet: check openrgb.org/devices.html |
 | A device keeps changing back to its old color | Another RGB app is running. Close it and turn off its auto-start. |
 | "OpenRGB closed right after starting" | A copy of OpenRGB is already open without its SDK server. Close it from the system tray and press **Rescan**. |

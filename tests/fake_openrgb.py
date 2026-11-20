@@ -15,6 +15,7 @@ reports a set of demo RGB devices, so Central RGB can run on a machine with no R
     fake_openrgb.install()      # before creating central_rgb.App()
     fake_openrgb.install(devices=fake_openrgb.B550_PC, ram_blocked=True)   # RAM hidden, as when the SMBus is held
     fake_openrgb.install(devices=fake_openrgb.B550_PC, mouse_blocked=True) # mouse hidden, as when its app holds it
+    fake_openrgb.install(devices=fake_openrgb.Z790_DDR5_PC)                   # a DDR5 kit (Kingston FURY RGB)
 
 The devices only record what they were told (mode, colors); nothing is sent anywhere.
 """
@@ -71,6 +72,23 @@ B550_PC = [
      [("Keyboard", 87)], ("Direct", "Static", "Spectrum Cycle", "Off")),
     STEELSERIES_MOUSE,
 ] + CORSAIR_VENGEANCE_DDR4
+
+# A DDR5 PC: Intel Z790 board with two Kingston FURY Beast RGB DDR5 sticks. OpenRGB's Kingston Fury detector
+# finds each stick behind the DDR5 SPD hub on the Intel (i801) SMBus, through PawnIO, on its first search
+# after boot. The sticks have Direct plus their own hardware modes.
+KINGSTON_FURY_DDR5 = [
+    (f"Kingston Fury DDR5 DRAM (DIMM {i})", DeviceType.DRAM, "Kingston",
+     [("Kingston Fury DDR5", 12)], ("Direct", "Static", "Breathing", "Spectrum Cycle", "Rainbow", "Off"))
+    for i in (1, 2)
+]
+# What Windows reports for them: "Manufacturer PartNumber", and SMBIOSMemoryType 34 (DDR5).
+KINGSTON_FURY_DDR5_WMI = ["Kingston KF560C36BBEA-16"] * 2
+Z790_DDR5_PC = [
+    ("MSI MAG Z790 TOMAHAWK WIFI (MS-7D91)", DeviceType.MOTHERBOARD, "MSI",
+     [("JRGB1", 1), ("JARGB_V2_1", 30)], ("Direct", "Static", "Breathing", "Rainbow", "Off")),
+    ("NVIDIA GeForce RTX 4070 SUPER", DeviceType.GPU, "ASUS",
+     [("GPU", 8)], ("Direct", "Static", "Breathing", "Off")),
+] + KINGSTON_FURY_DDR5
 
 
 class FakeDevice:
