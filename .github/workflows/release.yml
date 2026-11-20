@@ -4,10 +4,7 @@ name: Release Central RGB
 # "Update now" picks it up. Small tweaks pile up: see tools/auto_release.py for the rule
 # (3+ changelog entries, one marked <!-- big -->, or an APP_VERSION bump).
 on:
-  workflow_run:            # after every main build that passes
-    workflows: ["Build Central RGB"]
-    types: [completed]
-    branches: [main]
+  # build.yml starts this after every green build of main; the nightly run is a fallback
   schedule:
     - cron: "23 9 * * *"   # nightly fallback, about 3:23 AM Central
   workflow_dispatch:
@@ -29,7 +26,6 @@ concurrency:
 jobs:
   decide:
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'release' && github.event.workflow_run.event != 'workflow_call')
     outputs:
       release: ${{ steps.go.outputs.release }}
       tag: ${{ steps.d.outputs.tag }}

@@ -145,3 +145,17 @@ jobs:
           Copy-Item (Get-ChildItem installer\*.exe | Select-Object -First 1).FullName "CentralRGB-Setup-test.exe"
           gh release upload test-build "Central-RGB-test.exe" "CentralRGB-Setup-test.exe" --clobber
           gh release edit test-build --notes "Automatic build of commit $sha from the test branch, for trying changes before a real release."
+
+  # After a green build of main (not a release build), ask release.yml whether enough has changed to publish a
+  # release. Runs started by the workflow token can't trigger "workflow_run", but they may dispatch a workflow.
+  release-check:
+    needs: windows
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'release' && !inputs.tag
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start "Release Central RGB"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "${{ github.repository }}" --ref main
