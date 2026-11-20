@@ -7,5 +7,5 @@ installer/
 tests/preview_out/
 .vizor/
 
-# Your own app settings (kept in %APPDATA%\CentralRGB, never in the repo)
-settings.json
+# Local-only settings files
+settings.local.json
