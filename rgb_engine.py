@@ -565,10 +565,11 @@ class OpenRGBManager:
         try:
             req = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": APP_NAME})
             html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
-            # First Windows 64-bit portable zip on the page is the newest stable release
-            m = re.search(r'https?://[^"\'\s>]+Windows_64[^"\'\s>]*\.zip', html)
-            if m:
-                return m.group(0)
+            # the newest Windows 64-bit zip on the page, 1.0 or newer (older ones can't reach RGB RAM)
+            url = pick_openrgb_zip(html)
+            if url:
+                return url
+            self.log("The OpenRGB releases page lists no Windows build of 1.0 or newer; using the known 1.1 link.")
         except Exception as e:
             self.log(f"Couldn't read the OpenRGB releases page ({e}); using known 1.1 link.")
         return FALLBACK_ZIP
@@ -603,12 +604,26 @@ class OpenRGBManager:
         exe = next(dest.rglob("OpenRGB.exe"), None)
         if not exe:
             raise RuntimeError("Downloaded OpenRGB but couldn't find OpenRGB.exe inside the zip.")
+        try:                       # remember which release this is (the zip's folder may not say)
+            (exe.parent / OPENRGB_MARKER).write_text(url.rsplit("/", 1)[-1] + "\n", encoding="utf-8")
+        except Exception:
+            pass
         self.settings["openrgb_path"] = str(exe)
-        self.log(f"OpenRGB installed to {exe.parent}")
+        self.log(f"OpenRGB installed to {exe.parent} (version {openrgb_version(exe) or 'unknown'})")
         return exe
 
     def launch(self, exe: Path, wait=45) -> bool:
-        self.log(f"Starting OpenRGB SDK server ({exe}) ...")
+        ver = openrgb_version(exe)
+        self.log(f"Starting OpenRGB {ver or '(version unknown)'} SDK server ({exe}) ...")
+        if openrgb_too_old(ver):
+            self.log(f"This OpenRGB ({ver}) is older than 1.0: it can't reach RGB RAM on Windows 11. Delete it or "
+                     "point Settings > OpenRGB at OpenRGB 1.0 or newer.")
+        if rgb_ram_sticks():
+            # RGB RAM is installed: a RAM detector switched off in OpenRGB means the sticks are never searched
+            turned_on = enable_ram_detectors(openrgb_config_paths(exe))
+            if turned_on:
+                self.log("Turned OpenRGB's RAM detectors back on (they were switched off in OpenRGB): "
+                         + ", ".join(turned_on))
         try:
             # --server alone runs OpenRGB headless: no window, no tray icon, no taskbar entry
             # (--startminimized would load its GUI into the tray). The console is hidden too.
@@ -645,8 +660,8 @@ RAM_INVENTORY: list[str] = []
 # installed but OpenRGB found none of it; a stick that isn't listed here just isn't checked.
 RGB_RAM_PARTS = (
     (re.compile(r"^CMR\d", re.I), "Corsair Vengeance RGB"),           # e.g. CMR16GX4M2C3200C16 (DDR4)
-    (re.compile(r"^CMW\d", re.I), "Corsair Vengeance RGB Pro"),
-    (re.compile(r"^CMN\d", re.I), "Corsair Vengeance RGB Pro SL"),
+    (re.compile(r"^CMW\d", re.I), "Corsair Vengeance RGB PRO"),       # e.g. CMW32GX4M2D3600C18 (DDR4)
+    (re.compile(r"^CMN\d", re.I), "Corsair Vengeance RGB PRO SL"),
     (re.compile(r"^CMG\d", re.I), "Corsair Vengeance RGB RS"),
     (re.compile(r"^CMH\d", re.I), "Corsair Vengeance RGB DDR5"),
     (re.compile(r"^CMT\d", re.I), "Corsair Dominator Platinum RGB"),
@@ -679,11 +694,390 @@ def rgb_ram_sticks(rams=None) -> list[str]:
     return out
 
 
-def openrgb_version(path) -> str | None:
-    """OpenRGB's version from its install path, e.g. ...\\OpenRGB_0.9_Windows_64_b5f46e3\\OpenRGB.exe -> '0.9'.
-    The release zips are named that way; None when the path doesn't say."""
+# Corsair memory part numbers start with CM + a letter for the product line. Windows often reports the
+# maker of these sticks as "Unknown" (the BIOS leaves it blank), so the maker is taken from the part number.
+CORSAIR_LINES = (
+    ("CMW", "Vengeance RGB PRO"), ("CMN", "Vengeance RGB PRO SL"), ("CMG", "Vengeance RGB RS"),
+    ("CMR", "Vengeance RGB"), ("CMH", "Vengeance RGB DDR5"), ("CMT", "Dominator Platinum RGB"),
+    ("CMP", "Dominator Titanium RGB"), ("CMK", "Vengeance LPX, no RGB"), ("CMD", "Dominator Platinum"),
+    ("CMU", "Vengeance LED"), ("CMSX", "Vengeance SODIMM"),
+)
+# JEDEC module-maker codes Windows sometimes shows instead of a name (with or without the bank byte).
+JEDEC_MAKERS = {"029E": "Corsair", "9E": "Corsair", "04CD": "G.Skill", "CD": "G.Skill", "0198": "Kingston",
+                "98": "Kingston", "859B": "Crucial", "9B": "Crucial", "802C": "Micron", "2C": "Micron",
+                "80CE": "Samsung", "CE": "Samsung", "80AD": "SK Hynix", "AD": "SK Hynix", "059B": "Crucial",
+                "0B0F": "T-Force", "04CB": "ADATA / XPG", "CB": "ADATA / XPG", "0902": "Patriot"}
+
+
+def ram_maker(maker, part="") -> str:
+    """The memory maker's name from what Windows reports ('Unknown', a JEDEC code like '029E' or
+    '9E00000000000000', or a name), falling back to the part number (CM... is Corsair). '' if unknown."""
+    m = str(maker or "").strip()
+    code = re.sub(r"^0x", "", m, flags=re.I).upper()
+    if re.fullmatch(r"[0-9A-F]{2,16}", code):
+        code = code.rstrip("0") if len(code) > 4 else code
+        code = code if len(code) % 2 == 0 else code + "0"
+        if code in JEDEC_MAKERS:
+            return JEDEC_MAKERS[code]
+        if code[:4] in JEDEC_MAKERS:
+            return JEDEC_MAKERS[code[:4]]
+        if code[:2] in JEDEC_MAKERS:
+            return JEDEC_MAKERS[code[:2]]
+        m = ""
+    if m.lower() in ("", "unknown", "undefined", "not specified", "manufacturer", "none", "0000", "00"):
+        m = ""
+    p = str(part or "").strip().upper()
+    if not m and re.match(r"^CM[A-Z]{1,3}\d", p):
+        return "Corsair"
+    if not m and p.startswith("F4-") or not m and p.startswith("F5-"):
+        return "G.Skill"
+    if not m and p.startswith("KF"):
+        return "Kingston"
+    return m
+
+
+def ram_line(part) -> str:
+    """Product line for a part number, e.g. CMW32GX4M2D3600C18 -> 'Corsair Vengeance RGB PRO'. '' if unknown."""
+    p = str(part or "").strip().upper()
+    for prefix, line in sorted(CORSAIR_LINES, key=lambda x: -len(x[0])):
+        if p.startswith(prefix) and p[len(prefix):len(prefix) + 1].isdigit():
+            return "Corsair " + line
+    for pat, name in RGB_RAM_PARTS:
+        if pat.search(p):
+            return name
+    return ""
+
+
+def split_ram_entry(entry) -> tuple[str, str]:
+    """A RAM_INVENTORY entry ('Manufacturer PartNumber') -> (maker as Windows wrote it, part number)."""
+    words = str(entry or "").split()
+    if not words:
+        return "", ""
+    if len(words) == 1:
+        return "", words[0]
+    return " ".join(words[:-1]), words[-1]
+
+
+def ram_label(entry) -> str:
+    """Friendly name for a stick: 'Unknown CMW32GX4M2D3600C18' -> 'Corsair Vengeance RGB PRO (CMW32GX4M2D3600C18)'."""
+    maker_raw, part = split_ram_entry(entry)
+    maker, line = ram_maker(maker_raw, part), ram_line(part)
+    if line:
+        name = line if not maker or line.lower().startswith(maker.lower()) else f"{maker} {line}"
+    else:
+        name = maker or "Unknown maker"
+    return f"{name} ({part})" if part else name
+
+
+def ram_summary(rams) -> str:
+    """'4x Corsair Vengeance RGB PRO (CMW32GX4M2D3600C18)' for a list of RAM_INVENTORY entries."""
+    counts: dict[str, int] = {}
+    for r in rams:
+        lab = ram_label(r)
+        counts[lab] = counts.get(lab, 0) + 1
+    return ", ".join(f"{n}x {lab}" if n > 1 else lab for lab, n in sorted(counts.items()))
+
+
+def _openrgb_version_from_path(path) -> str | None:
     m = re.search(r"openrgb[ _-]?v?(\d+\.\d+(?:\.\d+)?(?:[ _-]?rc\d*)?)", str(path or ""), re.I)
     return m.group(1).replace("_", "").replace(" ", "") if m else None
+
+
+OPENRGB_MARKER = "CentralRGB-download.txt"   # written next to OpenRGB.exe: which zip Central RGB installed
+
+
+_file_versions: dict[str, str | None] = {}
+
+
+def _file_version(path) -> str | None:
+    """Windows file/product version of an exe (None elsewhere or when it has none). Read once per path."""
+    if not IS_WIN or not path or not Path(path).is_file():
+        return None
+    if str(path) in _file_versions:
+        return _file_versions[str(path)]
+    r = run_quiet(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                   f"(Get-Item -LiteralPath '{str(path).replace(chr(39), chr(39) * 2)}').VersionInfo.ProductVersion"],
+                  timeout=15)
+    v = ((r.stdout or "").strip() if r else "") or None
+    _file_versions[str(path)] = v
+    return v
+
+
+def openrgb_version(path) -> str | None:
+    """OpenRGB's version from its install path, e.g. ...\\OpenRGB_0.9_Windows_64_b5f46e3\\OpenRGB.exe -> '0.9'.
+    The release zips are named that way. When the path doesn't say: the zip Central RGB downloaded (noted
+    next to the exe), then the exe's own version info on Windows. None when nothing says."""
+    v = _openrgb_version_from_path(path)
+    if v or not path:
+        return v
+    try:
+        marker = Path(path).parent / OPENRGB_MARKER
+        if marker.is_file():
+            v = _openrgb_version_from_path(marker.read_text(encoding="utf-8", errors="replace"))
+            if v:
+                return v
+    except Exception:
+        pass
+    try:
+        fv = _file_version(path)
+        m = re.match(r"\s*(\d+\.\d+(?:\.\d+)?(?:\s*rc\d*)?)", fv or "", re.I)
+        return m.group(1).replace(" ", "") if m else None
+    except Exception:
+        return None
+
+
+def _version_key(v) -> tuple:
+    """Sort key for '0.9', '1.0rc1', '1.0rc2', '1.0', '1.1': a release candidate sorts before its release."""
+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?(?:rc(\d*))?", str(v or ""), re.I)
+    if not m:
+        return (-1,)
+    rc = m.group(4)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0), 0 if rc is not None else 1, int(rc or 0))
+
+
+def pick_openrgb_zip(html: str) -> str | None:
+    """The newest Windows 64-bit OpenRGB zip linked on the releases page, never one older than 1.0 (those
+    reach the SMBus through WinRing0, which Windows 11 blocks, so RAM lighting is never found)."""
+    best, best_key = None, None
+    for url in re.findall(r'https?://[^"\'\s>]+Windows_64[^"\'\s>]*\.zip', html or ""):
+        v = _openrgb_version_from_path(url.rsplit("/", 1)[-1]) or _openrgb_version_from_path(url)
+        if not v or openrgb_too_old(v):
+            continue
+        k = _version_key(v)
+        if best_key is None or k > best_key:
+            best, best_key = url, k
+    return best
+
+
+# --------------------------------------------------------------------------- OpenRGB's RAM detectors
+# OpenRGB's detectors that look for RGB RAM on the SMBus. Any of them can be switched off in OpenRGB's
+# Settings > Supported Devices; it is then saved as false in OpenRGB.json and that RAM is never searched for.
+RAM_DETECTOR_WORDS = ("dram", "ddr4", "ddr5", "vengeance", "dominator", "trident", "fury", "ripjaws", "viper",
+                      "spectrix", "lancer", "t-force", "tforce", "xtreem", "crucial", "ballistix", "ene smbus",
+                      "sector 5", "hyperx predator", "hyperx fury")
+
+
+def is_ram_detector(name) -> bool:
+    n = str(name or "").lower()
+    return any(w in n for w in RAM_DETECTOR_WORDS)
+
+
+def openrgb_config_paths(exe=None) -> list[Path]:
+    """Where OpenRGB keeps OpenRGB.json: %APPDATA%\\OpenRGB, or next to a portable OpenRGB.exe."""
+    out = []
+    if os.environ.get("APPDATA"):
+        out.append(Path(os.environ["APPDATA"]) / "OpenRGB" / "OpenRGB.json")
+    if exe:
+        out.append(Path(exe).parent / "OpenRGB.json")
+    return out
+
+
+def ram_detector_settings(paths=None) -> tuple[Path | None, dict]:
+    """(OpenRGB.json that exists, {detector name: enabled} for its RAM detectors). (None, {}) if none."""
+    for p in (openrgb_config_paths() if paths is None else paths):
+        try:
+            if not Path(p).is_file():
+                continue
+            data = json.loads(Path(p).read_text(encoding="utf-8", errors="replace"))
+            dets = ((data.get("Detectors") or {}).get("detectors") or {}) if isinstance(data, dict) else {}
+            return Path(p), {k: bool(v) for k, v in dets.items() if is_ram_detector(k)}
+        except Exception:
+            continue
+    return None, {}
+
+
+def enable_ram_detectors(paths=None) -> list[str]:
+    """Switch OpenRGB's RAM detectors back on in OpenRGB.json if they were switched off (only call this when
+    RGB RAM is installed). Returns the detectors that were turned on. Leaves the file alone otherwise."""
+    path, dets = ram_detector_settings(paths)
+    off = sorted(k for k, on in dets.items() if not on)
+    if not path or not off:
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        for k in off:
+            data["Detectors"]["detectors"][k] = True
+        tmp = path.with_suffix(".centralrgb.tmp")
+        tmp.write_text(json.dumps(data, indent=4), encoding="utf-8")
+        tmp.replace(path)
+        return off
+    except Exception:
+        return []
+
+
+# --------------------------------------------------------------------------- RAM diagnostics
+# Words in OpenRGB's own log that say what it did on the SMBus (buses found, RAM detectors run, PawnIO).
+OPENRGB_LOG_WORDS = ("smbus", "i2c", "piix4", "i801", "pawnio", "winring0", "dram", "vengeance", "dominator",
+                     "spd", "detection")
+_last_ram_diag = {"text": ""}
+
+
+def openrgb_log_lines(log_dir=None, limit=12) -> tuple[Path | None, list[str]]:
+    """(newest OpenRGB log file, its lines about the SMBus / RAM detection, at most `limit`)."""
+    if log_dir is None:
+        if not os.environ.get("APPDATA"):
+            return None, []
+        log_dir = Path(os.environ["APPDATA"]) / "OpenRGB" / "logs"
+    try:
+        logs = sorted(Path(log_dir).glob("*.log"), key=lambda p: p.stat().st_mtime)
+    except Exception:
+        return None, []
+    if not logs:
+        return None, []
+    try:
+        text = logs[-1].read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return logs[-1], []
+    hits = [ln.strip()[:160] for ln in text if any(w in ln.lower() for w in OPENRGB_LOG_WORDS)]
+    return logs[-1], hits[-limit:]
+
+
+def process_elevated(pid) -> bool | None:
+    """True if that process runs as administrator (elevated). None off Windows or when it can't be read."""
+    if not IS_WIN or not pid:
+        return None
+    try:
+        k32, adv = ctypes.windll.kernel32, ctypes.windll.advapi32
+        h = k32.OpenProcess(0x1000, False, int(pid))         # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return None
+        try:
+            tok = ctypes.c_void_p()
+            if not adv.OpenProcessToken(h, 0x0008, ctypes.byref(tok)):   # TOKEN_QUERY
+                return None
+            try:
+                elev, size = ctypes.c_ulong(0), ctypes.c_ulong(0)
+                if not adv.GetTokenInformation(tok, 20, ctypes.byref(elev), 4, ctypes.byref(size)):  # TokenElevation
+                    return None
+                return bool(elev.value)
+            finally:
+                k32.CloseHandle(tok)
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        return None
+
+
+def running_openrgb() -> tuple[str | None, int | None, list[str]]:
+    """(exe path, pid, command line) of a running OpenRGB.exe, or (None, None, [])."""
+    try:
+        import psutil
+        for p in psutil.process_iter(["name", "exe", "cmdline"]):
+            if (p.info["name"] or "").lower() == "openrgb.exe":
+                return p.info.get("exe"), p.pid, list(p.info.get("cmdline") or [])
+    except Exception:
+        pass
+    return None, None, []
+
+
+def pawnio_modules(exe) -> list[str]:
+    """PawnIO SMBus modules shipped next to OpenRGB.exe (SmbusPIIX4.bin is the one AMD boards need)."""
+    if not exe:
+        return []
+    try:
+        folder = Path(exe).parent
+        return sorted({p.name for p in folder.rglob("*.bin") if "smbus" in p.name.lower() or "pawn" in p.name.lower()
+                       or "lpcio" in p.name.lower()})
+    except Exception:
+        return []
+
+
+def cpu_vendor() -> str:
+    import platform
+    s = (platform.processor() or "") + " " + os.environ.get("PROCESSOR_IDENTIFIER", "")
+    return "AMD" if ("amd" in s.lower() or "authenticamd" in s.lower()) else ("Intel" if "intel" in s.lower() else "")
+
+
+def ram_diagnostics(found_types=(), rams=None, admin=None, pawnio=None, conflicts=None, exe=None, pid=None,
+                    cmdline=None, started_by_central=None, elevated=None, openrgb_ver=None, config_paths=None,
+                    log_dir=None, cpu=None) -> list[str]:
+    """Everything needed to tell why OpenRGB found no RGB RAM, as plain 'name: value' lines. Every value
+    can be passed in (tests); anything left out is read from this PC (and says 'unknown' off Windows)."""
+    rams = RAM_INVENTORY if rams is None else rams
+    if exe is None and pid is None:
+        exe, pid, cmdline = running_openrgb()
+    cmd = [c.lower() for c in (cmdline or [])]
+    if started_by_central is None:
+        started_by_central = bool(cmd) and "--server" in cmd and "--noautoconnect" in cmd
+    admin = is_admin() if admin is None else admin
+    if elevated is None:
+        elevated = process_elevated(pid)
+        if elevated is None and started_by_central:
+            elevated = admin                       # a child started by Central RGB has its rights
+    pawnio = pawnio_installed() if pawnio is None else pawnio
+    conflicts = find_conflicts() if conflicts is None else conflicts
+    ver = openrgb_ver or (openrgb_version(exe) if exe else None)
+    cpu = cpu_vendor() if cpu is None else cpu
+    bus = {"AMD": "AMD (piix4 SMBus, needs PawnIO module SmbusPIIX4)",
+           "Intel": "Intel (i801 SMBus, needs PawnIO module SmbusI801)"}.get(cpu, cpu or "unknown")
+    mods = pawnio_modules(exe)
+    cfg, dets = ram_detector_settings(openrgb_config_paths(exe) if config_paths is None else config_paths)
+    smbus = sorted(n for n in conflicts if n in SMBUS_APPS)
+    other = sorted(n for n in conflicts if n not in SMBUS_APPS)
+    log_file, log_hits = openrgb_log_lines(log_dir)
+    if not exe:
+        started = "not running"
+    elif started_by_central:
+        started = "by Central RGB (hidden, --server --noautoconnect)"
+    else:
+        started = "outside Central RGB (" + (" ".join(cmdline[1:]) if cmdline and len(cmdline) > 1 else "no options") + ")"
+    yn = {True: "yes", False: "no", None: "unknown"}
+    lines = [
+        f"OpenRGB: {ver or 'version unknown'}" + (" (too old: uses WinRing0, which Windows 11 blocks)"
+                                                   if openrgb_too_old(ver) else "") + f" at {exe or '-'}",
+        f"OpenRGB started: {started}; running as administrator: {yn[elevated]}",
+        f"Central RGB running as administrator: {yn[bool(admin)]}",
+        f"PawnIO driver installed: {yn[bool(pawnio)]}; PawnIO modules next to OpenRGB: "
+        + (", ".join(mods) if mods else "none found"),
+        f"CPU / SMBus: {bus}",
+        "OpenRGB RAM detectors" + (f" ({cfg})" if cfg else "") + ": "
+        + (", ".join(f"{k} {'on' if v else 'OFF'}" for k, v in sorted(dets.items())) if dets
+           else "all on (OpenRGB's defaults)" if cfg else "no OpenRGB.json yet (defaults: all on)"),
+        "Devices OpenRGB reported: " + (", ".join(sorted(set(found_types))) if found_types else "none"),
+        "Apps that use the RAM's SMBus running: " + (", ".join(smbus) if smbus else "none")
+        + ("; other RGB apps (USB only, they don't hold the SMBus): " + ", ".join(other) if other else ""),
+        "RAM part numbers (Windows): " + (_ram_raw_summary(rams) if rams else "none"),
+    ]
+    if log_file:
+        lines.append(f"OpenRGB log {log_file.name}: " + (" | ".join(log_hits) if log_hits
+                                                         else "no SMBus / RAM lines (no bus or RAM detector ran)"))
+    else:
+        lines.append("OpenRGB log: none found (%APPDATA%\\OpenRGB\\logs)")
+    return lines
+
+
+def last_ram_diagnostics() -> list[str]:
+    """The RAM diagnostics from the last time RGB RAM was missing ([] if it never was)."""
+    return list(_last_ram_diag.get("lines") or [])
+
+
+def _ram_raw_summary(rams) -> str:
+    """'4x "Unknown CMW32GX4M2D3600C18" = Corsair Vengeance RGB PRO (CMW32GX4M2D3600C18)': what Windows said, and what it is."""
+    counts: dict[str, int] = {}
+    for r in rams:
+        counts[str(r)] = counts.get(str(r), 0) + 1
+    return ", ".join(f"{n}x \"{r}\" = {ram_label(r)}" for r, n in sorted(counts.items()))
+
+
+def write_ram_diagnostics(lines) -> Path | None:
+    """Save the RAM diagnostics to ram-diagnostics.txt (copy it into a bug report) and add them to
+    activity.log once (again only when something changed). Returns the file, None if it couldn't be written."""
+    text = "\n".join(lines)
+    try:
+        d = settings_dir()
+        out = d / "ram-diagnostics.txt"
+        out.write_text(f"Central RGB {APP_VERSION} RAM diagnostics, {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                       + text + "\n", encoding="utf-8")
+        if text != _last_ram_diag["text"]:
+            _last_ram_diag["text"] = text
+            with open(d / "activity.log", "a", encoding="utf-8") as f:
+                stamp = time.strftime("%H:%M:%S  ")
+                f.write(stamp + f"RAM diagnostics (also in {out}):\n")
+                for ln in lines:
+                    f.write(stamp + "  " + ln + "\n")
+        return out
+    except Exception:
+        return None
 
 
 def openrgb_too_old(version) -> bool:
@@ -750,6 +1144,14 @@ def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, confli
                        "on its own finds the RAM.")
     if ddr5:
         reasons.append(ddr5_unsupported_note())
+    try:                       # what to read off this PC next time: saved to activity.log and ram-diagnostics.txt
+        diag = ram_diagnostics(found_types, rams=rams, admin=admin, pawnio=pawnio, conflicts=conflicts,
+                               openrgb_ver=openrgb_ver,
+                               **({"started_by_central": False} if external_openrgb else {}))
+        _last_ram_diag["lines"] = diag
+        write_ram_diagnostics(diag)
+    except Exception:
+        pass
     names = ", ".join(sorted(set(sticks)))
     kind = "DDR5 RGB RAM" if ddr5 else "RGB RAM"
     summary = f"{len(sticks)} {kind} stick(s) installed ({names}) but none were found."
@@ -891,7 +1293,7 @@ def system_check() -> list[tuple[str, str]]:
         rams = [rams] if isinstance(rams, str) else rams
         RAM_INVENTORY[:] = [str(x) for x in rams]
         if rams:
-            out.append(("info", f"RAM sticks: {len(rams)} ({', '.join(sorted(set(rams)))})"))
+            out.append(("info", f"RAM sticks: {len(rams)} ({ram_summary(rams)})"))
         for key, inv_list in (("mouse", MOUSE_INVENTORY), ("kbd", KEYBOARD_INVENTORY)):
             items = inv.get(key) or []
             inv_list[:] = [str(x) for x in ([items] if isinstance(items, str) else items) if x]

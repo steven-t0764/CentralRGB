@@ -55,6 +55,16 @@ CORSAIR_VENGEANCE_DDR4 = [
 # What Windows reports for those four sticks (Win32_PhysicalMemory "Manufacturer PartNumber").
 CORSAIR_VENGEANCE_DDR4_WMI = ["Corsair CMR64GX4M4C3200C16"] * 4
 
+# Corsair Vengeance RGB PRO DDR4 (part numbers CMW...), the sticks in the owner's PC: two 2x16 GB kits of
+# CMW32GX4M2D3600C18. OpenRGB's "Corsair Vengeance Pro" detector finds them on the SMBus at 0x58-0x5B.
+# Windows reports their maker as "Unknown" (the BIOS leaves it blank).
+CORSAIR_VENGEANCE_PRO_DDR4 = [
+    (f"Corsair Vengeance Pro RGB (DIMM {i})", DeviceType.DRAM, "Corsair",
+     [("Corsair Vengeance Pro RGB", 10)], ("Direct", "Static", "Breathing", "Color Shift", "Rainbow Wave", "Off"))
+    for i in range(1, 5)
+]
+CORSAIR_VENGEANCE_PRO_DDR4_WMI = ["Unknown CMW32GX4M2D3600C18"] * 4
+
 # A SteelSeries RGB mouse (USB HID, lit by OpenRGB's SteelSeries Rival detector; SteelSeries GG drives it too).
 STEELSERIES_MOUSE = ("SteelSeries Rival 3", DeviceType.MOUSE, "SteelSeries",
                      [("Logo", 1), ("Strip", 3)], ("Direct", "Static", "Breathing", "Off"))
@@ -72,6 +82,9 @@ B550_PC = [
      [("Keyboard", 87)], ("Direct", "Static", "Spectrum Cycle", "Off")),
     STEELSERIES_MOUSE,
 ] + CORSAIR_VENGEANCE_DDR4
+
+# The owner's PC as of 2026-11-20: the same MSI B550-A PRO and Razer keyboard, with four Vengeance RGB PRO sticks.
+B550_PRO_PC = B550_PC[:3] + CORSAIR_VENGEANCE_PRO_DDR4
 
 # A DDR5 PC: Intel Z790 board with two Kingston FURY Beast RGB DDR5 sticks. OpenRGB's Kingston Fury detector
 # finds each stick behind the DDR5 SPD hub on the Intel (i801) SMBus, through PawnIO, on its first search
@@ -151,30 +164,39 @@ class FakeClient:
     DEVICES = DEMO_DEVICES
     RAM_BLOCKED = False
     MOUSE_BLOCKED = False
+    RAM_LATE = 0          # the RAM only shows up after this many update() calls (SMBus scan still running)
 
     def __init__(self, address="127.0.0.1", port=6742, name="test", protocol_version=None):
-        devs = [d for d in self.DEVICES if not (self.RAM_BLOCKED and d[1] == DeviceType.DRAM)
-                and not (self.MOUSE_BLOCKED and d[1] == DeviceType.MOUSE)]
-        self.devices = [FakeDevice(i, *d) for i, d in enumerate(devs)]
+        self.updates = 0
+        self._build()
         self.ee_devices = []
         self.profiles = []
 
+    def _build(self):
+        hide_ram = self.RAM_BLOCKED or self.updates < self.RAM_LATE
+        devs = [d for d in self.DEVICES if not (hide_ram and d[1] == DeviceType.DRAM)
+                and not (self.MOUSE_BLOCKED and d[1] == DeviceType.MOUSE)]
+        self.devices = [FakeDevice(i, *d) for i, d in enumerate(devs)]
+
     def update(self):
-        pass
+        self.updates += 1
+        if self.RAM_LATE and self.updates == self.RAM_LATE:
+            self._build()
 
     def disconnect(self):
         pass
 
 
-def install(eng=None, devices=None, ram_blocked=False, mouse_blocked=False):
+def install(eng=None, devices=None, ram_blocked=False, mouse_blocked=False, ram_late=0):
     """Point Central RGB's lighting engine at the fake devices. Pass rgb_engine, or it's imported.
     devices picks the device list (DEMO_DEVICES by default); ram_blocked hides its RAM sticks and
-    mouse_blocked its mice."""
+    mouse_blocked its mice; ram_late shows the RAM only after that many device-list refreshes."""
     if eng is None:
         import rgb_engine as eng
     FakeClient.DEVICES = DEMO_DEVICES if devices is None else devices
     FakeClient.RAM_BLOCKED = ram_blocked
     FakeClient.MOUSE_BLOCKED = mouse_blocked
+    FakeClient.RAM_LATE = ram_late
     eng.OpenRGBClient = FakeClient
     eng.OpenRGBManager.server_running = staticmethod(lambda timeout=0.5: True)
     eng.OpenRGBManager.replace_visible_copy = lambda self: False

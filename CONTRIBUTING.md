@@ -9,6 +9,7 @@ Open an [issue](../../issues) and include:
 - **What happened** and what you expected
 - **Your hardware**: in the app, go to **Monitor → Advanced → Copy** and paste the result
 - **The activity log**: **Settings → Activity**, or attach `%APPDATA%\CentralRGB\activity.log`. It also records any moment the window paused, with what the app was doing.
+- **RGB RAM not detected**: also attach `%APPDATA%\CentralRGB\ram-diagnostics.txt` (OpenRGB version, admin rights, PawnIO, OpenRGB's RAM detectors and SMBus log lines, RAM part numbers).
 - Your **Windows version**, and whether you used the **installer** or the **portable** .exe
 - For lighting problems: does the device work in [OpenRGB](https://openrgb.org) on its own? If not, it needs support in OpenRGB first.
 - For fan or sensor problems: does it show up in [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) on its own?
