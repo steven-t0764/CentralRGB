@@ -13,7 +13,7 @@ preview script goes in this folder.**
 | `test_fan_safety.py` | Checks the fan-safety rules: fans never below 20 %, pumps never below 70 %, all fans to 100 % at 90 °C, and fans handed back to the BIOS on Auto and on close. |
 | `test_ram_updates.py` | Checks the RGB RAM flicker fix: RAM gets a steady, lower update rate with the sticks taking turns, unchanged RAM frames are skipped, Breathing runs in the sticks' own hardware mode, and other devices keep the full rate. |
 | `fake_github.py` | Fake GitHub Releases API (a real release plus a draft, a pre-release and the test build; can go offline, hit the rate limit or serve a tampered file) for the updater. |
-| `test_updater.py` | One-click updater: version ordering, skipping pre-releases, picking the installer or portable exe, refusing a checksum mismatch, offline and rate-limit messages, the helper that waits for a normal close, and the once-a-day auto-check setting (older settings files still load). |
+| `test_updater.py` | One-click updater: version ordering, skipping pre-releases, picking the installer or portable exe, refusing a checksum mismatch, offline and rate-limit messages (including a connection that drops mid-read), the helper that waits for a normal close, and the once-a-day auto-check setting (older settings files still load). |
 | `preview_updater.py` | Screenshots the Updates rows on the Settings page and the "new version" notice, using the fake GitHub. |
 | `test_workflows.py` | Checks the GitHub workflows: auto-merge only merges passing, tested, non-draft PRs and then starts the main build, so every merge commit on main gets the `windows` check. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |

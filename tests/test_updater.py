@@ -151,6 +151,25 @@ class Download(unittest.TestCase):
         with self.assertRaises(upd.UpdateError):
             upd.download(rel, "installed", self.dir, opener=gh)
 
+    def test_connection_drop_while_reading_checksums(self):
+        """A timeout or cut-off connection while reading SHA256SUMS.txt is a message, never a raw exception."""
+        import http.client
+        for exc in (TimeoutError("timed out"), http.client.IncompleteRead(b"ab")):
+            gh = FakeGitHub()
+            rel = upd.latest_release(gh)
+
+            def opener(req, timeout=None, exc=exc):
+                resp = gh(req, timeout)
+                if req.full_url.endswith("SHA256SUMS.txt"):
+                    def broken(*a):
+                        raise exc
+                    resp.read = broken
+                return resp
+            with self.assertRaises(upd.UpdateError) as cm:
+                upd.download(rel, "installed", self.dir, opener=opener)
+            self.assertIn("checksum", str(cm.exception))
+            self.assertEqual(list(self.dir.iterdir()), [])
+
     def test_checksum_file_formats(self):
         h = "ab" * 32
         sums = upd.parse_checksums(f"{h}  Central RGB.exe\n{h.upper()} *CentralRGB-Setup.exe\nnot a line\n")
