@@ -313,6 +313,69 @@ def is_admin() -> bool:
         return False
 
 
+# --------------------------------------------------------------------------- DDR5 RAM guard
+# On many boards (seen on Intel Z790 with T-Force Delta DDR5, and others) OpenRGB finds DDR5 RGB RAM only
+# the first time it searches for hardware after the PC starts. Every later search (restarting OpenRGB,
+# Rescan) misses the RAM until the PC is fully shut down, and can leave the RAM unreadable to other tools.
+# So when DDR5 is installed, the hidden OpenRGB is started once and then kept: it isn't restarted by
+# Rescan, by closing conflicting apps, or by quitting and reopening Central RGB.
+SMBIOS_DDR5 = 34                       # Win32_PhysicalMemory.SMBIOSMemoryType for DDR5
+_ddr5_cache: bool | None = None
+
+RAM_SHUTDOWN_TIP = ("Shut the PC down fully (hold Shift while you click Shut down, so Windows' Fast Startup "
+                    "doesn't skip the full power-off), turn it back on, then open Central RGB before any other "
+                    "RGB app.")
+
+
+def ddr5_installed() -> bool:
+    """True if the PC's memory is DDR5. Set CENTRALRGB_FAKE_DDR5=1 (or 0) to override, for tests."""
+    global _ddr5_cache
+    fake = os.environ.get("CENTRALRGB_FAKE_DDR5")
+    if fake is not None:
+        return fake.strip() == "1"
+    if _ddr5_cache is None:
+        _ddr5_cache = False
+        if IS_WIN:
+            r = run_quiet(["powershell", "-NoProfile", "-Command",
+                           "(Get-CimInstance Win32_PhysicalMemory | Select-Object -ExpandProperty SMBIOSMemoryType)"
+                           " -join ','"], timeout=15)
+            if r and r.stdout:
+                _ddr5_cache = str(SMBIOS_DDR5) in [t.strip() for t in r.stdout.split(",")]
+    return _ddr5_cache
+
+
+def boot_id() -> int:
+    """Identifies this boot of Windows (the boot time, to the minute). 0 if unknown."""
+    try:
+        import psutil
+        return int(psutil.boot_time() // 60)
+    except Exception:
+        return 0
+
+
+def keep_openrgb_running(ddr5: bool) -> bool:
+    """Leave the hidden OpenRGB running when Central RGB closes, and reuse one that is already running
+    instead of restarting it, so the RAM isn't searched for a second time this boot."""
+    return ddr5
+
+
+def rescan_needs_ok(ddr5: bool, ours: bool, ram_found: bool) -> bool:
+    """A full Rescan restarts the hidden OpenRGB. With DDR5 RAM already found, that would lose the RAM
+    until the next full shutdown, so ask first."""
+    return ddr5 and ours and ram_found
+
+
+def ram_missing_note(ddr5: bool, ram_found: bool, searched_before_this_boot: bool, seen_before: bool) -> str | None:
+    """What to tell the user when DDR5 RGB RAM wasn't found (None if there's nothing to say)."""
+    if not ddr5 or ram_found:
+        return None
+    if searched_before_this_boot or seen_before:
+        return ("RAM lighting wasn't found. DDR5 RGB RAM is often only found the first time OpenRGB looks for "
+                "hardware after the PC starts, and OpenRGB already looked earlier this boot. " + RAM_SHUTDOWN_TIP)
+    return ("No RAM lighting found. If your DDR5 RAM has RGB: close other RGB apps (T-Force Blitz, Polychrome "
+            "Sync, iCUE, Armoury Crate...), then " + RAM_SHUTDOWN_TIP[0].lower() + RAM_SHUTDOWN_TIP[1:])
+
+
 def run_quiet(cmd, timeout=20) -> subprocess.CompletedProcess | None:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
@@ -345,6 +408,9 @@ class Settings:
             "Red breathing": {"color": [255, 0, 0], "effect": "Breathing", "brightness": 100, "speed": 30},
         },
         "restore_on_start": True,
+        "openrgb_boot": 0,          # boot_id() when the hidden OpenRGB last searched for hardware
+        "ram_seen": False,          # RGB RAM has been found on this PC before
+        "ram_note_boot": 0,         # boot_id() when the "RAM not found" pop-up was last shown
     }
 
     def __init__(self):
@@ -584,7 +650,13 @@ RGB_RAM_PARTS = (
     (re.compile(r"^CMG\d", re.I), "Corsair Vengeance RGB RS"),
     (re.compile(r"^CMH\d", re.I), "Corsair Vengeance RGB DDR5"),
     (re.compile(r"^CMT\d", re.I), "Corsair Dominator Platinum RGB"),
+    (re.compile(r"^CMP\d", re.I), "Corsair Dominator Titanium RGB"),    # DDR5, e.g. CMP32GX5M2B6000C30
+    (re.compile(r"^F5-\S*(TZ5R|TZ5NR|TZ5CK|TZ5CR)", re.I), "G.Skill Trident Z5 RGB"),   # e.g. F5-6000J3636F16GX2-TZ5RK
     (re.compile(r"^F[45]-\S*(GTZR|GTZN|GTZRX|TR5|GTZ5RK|TZ5RK|TZ5NR)", re.I), "G.Skill Trident Z RGB"),
+    # Kingston FURY Beast / Renegade RGB (DDR4 and DDR5): the RGB parts end in ...A, e.g. KF560C36BBEA-16
+    (re.compile(r"^KF[4-8]\d{2}C\d{2}(BB|BW|RB|RW|RS)[EK]?A", re.I), "Kingston FURY RGB"),
+    (re.compile(r"^[TF]F[34]D", re.I), "T-Force Delta RGB"),          # TF3D... (DDR4), FF3D5... (DDR5)
+    (re.compile(r"^AX5U\S*-\S*LAB?R", re.I), "XPG Lancer RGB"),       # e.g. AX5U6000C3016G-DCLARBK (DDR5)
 )
 
 # Vendor apps known to drive RAM lighting themselves. While one runs it uses the same SMBus as OpenRGB,
@@ -633,15 +705,19 @@ def running_openrgb_exe() -> str | None:
 
 
 def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, conflicts=None,
-                         external_openrgb=False, openrgb_ver=None) -> dict | None:
+                         external_openrgb=False, openrgb_ver=None, ddr5=None,
+                         searched_before=False) -> dict | None:
     """If Windows reports RGB RAM but OpenRGB found no RAM device, explain why and what to change.
 
     found_types: the device type names OpenRGB reported ("RAM", "Motherboard"...).
+    ddr5: the RAM is DDR5 (None: ask Windows). searched_before: OpenRGB already searched for hardware
+    earlier this boot (DDR5 RGB RAM is usually only found on the first search).
     Returns None when there's nothing to report, else {"sticks", "names", "reasons", "blockers", "summary"}:
     reasons are plain sentences, blockers the vendor apps holding the SMBus (they can be closed)."""
     sticks = rgb_ram_sticks(rams)
     if not sticks or "RAM" in set(found_types):
         return None
+    ddr5 = ddr5_installed() if ddr5 is None else ddr5
     admin = is_admin() if admin is None else admin
     pawnio = pawnio_installed() if pawnio is None else pawnio
     conflicts = find_conflicts() if conflicts is None else conflicts
@@ -664,14 +740,30 @@ def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, confli
     if external_openrgb:
         reasons.append("OpenRGB was started outside Central RGB, and it only looks for RAM when it starts. "
                        "Quit that OpenRGB (its tray icon > Exit) and press Rescan, so Central RGB starts it fresh.")
+    if ddr5 and searched_before:
+        reasons.append("OpenRGB already searched for your RAM earlier this boot. DDR5 RGB RAM is usually only "
+                       "found on the first search after the PC starts, so searching again won't find it. "
+                       + RAM_SHUTDOWN_TIP)
     if not reasons:
         reasons.append("Nothing obvious is blocking the SMBus. Restart Windows (a vendor driver may still hold "
                        "it), keep MSI Center / Mystic Light from starting with Windows, and check that OpenRGB "
                        "on its own finds the RAM.")
+    if ddr5:
+        reasons.append(ddr5_unsupported_note())
     names = ", ".join(sorted(set(sticks)))
-    summary = f"{len(sticks)} RGB RAM stick(s) installed ({names}) but none were found."
-    return {"kind": "ram", "title": "RGB RAM not detected", "sticks": len(sticks), "names": names,
+    kind = "DDR5 RGB RAM" if ddr5 else "RGB RAM"
+    summary = f"{len(sticks)} {kind} stick(s) installed ({names}) but none were found."
+    title = ("DDR5 RAM not supported by this OpenRGB" if ddr5 and openrgb_too_old(openrgb_ver)
+             else f"{kind} not detected")
+    return {"kind": "ram", "title": title, "sticks": len(sticks), "names": names,
             "reasons": reasons, "blockers": blockers, "summary": summary}
+
+
+def ddr5_unsupported_note() -> str:
+    """The last word on DDR5 RGB RAM that stays missing: OpenRGB doesn't support that kit on this PC yet."""
+    return ("If it's still missing after a full shutdown with nothing else blocking it, OpenRGB doesn't support "
+            "this DDR5 kit on this motherboard yet (see openrgb.org/devices.html). Central RGB only lights the "
+            "RAM through OpenRGB and never writes to the RAM itself, so it can't light a kit OpenRGB doesn't find.")
 
 
 # --------------------------------------------------------------------------- RGB mouse check
@@ -807,6 +899,9 @@ def system_check() -> list[tuple[str, str]]:
             out.append(("info", f"Mouse: {brand} (USB ID {vid}:{pid})"))
     except Exception:
         pass
+    if ddr5_installed():
+        out.append(("info", "DDR5 RAM: its lighting is searched for once per boot. The hidden OpenRGB keeps "
+                            "running after you close Central RGB, and Rescan asks before searching again."))
     return out
 
 

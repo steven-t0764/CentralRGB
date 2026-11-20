@@ -271,12 +271,12 @@ class AppDetectionTests(_Inventory):
         with mock.patch.object(eng, "close_conflicts", close), mock.patch.object(cr.time, "sleep", lambda s: None):
             cr.App._after_close_conflicts(self.app, settle=0)
             self.assertEqual(closed, [1])
-            self.assertEqual(self.rescans, [{"wait": True}])     # exactly one re-detection, never skipped
+            self.assertEqual(self.rescans, [{"wait": True, "why": "conflicts"}])     # exactly one re-detection, never skipped
             # that re-detection still missed them: the check after it reports, and doesn't scan again
             diags = cr.App._check_missing(self.app)
             self.assertEqual([d["blockers"] for d in diags], [[], []])
             cr.App._check_missing(self.app)
-        self.assertEqual(self.rescans, [{"wait": True}])
+        self.assertEqual(self.rescans, [{"wait": True, "why": "conflicts"}])
         self.assertIn(("ok", "Closed SteelSeries GG (SteelSeriesGG.exe)"), self.logs)
 
     def test_app_left_running_is_named(self):
@@ -289,7 +289,7 @@ class AppDetectionTests(_Inventory):
 
     def test_rescan_after_close_them_waits_for_a_running_scan(self):
         app = SimpleNamespace(_rescan_lock=threading.Lock(), ran=[])
-        app._full_rescan_locked = lambda: app.ran.append(time.time())
+        app._full_rescan_locked = lambda why="button": app.ran.append(time.time())
         app._rescan_lock.acquire()
         threading.Timer(0.2, app._rescan_lock.release).start()
         cr.App._full_rescan(app)                                 # the Rescan button skips while one runs
