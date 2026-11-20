@@ -75,6 +75,87 @@
           "priority": 10
         }
       ]
+    },
+    {
+      "id": "theme-toggle",
+      "tasks": [
+        {
+          "key": "theme-light-toggle",
+          "agent": "gretchen",
+          "title": "Settings: Dark / Light appearance toggle",
+          "body": "Steven asked for a dark/light theme toggle on the Settings page. Today every theme in central_rgb.py THEMES is dark and ctk.set_appearance_mode('dark') is hard-coded.",
+          "assignment": "Branch: feat-theme-toggle. Add an Appearance setting with two choices, Dark and Light, as a Windows 11-style row on the Settings page next to the existing theme dropdown (reuse the existing settings row helper). Save it as settings['appearance'] = 'dark' | 'light'; a missing or unknown value means dark, so older settings files load unchanged. Give every entry in THEMES (and the default gunmetal SOLID palette) a light variant: light BG/SIDE/CARD/CARD2/LINE/TEXT/MUTED/TRACK/HOVER/SEL/BTN values, keeping each theme's accent hue but darkened enough for readable contrast on light panels (aim for WCAG AA 4.5:1 for body text; use the existing readable-text helper for text on accent colours). Apply it through _apply_theme (e.g. _apply_theme(key, appearance)) and the existing live rebuild in _switch_theme, so flipping the toggle repaints the window in place with no restart and lighting, fans, sensors and OpenRGB keep running. Set ctk.set_appearance_mode to match, and make win_effects use a light title bar in light mode (failing quietly off Windows). Tests: add tests/test_appearance.py covering: default is dark when the key is missing; every theme has a complete light palette (all SOLID keys present, valid hex); body text vs card contrast is at least 4.5:1 in light mode for every theme; toggling through the harness rebuilds the Settings page without errors and persists the value. Add a light-mode option to tests/preview.py (e.g. --appearance light) and capture Home, Lighting, Fans, Monitor and Settings in light mode. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (tests/test_fan_safety.py must keep passing) and do not touch the DDR5 once-per-boot RAM guard (test-ddr5 branch). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load (a missing appearance key means dark). Do not restyle anything outside this task: the dark look of every existing theme must stay pixel-identical. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, README.md (Settings section) and tests/README.md for any new test or preview script. Run tests/preview.py under Xvfb and attach or describe the screenshots in the PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [
+            "final-review"
+          ],
+          "paths": [
+            "central_rgb.py",
+            "win_effects.py",
+            "fps_overlay.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "theme-light-toggle-review",
+          "agent": "fabian",
+          "title": "Review: Dark / Light appearance toggle",
+          "body": "Independent review of the theme-light-toggle change after it lands on main.",
+          "assignment": "Branch: review-theme-toggle (for your report only). Start from the latest main, which now holds the merged theme-light-toggle PR. Check: the Settings toggle switches live between Dark and Light with no restart and is remembered after reopening; an old settings.json without an appearance key opens in Dark exactly as before; every existing dark theme looks unchanged (compare tests/preview.py shots against the commit before the merge); in Light mode every page (Home, Lighting, Devices, Fans, Monitor, Overlay, Profiles, Settings), dialogs, dropdowns, scrollbars, charts, LED previews and the FPS overlay are readable with no leftover dark panels or invisible text; fan safety tests and the DDR5 guard are untouched; no Claude/Anthropic lines in the commits or PR; CHANGELOG/README/tests README were updated. Run xvfb-run -a python -m unittest discover tests and xvfb-run -a python tests/preview.py in both modes. Write docs/review-theme-toggle.md listing every problem found as a numbered item with page, screenshot name and a concrete fix, commit it on review-theme-toggle and push. RULES FOR THIS TASK: Read-only on product code; commit only your report. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Do not open a pull request for the report. In your result give a verdict (ready / needs changes) with reasons and link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/<path> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "theme-light-toggle"
+          ],
+          "paths": [],
+          "priority": 20
+        },
+        {
+          "key": "theme-light-polish",
+          "agent": "pluto",
+          "title": "Light mode: fix the review findings and cover the remaining surfaces",
+          "body": "Follow-up to the Dark / Light toggle: fix everything Fabian's review (docs/review-theme-toggle.md on the review-theme-toggle branch) lists as needing changes.",
+          "assignment": "Branch: fix-light-mode-polish. Read docs/review-theme-toggle.md on origin/review-theme-toggle and fix every numbered finding. Also make sure the surfaces that draw their own colours follow the appearance setting: the FPS overlay window (fps_overlay.py), the canvas charts and LED strips, the sidebar nav pills, tooltips, messageboxes/ttk styles (_ttk_style) and the window fade during _switch_theme (no dark flash when switching to Light). Do not change dark-mode colours. If the review found nothing to fix, check those surfaces anyway, fix what is wrong, and say so plainly in the PR. Extend tests/test_appearance.py with a test for each fix you make, and refresh the light-mode screenshots with tests/preview.py. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (tests/test_fan_safety.py must keep passing) and do not touch the DDR5 once-per-boot RAM guard (test-ddr5 branch). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load (a missing appearance key means dark). Do not restyle anything outside this task: the dark look of every existing theme must stay pixel-identical. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, README.md (Settings section) and tests/README.md for any new test or preview script. Run tests/preview.py under Xvfb and attach or describe the screenshots in the PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [
+            "theme-light-toggle-review"
+          ],
+          "paths": [
+            "central_rgb.py",
+            "win_effects.py",
+            "fps_overlay.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "theme-light-polish-review",
+          "agent": "fabian",
+          "title": "Review: light mode polish",
+          "body": "Final independent check of the Dark / Light toggle after the polish PR lands on main.",
+          "assignment": "Branch: review-theme-toggle (for your report only). Start from the latest main, which now holds the merged theme-light-polish PR. Re-check every finding in docs/review-theme-toggle.md and mark each fixed / not fixed, then repeat the full check from the first review (live toggle, old settings load in Dark, dark themes unchanged, every page and the FPS overlay readable in Light, tests pass, fan safety and DDR5 guard untouched, docs updated, no Claude/Anthropic lines). Add a 'Second pass' section to docs/review-theme-toggle.md with the results and an overall verdict, commit it on review-theme-toggle and push. RULES FOR THIS TASK: Read-only on product code; commit only your report. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Do not open a pull request for the report. In your result give a verdict (ready / needs changes) with reasons and link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/<path> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "theme-light-polish"
+          ],
+          "paths": [],
+          "priority": 20
+        }
+      ]
     }
   ]
 }
