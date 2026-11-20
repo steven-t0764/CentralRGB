@@ -172,7 +172,7 @@ A background thread pushes frames to every selected device:
 - `compute_colors()` produces every effect from color, brightness, speed and time. **Rainbow Wave** shifts the hue across each device's LEDs and offsets each device slightly, so the colors flow from one device to the next.
 - **Save to hardware** writes the current static color into each device's own memory where supported, so it stays even with the app closed.
 
-**System check (`system_check()`)** looks at admin rights, the PawnIO driver (service or install folder), running vendor RGB apps (from `tasklist`), and your motherboard, GPU and RAM models (from PowerShell `Get-CimInstance`).
+**System check (`system_check()`)** looks at admin rights, the PawnIO driver (service or install folder), running vendor RGB apps (from `tasklist`), and your motherboard, GPU and RAM models, mice and keyboards (from PowerShell `Get-CimInstance`). After hardware detection, the Devices page compares those with what OpenRGB found and explains any RGB RAM or RGB mouse it missed.
 
 ### 3. Sensors & fans: `hw_monitor.py`
 
@@ -275,7 +275,8 @@ py central_rgb.py
 
 | Problem | Fix |
 |---|---|
-| RGB RAM or motherboard lighting is missing | If the Devices page shows **Other RGB software is running**, press **Close them** (on MSI boards, Mystic Light holds the motherboard and RAM lighting). Make sure **PawnIO** is installed (rerun the installer, or get it from pawnio.eu), then press **Rescan** and give it about 30 seconds |
+| RGB RAM or motherboard lighting is missing | If the Devices page shows **Other RGB software is running**, press **Close them** (on MSI boards, Mystic Light holds the motherboard and RAM lighting; all MSI Center services and LEDKeeper2 are stopped, then your devices are re-detected once). The **RGB RAM not detected** note under it lists every cause it found: not admin, no **PawnIO** (rerun the installer, or get it from pawnio.eu), an OpenRGB older than 1.0, or an OpenRGB you started yourself (quit it, then press **Rescan**). Give it about 30 seconds |
+| An RGB mouse is missing | The Devices page shows **Mouse not detected** with the mouse's USB ID. If its own app (SteelSeries GG, Razer Synapse, G HUB, iCUE) is running, press **Close them** and keep that app from starting with Windows. If it still doesn't show, OpenRGB doesn't support that model yet: check openrgb.org/devices.html |
 | A device keeps changing back to its old color | Another RGB app is running. Close it and turn off its auto-start. |
 | "OpenRGB closed right after starting" | A copy of OpenRGB is already open without its SDK server. Close it from the system tray and press **Rescan**. |
 | Fans page says no controllable fans | Your motherboard's fan chip may not be supported yet, or its fans are set to a fixed mode in the BIOS |

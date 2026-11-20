@@ -5,8 +5,9 @@ preview script goes in this folder.**
 
 | File | What it is |
 | --- | --- |
-| `fake_openrgb.py` | Simulated OpenRGB with 8 demo devices (motherboard, GPU, 2 RAM sticks, fan LEDs, AIO cooler, keyboard, mouse). `install()` points the lighting engine at it. |
-| `test_ram_detect.py` | RGB RAM that Windows reports but OpenRGB misses (4x Corsair Vengeance RGB DDR4 on an MSI B550 board, `fake_openrgb.B550_PC`): the app names the cause (admin, PawnIO, Mystic Light holding the SMBus) and retries detection once after Close them. |
+| `fake_openrgb.py` | Simulated OpenRGB with 8 demo devices (motherboard, GPU, 2 RAM sticks, fan LEDs, AIO cooler, keyboard, mouse). `install()` points the lighting engine at it. `B550_PC` is the owner's PC (4x Corsair Vengeance RGB DDR4, a SteelSeries mouse) with what Windows reports for them; `ram_blocked` / `mouse_blocked` hide those. |
+| `test_ram_detect.py` | RGB RAM that Windows reports but OpenRGB misses (4x Corsair Vengeance RGB DDR4 on an MSI B550 board, `fake_openrgb.B550_PC`): the app names the cause (admin, PawnIO, Mystic Light holding the SMBus), and checking never starts another scan. |
+| `test_device_detection.py` | The RAM and the mouse on the owner's PC (`fake_openrgb.B550_PC`, with a SteelSeries mouse): both are listed when OpenRGB reports them and nothing OpenRGB reports is dropped; when missing, the Devices page names MSI Center / Mystic Light or SteelSeries GG; Close them stops MSI's services and LEDKeeper2, reports failures and re-detects exactly once. |
 | `fake_lhm.py` | Simulated LibreHardwareMonitor: CPU, GPU, motherboard and SSD sensors, plus 5 controllable fans (one is an AIO pump). |
 | `fake_presentmon.py` | Fake PresentMon CSV output (1.x and 2.x column layouts) and error text, for the FPS overlay tests. |
 | `test_fps_overlay.py` | FPS overlay: reading PresentMon output, picking the game (launchers, Discord/SteelSeries in front, recreated windows) and the status messages shown when it can't count. |
@@ -18,7 +19,7 @@ preview script goes in this folder.**
 | `test_workflows.py` | Checks the GitHub workflows: auto-merge only merges passing, tested, non-draft PRs and then starts the main build, so every merge commit on main gets the `windows` check. |
 | `preview.py` | Runs the whole app on the fake hardware and saves a screenshot of every page to `tests/preview_out/`. |
 | `restore_check.py` | Minimizes and restores the window and switches pages rapidly on the fake hardware, grabbing frames as it goes (`restore.gif`, `switch.gif`, before/after screenshots) and checking the last page clicked is the one shown, fully laid out. Run it on Windows to record the real restore. `test_page_switch.py` runs it under Xvfb. |
-| `preview_user_pc.py` | Runs the preview on a simulated copy of the user's PC: MSI B550-A PRO, Razer Huntsman V2 TKL, four Corsair Vengeance RGB DDR4 sticks hidden as if MSI Center held the bus, with MSI Center and SteelSeries GG "running". `--ram-visible` shows the sticks. |
+| `preview_user_pc.py` | Runs the preview on a simulated copy of the user's PC: MSI B550-A PRO, Razer Huntsman V2 TKL, four Corsair Vengeance RGB DDR4 sticks hidden as if MSI Center held the bus and a SteelSeries mouse hidden as if SteelSeries GG held it, with MSI Center and SteelSeries GG "running". `--ram-visible` / `--mouse-visible` show them; use `--pages Devices --warmup 45` to see the Devices-page note. |
 | `preview_overlay_notes.py` | Screenshots the Overlay page preview showing each FPS-counter status note (PresentMon needs admin, no frames yet, exclusive fullscreen). |
 | `record_demo.py` | Records the README's "See it in action" GIF: a scripted mouse tour of the real app on the fake hardware (Linux, needs Xvfb, xdotool and ffmpeg). Copy its output to `assets/demo.gif`. |
 

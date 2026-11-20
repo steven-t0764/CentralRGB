@@ -3,6 +3,7 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- **RAM and mouse not detected:** the Devices page now also notices a missing RGB mouse, and names the program holding it (for example SteelSeries GG) or the RAM (MSI Center / Mystic Light), plus what to change: an old OpenRGB that Windows 11 blocks, or an OpenRGB you started yourself. **Close them** now also stops every MSI Center service and helper (including LEDKeeper2), says what it couldn't close, waits until they are really gone and then re-detects your devices exactly once. A hidden OpenRGB left from an earlier session is restarted by **Rescan** so it looks for the hardware again.
 - **Updates:** if the connection drops while the update's checksum list is being read, the update notice now says so and offers **Try again** instead of staying stuck on "Downloading...".
 - **Builds after auto-merge:** every pull request that merges itself now also starts the Windows build on main, so each merge commit gets its `windows` check (merges made by the workflow didn't trigger one before).
 - **One-click updates:** Central RGB now checks for a new version (at most once a day, or with **Settings → Updates → Check now**) and shows a small notice with **Update now** / **Later**. Updating downloads the new installer (or the portable exe), checks it against the release's published SHA-256, closes the app normally so fans go back to the BIOS, installs it and reopens on the new version. Releases now include a `SHA256SUMS.txt`.

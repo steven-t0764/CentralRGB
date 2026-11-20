@@ -14,6 +14,7 @@ reports a set of demo RGB devices, so Central RGB can run on a machine with no R
     import fake_openrgb
     fake_openrgb.install()      # before creating central_rgb.App()
     fake_openrgb.install(devices=fake_openrgb.B550_PC, ram_blocked=True)   # RAM hidden, as when the SMBus is held
+    fake_openrgb.install(devices=fake_openrgb.B550_PC, mouse_blocked=True) # mouse hidden, as when its app holds it
 
 The devices only record what they were told (mode, colors); nothing is sent anywhere.
 """
@@ -53,12 +54,22 @@ CORSAIR_VENGEANCE_DDR4 = [
 # What Windows reports for those four sticks (Win32_PhysicalMemory "Manufacturer PartNumber").
 CORSAIR_VENGEANCE_DDR4_WMI = ["Corsair CMR64GX4M4C3200C16"] * 4
 
-# A Ryzen PC on an MSI B550 board with four Vengeance RGB DDR4 sticks and a USB keyboard.
+# A SteelSeries RGB mouse (USB HID, lit by OpenRGB's SteelSeries Rival detector; SteelSeries GG drives it too).
+STEELSERIES_MOUSE = ("SteelSeries Rival 3", DeviceType.MOUSE, "SteelSeries",
+                     [("Logo", 1), ("Strip", 3)], ("Direct", "Static", "Breathing", "Off"))
+# What Windows reports for that mouse (Win32_PointingDevice PNPDeviceID), and for the Razer keyboard, which
+# also shows up as a pointing device (Win32_Keyboard PNPDeviceID; the same USB ID, so it isn't a mouse).
+STEELSERIES_MOUSE_WMI = ["HID\\VID_1038&PID_1824&MI_00\\7&2A1B3C4D&0&0000"]
+RAZER_KEYBOARD_POINTER_WMI = ["HID\\VID_1532&PID_026B&MI_02&COL01\\8&1F2E3D4C&0&0000"]
+RAZER_KEYBOARD_WMI = ["HID\\VID_1532&PID_026B&MI_00\\8&3A2B1C0D&0&0000"]
+
+# A Ryzen PC on an MSI B550 board with four Vengeance RGB DDR4 sticks, a USB keyboard and an RGB mouse.
 B550_PC = [
     ("MSI B550-A PRO (MS-7C56)", DeviceType.MOTHERBOARD, "MSI",
      [("JRGB1", 1), ("JRAINBOW1", 30), ("Onboard LEDs", 6)], ("Direct", "Static", "Breathing", "Rainbow", "Off")),
     ("Razer Huntsman V2 Tenkeyless", DeviceType.KEYBOARD, "Razer",
      [("Keyboard", 87)], ("Direct", "Static", "Spectrum Cycle", "Off")),
+    STEELSERIES_MOUSE,
 ] + CORSAIR_VENGEANCE_DDR4
 
 
@@ -117,12 +128,15 @@ class FakeClient:
     """Drop-in for openrgb.OpenRGBClient(host, port, name).
 
     DEVICES is the device list it reports. RAM_BLOCKED leaves the RAM sticks out, the way OpenRGB misses
-    them when another app holds the SMBus (or PawnIO / admin rights are missing)."""
+    them when another app holds the SMBus (or PawnIO / admin rights are missing). MOUSE_BLOCKED leaves the
+    mice out, the way OpenRGB misses one when its vendor app holds the HID interface."""
     DEVICES = DEMO_DEVICES
     RAM_BLOCKED = False
+    MOUSE_BLOCKED = False
 
     def __init__(self, address="127.0.0.1", port=6742, name="test", protocol_version=None):
-        devs = [d for d in self.DEVICES if not (self.RAM_BLOCKED and d[1] == DeviceType.DRAM)]
+        devs = [d for d in self.DEVICES if not (self.RAM_BLOCKED and d[1] == DeviceType.DRAM)
+                and not (self.MOUSE_BLOCKED and d[1] == DeviceType.MOUSE)]
         self.devices = [FakeDevice(i, *d) for i, d in enumerate(devs)]
         self.ee_devices = []
         self.profiles = []
@@ -134,13 +148,15 @@ class FakeClient:
         pass
 
 
-def install(eng=None, devices=None, ram_blocked=False):
+def install(eng=None, devices=None, ram_blocked=False, mouse_blocked=False):
     """Point Central RGB's lighting engine at the fake devices. Pass rgb_engine, or it's imported.
-    devices picks the device list (DEMO_DEVICES by default); ram_blocked hides its RAM sticks."""
+    devices picks the device list (DEMO_DEVICES by default); ram_blocked hides its RAM sticks and
+    mouse_blocked its mice."""
     if eng is None:
         import rgb_engine as eng
     FakeClient.DEVICES = DEMO_DEVICES if devices is None else devices
     FakeClient.RAM_BLOCKED = ram_blocked
+    FakeClient.MOUSE_BLOCKED = mouse_blocked
     eng.OpenRGBClient = FakeClient
     eng.OpenRGBManager.server_running = staticmethod(lambda timeout=0.5: True)
     eng.OpenRGBManager.replace_visible_copy = lambda self: False
