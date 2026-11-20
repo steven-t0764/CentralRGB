@@ -65,6 +65,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{a
 ; Admin apps can't use the normal Startup folder, so start-at-login uses Task Scheduler (same task the app's own switch uses)
 Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN CentralRGB /TR ""\""{app}\{#AppExe}\"" --background"" /SC ONLOGON /RL HIGHEST /DELAY 0000:20 /F"; Flags: runhidden; Tasks: startup
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent shellexec; Check: not RestartNeeded
+; in-app updates run setup silently with /RELAUNCH=1 (see updater.py): open the new version when it's done
+Filename: "{app}\{#AppExe}"; Parameters: "--restarted"; Flags: nowait shellexec; Check: RelaunchAfterUpdate
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM ""{#AppExe}"" /F"; Flags: runhidden; RunOnceId: "StopApp"
@@ -95,6 +97,11 @@ end;
 function RestartNeeded: Boolean;
 begin
   Result := NeedsReboot;
+end;
+
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1') and not NeedsReboot;
 end;
 
 function NeedRestart: Boolean;

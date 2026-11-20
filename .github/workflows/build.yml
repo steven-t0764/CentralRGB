@@ -82,6 +82,19 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           if ($env:APP_VERSION) { & $iscc "/DAppVersion=$env:APP_VERSION" central_rgb.iss } else { & $iscc central_rgb.iss }
 
+      # SHA256SUMS.txt lets the in-app updater (updater.py) verify a download before running it. The names are
+      # the ones GitHub shows for the attached files ("Central RGB.exe" is published as "Central.RGB.exe").
+      - name: Write SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $lines = @()
+          foreach ($f in @((Get-ChildItem installer\*.exe | Select-Object -First 1).FullName, "dist\Central RGB.exe")) {
+            $name = (Split-Path $f -Leaf) -replace ' ', '.'
+            $lines += "$((Get-FileHash -Algorithm SHA256 $f).Hash.ToLower())  $name"
+          }
+          $lines | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -95,6 +108,7 @@ jobs:
           path: |
             dist/Central RGB.exe
             installer/*.exe
+            SHA256SUMS.txt
 
       - name: Attach files to the release
         if: github.event_name == 'release'
@@ -103,6 +117,7 @@ jobs:
           files: |
             installer/*.exe
             dist/Central RGB.exe
+            SHA256SUMS.txt
 
       # Pushes to the "test" branch publish a pre-release named test-build (not a real release), so a build
       # can be tried on a real PC first. Its files are replaced on every test push.

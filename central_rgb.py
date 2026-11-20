@@ -46,6 +46,7 @@ import device_models as dm
 import fps_overlay as fpo
 import hw_monitor as hwm
 import rgb_engine as eng
+import updater as upd
 import win_effects as fx
 
 APP_VERSION = eng.APP_VERSION
@@ -1954,6 +1955,7 @@ class App(ctk.CTk):
             return
         self.after(300, lambda: self._bg(self._startup))
         self.after(800, lambda: self._bg(self._load_sysinfo))
+        self.after(20000, self._auto_check_updates)
 
     # ---------------------------------------------------------------- self-test (used by the CI build)
     def report_callback_exception(self, exc, val, tb):
@@ -3897,6 +3899,22 @@ class App(ctk.CTk):
                                 lambda: self.settings.__setitem__("restore_on_start", self.restore_sw.get() == 1)))
 
         yield
+        self.caption(body, "Updates").pack(fill="x", pady=(22, 8))
+        yield
+        def check_btn(row):
+            box = ctk.CTkFrame(row, fg_color="transparent")
+            self.update_status = self.label(box, getattr(self, "_update_status_text", ""), 11, color=P["FAINT"], anchor="e")
+            self.update_status.pack(side="left", padx=(0, 12))
+            self.secondary(box, "Check now", lambda: self._check_updates(manual=True), height=32, width=110).pack(side="left")
+            return box
+        self.setting_row(body, "\ue895", "↻", "Check for updates", f"You have Central RGB {APP_VERSION}", check_btn)
+        yield
+        self.setting_row(body, "\ue896", "↓", "Automatically check for updates",
+                         "Look for a new version at most once a day and offer to install it",
+                         switch("autoupd_sw", upd.auto_check_enabled(self.settings.data),
+                                lambda: self.settings.__setitem__(upd.AUTO_KEY, self.autoupd_sw.get() == 1)))
+
+        yield
         self.caption(body, "Help").pack(fill="x", pady=(22, 8))
         yield
         for glyph, fb, title, desc, btn, cmd in (
@@ -4027,6 +4045,9 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.show_page(page)
+        if getattr(self, "update_notice", None) is not None and getattr(self, "_update_result", None) is not None:
+            self.update_notice = None
+            self._show_update_notice(self._update_result)
         self._update_accent()
         self._window_effects()
         self.update()
@@ -4736,6 +4757,140 @@ class App(ctk.CTk):
         else:
             eng.run_quiet(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
             self.log("Removed from Windows startup.", "ok")
+
+    # ---------------------------------------------------------------- updates (see updater.py)
+    def _auto_check_updates(self):
+        """At most once a day, if 'Automatically check for updates' is on (the default)."""
+        if upd.should_auto_check(self.settings.data):
+            self.settings[upd.LAST_KEY] = time.time()
+            self._check_updates(manual=False)
+        self.after(3600 * 1000, self._auto_check_updates)      # the app often runs for days in the tray
+
+    def _set_update_status(self, text):
+        self._update_status_text = text
+        lab = getattr(self, "update_status", None)
+        try:
+            if lab is not None and lab.winfo_exists():
+                lab.configure(text=text)
+        except tk.TclError:
+            pass
+
+    def _check_updates(self, manual=True):
+        if getattr(self, "_update_busy", False):
+            return
+        self._update_busy = True
+        if manual:
+            self._set_update_status("Checking...")
+
+        def work():
+            try:
+                res = upd.check(APP_VERSION)
+            except upd.UpdateError as e:
+                self.log(str(e), "warn" if manual else "info")
+                self.q.put(("call", lambda: self._set_update_status("Couldn't check")))
+                return
+            finally:
+                self._update_busy = False
+            self.log(res.message, "ok" if not res.newer else "info")
+            self.q.put(("call", lambda: (self._set_update_status(
+                f"{res.latest.tag.lstrip('vV')} available" if res.newer else "Up to date"),
+                self._show_update_notice(res, manual) if res.newer else None)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_update_notice(self, res, manual=True):
+        """Small card in the bottom-right corner: it doesn't block anything and goes away with Later."""
+        self._update_result = res
+        if not manual and getattr(self, "_update_later", None) == res.latest.tag:
+            return                                        # 'Later' was pressed for this version already
+        self._hide_update_notice()
+        card = SmoothFrame(self, fg_color=P["CARD"], corner_radius=10, border_width=1, border_color=P["BTN_LINE"])
+        self.update_notice = card
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.pack(fill="x", padx=16, pady=(14, 2))
+        self.label(top, f"Central RGB {res.latest.tag.lstrip('vV')} is available", 13, "bold", anchor="w").pack(side="left")
+        self.update_notice_text = self.label(card, f"You have {APP_VERSION}. Updating closes the app, installs the new "
+                                             "version and opens it again.", 11, color=P["MUTED"], anchor="w",
+                                             justify="left", wraplength=300)
+        self.update_notice_text.pack(fill="x", padx=16)
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.pack(fill="x", padx=16, pady=(10, 14))
+        self.update_now_btn = self.primary(btns, "Update now", self._update_now, height=30, width=110)
+        self.update_now_btn.pack(side="right")
+        self.secondary(btns, "Later", self._update_later_clicked, height=30, width=80).pack(side="right", padx=(0, 8))
+        card.place(relx=1.0, rely=1.0, x=-24, y=-24, anchor="se")
+        card.lift()
+
+    def _hide_update_notice(self):
+        card = getattr(self, "update_notice", None)
+        self.update_notice = None
+        if card is not None:
+            try:
+                card.destroy()
+            except tk.TclError:
+                pass
+
+    def _update_later_clicked(self):
+        res = getattr(self, "_update_result", None)
+        if res is not None and res.latest is not None:
+            self._update_later = res.latest.tag
+        self._hide_update_notice()
+
+    def _update_now(self):
+        res = getattr(self, "_update_result", None)
+        if res is None or res.latest is None or getattr(self, "_update_busy", False):
+            return
+        kind = upd.install_kind()
+        if kind == "source" or not eng.IS_WIN:
+            self.log("This copy runs from source: opening the release page instead.", "info")
+            webbrowser.open(res.latest.page)
+            self._hide_update_notice()
+            return
+        self._update_busy = True
+        try:
+            self.update_now_btn.configure(state="disabled", text="Downloading...")
+        except Exception:
+            pass
+
+        def progress(done, total):
+            txt = (f"Downloading... {done * 100 // total} %" if total else f"Downloading... {done // 1048576} MB")
+            self.q.put(("call", lambda: self._notice_text(txt)))
+
+        def work():
+            try:
+                path = upd.download(res.latest, kind, upd.download_dir(kind), progress)
+                self.log(f"Downloaded and verified {path.name} ({res.latest.tag}).", "ok")
+                self.q.put(("call", lambda: self._apply_update(kind, path)))
+            except upd.UpdateError as e:
+                msg = str(e)
+                self.log(msg, "bad")
+                self.q.put(("call", lambda: self._update_failed(msg)))
+            finally:
+                self._update_busy = False
+        threading.Thread(target=work, daemon=True).start()
+
+    def _notice_text(self, txt):
+        try:
+            if getattr(self, "update_notice", None) is not None:
+                self.update_notice_text.configure(text=txt)
+        except tk.TclError:
+            pass
+
+    def _update_failed(self, msg):
+        self._notice_text(msg)
+        try:
+            self.update_now_btn.configure(state="normal", text="Try again")
+        except Exception:
+            pass
+
+    def _apply_update(self, kind, path):
+        try:
+            upd.start_apply(kind, path)
+        except upd.UpdateError as e:
+            self.log(str(e), "bad")
+            self._update_failed(str(e))
+            return
+        self.log("Closing to install the update; Central RGB opens again on the new version.", "ok")
+        self._quit()                  # the normal exit path: fans go back to the BIOS as on any close
 
     # ---------------------------------------------------------------- closing
     def on_close(self):

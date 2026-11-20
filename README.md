@@ -65,6 +65,18 @@ Run it and click **Yes** on the administrator prompt. Central RGB needs admin ri
 Uninstalling Central RGB **leaves PawnIO installed**, because other tools (OpenRGB, FanControl, LibreHardwareMonitor) use it too.
 You can remove it separately from *Settings → Apps*.
 
+### Updating
+
+- **In the app (one click):** Central RGB checks GitHub for a new release at most once a day (turn this off with
+  **Settings → Updates → Automatically check for updates**, or press **Check now** any time). When a newer version
+  exists, a small notice offers **Update now** or **Later**. *Update now* downloads the right file (the installer for an
+  installed copy, `Central RGB.exe` for the portable copy), checks it against the `SHA256SUMS.txt` published with the
+  release and refuses it if it doesn't match, closes Central RGB the normal way (fans go back to BIOS control), installs
+  it silently and opens the new version. Pre-releases and test builds are never offered.
+- **Fresh download:** the newest installer is always at
+  [`releases/latest/download/CentralRGB-Setup.exe`](https://github.com/steven-t0764/CentralRGB/releases/latest/download/CentralRGB-Setup.exe).
+  Running it over an existing install keeps your settings.
+
 
 ---
 
@@ -100,7 +112,7 @@ You can remove it separately from *Settings → Apps*.
   </tr>
   <tr>
     <td><img src="assets/screenshots/advanced.png" alt="Monitor advanced view"><br><b>Monitor → Advanced</b>: every sensor (value / min / max) plus full system details</td>
-    <td><img src="assets/screenshots/settings.png" alt="Settings page"><br><b>Settings</b>: system check, accent color, sensor and startup options, and an activity log</td>
+    <td><img src="assets/screenshots/settings.png" alt="Settings page"><br><b>Settings</b>: system check, accent color, sensor, startup and update options, and an activity log</td>
   </tr>
   <tr>
     <td><img src="assets/screenshots/overlay.png" alt="Overlay page"><br><b>Overlay</b>: in-game FPS and temperature readout with position, size and item options</td>
@@ -284,6 +296,7 @@ CentralRGB/
 ├── fonts/                # Orbitron for the FPS counter (OFL 1.1, with its license)
 ├── presets/              # preview pictures for the preset effects (made by tools/make_preset_art.py)
 ├── win_effects.py        # dark, seamless title bar
+├── updater.py            # one-click updates from GitHub Releases (checksum-verified)
 ├── central_rgb.ico/.png  # app icon
 ├── central_rgb.iss       # Inno Setup installer script
 ├── build.bat             # one-click build (exe + installer)
