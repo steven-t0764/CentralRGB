@@ -229,20 +229,29 @@ def parse_checksums(text: str) -> dict:
     return out
 
 
+def _read_text(url: str, opener) -> str:
+    """A small text file from the release; a connection that drops or times out mid-read is an UpdateError."""
+    try:
+        with _open(url, opener, accept="application/octet-stream") as resp:
+            return resp.read().decode("utf-8", "replace")
+    except UpdateError:
+        raise
+    except Exception as e:
+        raise UpdateError(f"Couldn't read the release's checksum list ({e}). Try again.") from None
+
+
 def expected_sha256(release: Release, asset_name: str, opener=urllib.request.urlopen) -> str:
     for name in CHECKSUM_ASSETS:
         url = next((u for n, u in release.assets.items() if _norm(n) == _norm(name)), None)
         if url:
-            with _open(url, opener, accept="application/octet-stream") as resp:
-                sums = parse_checksums(resp.read().decode("utf-8", "replace"))
+            sums = parse_checksums(_read_text(url, opener))
             sha = sums.get(_norm(asset_name))
             if sha:
                 return sha
             raise UpdateError(f"The release's checksum list doesn't include {asset_name}, so it won't be installed.")
     per_file = next((u for n, u in release.assets.items() if _norm(n) == _norm(asset_name + ".sha256")), None)
     if per_file:
-        with _open(per_file, opener, accept="application/octet-stream") as resp:
-            m = re.search(r"[0-9a-fA-F]{64}", resp.read().decode("utf-8", "replace"))
+        m = re.search(r"[0-9a-fA-F]{64}", _read_text(per_file, opener))
         if m:
             return m.group(0).lower()
     raise UpdateError(f"Release {release.tag} has no published checksum, so the download can't be "
