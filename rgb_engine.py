@@ -184,20 +184,41 @@ def find_conflicts() -> dict[str, list[int]]:
     out: dict[str, list[int]] = {}
     try:
         import psutil
-        for p in psutil.process_iter(["name"]):
-            name = (p.info["name"] or "").lower()
-            if name in CONFLICTING_APPS:
-                out.setdefault(CONFLICTING_APPS[name], []).append(p.pid)
+        for p in psutil.process_iter(["name", "exe"]):
+            app = _conflict_name(p.info["name"], p.info.get("exe") or "")
+            if app:
+                out.setdefault(app, []).append(p.pid)
     except Exception:
         pass
     return out
+
+
+# Install folders of vendor apps that run several helpers and services (MSI Center starts Mystic Light's
+# LEDKeeper2 and its own services from these). Anything running from them is closed with the app.
+CONFLICT_FOLDERS = {
+    "\\msi center\\mystic light\\": "MSI Mystic Light",
+    "\\msi\\mystic light": "MSI Mystic Light",
+    "\\msi\\msi center\\": "MSI Center / Mystic Light",
+}
+
+
+def _conflict_name(name: str, path: str = "") -> str | None:
+    """Friendly app name for a process (by exe name, or by the vendor folder it runs from), else None."""
+    name, path = (name or "").lower(), (path or "").lower().replace("/", "\\")
+    if name in CONFLICTING_APPS:
+        return CONFLICTING_APPS[name]
+    for folder, app in CONFLICT_FOLDERS.items():
+        if folder in path:
+            return app
+    return None
 
 
 def close_conflicts(log=print) -> list[str]:
     """Close the vendor RGB apps that hold the hardware, including their background services
     (e.g. MSI's Mystic Light service keeps running after MSI Center is closed). Services are set to
     start manually so they don't grab the hardware again at the next sign-in; the vendor app still
-    works if the user opens it. Returns what was done."""
+    works if the user opens it. Returns what was done; anything that couldn't be stopped (usually because
+    Central RGB isn't running as administrator) is reported through log."""
     done: list[str] = []
     if not IS_WIN:
         return done
@@ -211,33 +232,54 @@ def close_conflicts(log=print) -> list[str]:
             try:
                 info = svc.as_dict()
                 binpath = (info.get("binpath") or "").lower()
-                if not any(e in binpath for e in exes):
+                if not any(e in binpath for e in exes) and not _conflict_name("", binpath):
                     continue
                 name = info["name"]
+                label = info.get("display_name") or name
                 if info.get("start_type") == "automatic":
-                    run_quiet(["sc", "config", name, "start=", "demand"])
-                    done.append(f"Service '{info.get('display_name') or name}' set to start manually")
+                    r = run_quiet(["sc", "config", name, "start=", "demand"])
+                    if r is not None and r.returncode == 0:
+                        done.append(f"Service '{label}' set to start manually")
+                    else:
+                        log(f"Couldn't set service '{label}' to start manually (run Central RGB as administrator).")
                 if info.get("status") == "running":
-                    run_quiet(["sc", "stop", name])
-                    done.append(f"Stopped service '{info.get('display_name') or name}'")
+                    r = run_quiet(["sc", "stop", name])
+                    if r is not None and r.returncode == 0:
+                        done.append(f"Stopped service '{label}'")
+                    else:
+                        log(f"Couldn't stop service '{label}' (run Central RGB as administrator).")
             except Exception:
                 continue
     except Exception as e:
         log(f"Couldn't check services: {e}")
     time.sleep(1.0)
-    for p in psutil.process_iter(["name"]):
+    for p in psutil.process_iter(["name", "exe"]):
         try:
-            name = (p.info["name"] or "").lower()
-            if name in CONFLICTING_APPS:
-                p.terminate()
-                try:
-                    p.wait(timeout=4)
-                except psutil.TimeoutExpired:
-                    p.kill()
-                done.append(f"Closed {CONFLICTING_APPS[name]} ({p.info['name']})")
-        except Exception:
+            app = _conflict_name(p.info["name"], p.info.get("exe") or "")
+            if not app:
+                continue
+            p.terminate()
+            try:
+                p.wait(timeout=4)
+            except psutil.TimeoutExpired:
+                p.kill()
+            done.append(f"Closed {app} ({p.info['name']})")
+        except psutil.NoSuchProcess:
             continue
+        except Exception as e:
+            log(f"Couldn't close {p.info.get('name')}: {e} (run Central RGB as administrator).")
     return done
+
+
+def wait_for_conflicts_gone(timeout=10.0, poll=0.5) -> dict[str, list[int]]:
+    """After close_conflicts: wait (up to timeout) until no vendor RGB app is left, so the SMBus and the
+    mouse's HID interface are really free before OpenRGB looks again. Returns what is still running."""
+    end = time.time() + timeout
+    left = find_conflicts()
+    while left and time.time() < end:
+        time.sleep(poll)
+        left = find_conflicts()
+    return left
 
 
 # --------------------------------------------------------------------------- helpers
@@ -381,16 +423,22 @@ class OpenRGBManager:
         return bool(self.proc and self.proc.poll() is None)
 
     def own_copies(self) -> list:
-        """OpenRGB processes running from Central RGB's own folder (its hidden copies, possibly left over
-        from an earlier session that was ended in Task Manager)."""
+        """Hidden OpenRGB copies of ours, possibly left over from an earlier session that was ended in Task
+        Manager: running from Central RGB's own folder, or started the way Central RGB starts it
+        (--server --noautoconnect) from wherever OpenRGB is installed. Those only look for hardware when they
+        start, so a rescan restarts them."""
         try:
             import psutil
         except Exception:
             return []
         ours, out = str(install_dir()).lower(), []
-        for p in psutil.process_iter(["name", "exe"]):
+        for p in psutil.process_iter(["name", "exe", "cmdline"]):
             try:
-                if (p.info["name"] or "").lower() == "openrgb.exe" and (p.info["exe"] or "").lower().startswith(ours):
+                if (p.info["name"] or "").lower() != "openrgb.exe":
+                    continue
+                cmd = [c.lower() for c in (p.info.get("cmdline") or [])]
+                if ((p.info["exe"] or "").lower().startswith(ours)
+                        or ("--server" in cmd and "--noautoconnect" in cmd)):
                     out.append(p)
             except Exception:
                 continue
@@ -559,7 +607,33 @@ def rgb_ram_sticks(rams=None) -> list[str]:
     return out
 
 
-def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, conflicts=None) -> dict | None:
+def openrgb_version(path) -> str | None:
+    """OpenRGB's version from its install path, e.g. ...\\OpenRGB_0.9_Windows_64_b5f46e3\\OpenRGB.exe -> '0.9'.
+    The release zips are named that way; None when the path doesn't say."""
+    m = re.search(r"openrgb[ _-]?v?(\d+\.\d+(?:\.\d+)?(?:[ _-]?rc\d*)?)", str(path or ""), re.I)
+    return m.group(1).replace("_", "").replace(" ", "") if m else None
+
+
+def openrgb_too_old(version) -> bool:
+    """OpenRGB before 1.0 reached the SMBus through the WinRing0 driver, which Windows 11 now blocks."""
+    m = re.match(r"(\d+)", str(version or ""))
+    return bool(m) and int(m.group(1)) < 1
+
+
+def running_openrgb_exe() -> str | None:
+    """Path of a running OpenRGB.exe, if any (Windows; None elsewhere or when it can't be read)."""
+    try:
+        import psutil
+        for p in psutil.process_iter(["name", "exe"]):
+            if (p.info["name"] or "").lower() == "openrgb.exe" and p.info.get("exe"):
+                return p.info["exe"]
+    except Exception:
+        pass
+    return None
+
+
+def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, conflicts=None,
+                         external_openrgb=False, openrgb_ver=None) -> dict | None:
     """If Windows reports RGB RAM but OpenRGB found no RAM device, explain why and what to change.
 
     found_types: the device type names OpenRGB reported ("RAM", "Motherboard"...).
@@ -579,17 +653,95 @@ def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, confli
     if not pawnio:
         reasons.append("The PawnIO driver isn't installed. OpenRGB 1.x reaches RGB RAM through it - install "
                        "it (Settings > Install PawnIO), then restart Windows.")
+    if openrgb_too_old(openrgb_ver):
+        reasons.append(f"Your OpenRGB is version {openrgb_ver}. Before 1.0 it reached RGB RAM through the old "
+                       "WinRing0 driver, which Windows 11 blocks. Install OpenRGB 1.0 or newer (openrgb.org) "
+                       "together with PawnIO.")
     if blockers:
         reasons.append(", ".join(blockers) + " is using the RAM's SMBus, so OpenRGB can't detect the sticks. "
                        "Press Close them: its services are stopped and set to start manually, then the RAM is "
                        "detected again.")
+    if external_openrgb:
+        reasons.append("OpenRGB was started outside Central RGB, and it only looks for RAM when it starts. "
+                       "Quit that OpenRGB (its tray icon > Exit) and press Rescan, so Central RGB starts it fresh.")
     if not reasons:
         reasons.append("Nothing obvious is blocking the SMBus. Restart Windows (a vendor driver may still hold "
                        "it), keep MSI Center / Mystic Light from starting with Windows, and check that OpenRGB "
                        "on its own finds the RAM.")
     names = ", ".join(sorted(set(sticks)))
     summary = f"{len(sticks)} RGB RAM stick(s) installed ({names}) but none were found."
-    return {"sticks": len(sticks), "names": names, "reasons": reasons, "blockers": blockers, "summary": summary}
+    return {"kind": "ram", "title": "RGB RAM not detected", "sticks": len(sticks), "names": names,
+            "reasons": reasons, "blockers": blockers, "summary": summary}
+
+
+# --------------------------------------------------------------------------- RGB mouse check
+# What Windows reports (PNPDeviceID, "...VID_1038&PID_1836...") for pointing devices and keyboards; filled in
+# by system_check, empty off Windows. Keyboards are listed so a keyboard's own mouse interface (Razer and
+# others add one) isn't taken for a mouse.
+MOUSE_INVENTORY: list[str] = []
+KEYBOARD_INVENTORY: list[str] = []
+
+# USB vendor IDs of RGB mouse makers whose mice OpenRGB can light -> (brand, the vendor apps that drive them).
+RGB_MOUSE_VENDORS = {
+    "1038": ("SteelSeries", ("SteelSeries GG", "SteelSeries Engine")),
+    "1532": ("Razer", ("Razer Synapse",)),
+    "046D": ("Logitech", ("Logitech G HUB",)),
+    "1B1C": ("Corsair", ("Corsair iCUE",)),
+    "0951": ("HyperX", ("HyperX NGENUITY",)),
+    "03F0": ("HyperX", ("HyperX NGENUITY",)),
+    "1E7D": ("Roccat", ()),
+    "0B05": ("ASUS ROG", ("ASUS Armoury Crate",)),
+    "2516": ("Cooler Master", ()),
+    "258A": ("Glorious", ()),
+}
+
+
+def _vid_pid(entry) -> tuple[str, str] | None:
+    m = re.search(r"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", str(entry), re.I)
+    return (m.group(1).upper(), m.group(2).upper()) if m else None
+
+
+def rgb_mice(mice=None, keyboards=None) -> list[tuple[str, str, str]]:
+    """The connected mice from RGB mouse makers, as (brand, vendor id, product id), one per device."""
+    kb = {_vid_pid(k) for k in (KEYBOARD_INVENTORY if keyboards is None else keyboards)}
+    seen, out = set(), []
+    for entry in (MOUSE_INVENTORY if mice is None else mice):
+        vp = _vid_pid(entry)
+        if not vp or vp in kb or vp in seen or vp[0] not in RGB_MOUSE_VENDORS:
+            continue
+        seen.add(vp)
+        out.append((RGB_MOUSE_VENDORS[vp[0]][0], vp[0], vp[1]))
+    return out
+
+
+def diagnose_missing_mouse(found_types, mice=None, keyboards=None, conflicts=None) -> dict | None:
+    """If Windows reports a mouse from an RGB mouse maker but OpenRGB found no mouse, explain why and what to do.
+    Returns None when there's nothing to report, else the same shape as diagnose_missing_ram."""
+    found = rgb_mice(mice, keyboards)
+    if not found or "Mouse" in set(found_types):
+        return None
+    conflicts = find_conflicts() if conflicts is None else conflicts
+    brands = sorted({b for b, _, _ in found})
+    blockers = sorted({a for _, vid, _ in found for a in RGB_MOUSE_VENDORS[vid][1] if a in conflicts})
+    ids = ", ".join(f"{vid}:{pid}" for _, vid, pid in found)
+    reasons = []
+    if blockers:
+        reasons.append(", ".join(blockers) + " is running and holds the mouse's lighting (its HID interface), so "
+                       "OpenRGB skips the mouse or loses it to that app. Press Close them, then Central RGB "
+                       "detects your devices once more. Keep it from starting with Windows so it stays free.")
+    reasons.append(f"If the mouse still doesn't show, OpenRGB doesn't support that model yet (USB ID {ids}): "
+                   "check openrgb.org/devices.html. Central RGB lists every device OpenRGB reports.")
+    summary = f"{' / '.join(brands)} mouse connected (USB ID {ids}) but OpenRGB didn't report it."
+    return {"kind": "mouse", "title": "Mouse not detected", "names": ", ".join(brands), "reasons": reasons,
+            "blockers": blockers, "summary": summary}
+
+
+def diagnose_missing_devices(found_types, conflicts=None, **ram_kw) -> list[dict]:
+    """Every installed RGB device OpenRGB didn't report (RAM, mouse), each with its reasons. [] if none."""
+    conflicts = find_conflicts() if conflicts is None else conflicts
+    out = [diagnose_missing_ram(found_types, conflicts=conflicts, **ram_kw),
+           diagnose_missing_mouse(found_types, conflicts=conflicts)]
+    return [d for d in out if d]
 
 
 # --------------------------------------------------------------------------- system check
@@ -631,7 +783,9 @@ def system_check() -> list[tuple[str, str]]:
     ps = ("$o=[ordered]@{"
           "board=(Get-CimInstance Win32_BaseBoard | ForEach-Object { \"$($_.Manufacturer) $($_.Product)\" });"
           "gpu=@(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name });"
-          "ram=@(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { \"$($_.Manufacturer) $($_.PartNumber)\".Trim() })"
+          "ram=@(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { \"$($_.Manufacturer) $($_.PartNumber)\".Trim() });"
+          "mouse=@(Get-CimInstance Win32_PointingDevice | ForEach-Object { $_.PNPDeviceID });"
+          "kbd=@(Get-CimInstance Win32_Keyboard | ForEach-Object { $_.PNPDeviceID })"
           "}; $o | ConvertTo-Json -Compress")
     r = run_quiet(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], timeout=30)
     try:
@@ -646,6 +800,11 @@ def system_check() -> list[tuple[str, str]]:
         RAM_INVENTORY[:] = [str(x) for x in rams]
         if rams:
             out.append(("info", f"RAM sticks: {len(rams)} ({', '.join(sorted(set(rams)))})"))
+        for key, inv_list in (("mouse", MOUSE_INVENTORY), ("kbd", KEYBOARD_INVENTORY)):
+            items = inv.get(key) or []
+            inv_list[:] = [str(x) for x in ([items] if isinstance(items, str) else items) if x]
+        for brand, vid, pid in rgb_mice():
+            out.append(("info", f"Mouse: {brand} (USB ID {vid}:{pid})"))
     except Exception:
         pass
     return out

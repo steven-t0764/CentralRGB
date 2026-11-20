@@ -8,11 +8,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 Preview Central RGB on a simulated copy of the user's PC: MSI B550-A PRO, Razer Huntsman V2 TKL and four
-Corsair Vengeance RGB DDR4 sticks, with MSI Center / Mystic Light and SteelSeries GG "running".
+Corsair Vengeance RGB DDR4 sticks and a SteelSeries mouse, with MSI Center / Mystic Light and SteelSeries GG
+"running".
 
-    xvfb-run -a -s "-screen 0 1300x840x24" python3 tests/preview_user_pc.py [out] [--ram-visible] [preview.py options]
+    xvfb-run -a -s "-screen 0 1300x840x24" python3 tests/preview_user_pc.py [out] [--ram-visible] [--mouse-visible]
+                                                                            [preview.py options]
 
-By default the RAM is hidden, as when another app holds the SMBus. Everything else is tests/preview.py.
+By default the RAM and the mouse are hidden, as when MSI Center holds the SMBus and SteelSeries GG the mouse,
+so the Devices page shows what it tells the user. Everything else is tests/preview.py.
 """
 import sys
 from pathlib import Path
@@ -24,22 +27,30 @@ import fake_openrgb  # noqa: E402
 import rgb_engine as eng  # noqa: E402
 
 ram_visible = "--ram-visible" in sys.argv
-if ram_visible:
-    sys.argv.remove("--ram-visible")
+mouse_visible = "--mouse-visible" in sys.argv
+sys.argv = [a for a in sys.argv if a not in ("--ram-visible", "--mouse-visible")]
 
 _install = fake_openrgb.install
-fake_openrgb.install = lambda e=None, **k: _install(e, devices=fake_openrgb.B550_PC, ram_blocked=not ram_visible)
+fake_openrgb.install = lambda e=None, **k: _install(e, devices=fake_openrgb.B550_PC, ram_blocked=not ram_visible,
+                                                    mouse_blocked=not mouse_visible)
 _check = eng.system_check
+
+
+def _inventory():
+    """What Windows would report on that PC."""
+    eng.RAM_INVENTORY[:] = list(fake_openrgb.CORSAIR_VENGEANCE_DDR4_WMI)
+    eng.MOUSE_INVENTORY[:] = fake_openrgb.STEELSERIES_MOUSE_WMI + fake_openrgb.RAZER_KEYBOARD_POINTER_WMI
+    eng.KEYBOARD_INVENTORY[:] = list(fake_openrgb.RAZER_KEYBOARD_WMI)
 
 
 def _system_check():
     rows = _check()
-    eng.RAM_INVENTORY[:] = list(getattr(fake_openrgb, "CORSAIR_VENGEANCE_DDR4_WMI", []))
+    _inventory()
     return rows
 
 
 eng.system_check = _system_check
-eng.RAM_INVENTORY[:] = list(getattr(fake_openrgb, "CORSAIR_VENGEANCE_DDR4_WMI", []))
+_inventory()
 eng.find_conflicts = lambda: {"MSI Center / Mystic Light": [4242], "SteelSeries GG": [4343]}
 eng.is_admin = lambda: True
 eng.pawnio_installed = lambda: True

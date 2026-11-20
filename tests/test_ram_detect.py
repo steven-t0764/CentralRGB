@@ -10,7 +10,7 @@
 RGB RAM that Windows reports but OpenRGB doesn't find (Corsair Vengeance RGB DDR4 on an MSI B550 board):
   - the sticks are recognised from their part numbers
   - the app says exactly why (not admin, no PawnIO, Mystic Light / another app holding the SMBus)
-  - after Close them, RAM detection is retried once, never in a loop
+  - checking never starts a scan, so a RAM that stays missing can't cause a restart loop
 
 Run from the repo root:  python -m unittest discover tests
 """
@@ -96,8 +96,9 @@ class RamDetectTests(unittest.TestCase):
 
 
 @unittest.skipIf(cr is None, "central_rgb could not be imported")
-class RamRetryTests(unittest.TestCase):
-    """App._check_ram, run on a stand-in for the window (no screen needed)."""
+class RamCheckTests(unittest.TestCase):
+    """App._check_missing for the RAM, run on a stand-in for the window (no screen needed). The rescan
+    after Close them is covered in test_device_detection.py."""
 
     def setUp(self):
         eng.RAM_INVENTORY[:] = fake_openrgb.CORSAIR_VENGEANCE_DDR4_WMI
@@ -105,13 +106,16 @@ class RamRetryTests(unittest.TestCase):
         self.patches = [mock.patch.object(eng, "is_admin", lambda: True),
                         mock.patch.object(eng, "pawnio_installed", lambda: True),
                         mock.patch.object(eng, "find_conflicts", lambda: dict(self.conflicts)),
+                        mock.patch.object(eng, "running_openrgb_exe", lambda: None),
+                        mock.patch.object(eng, "MOUSE_INVENTORY", []),
                         mock.patch.object(cr.time, "sleep", lambda s: None)]
         for p in self.patches:
             p.start()
         self.logs, self.rescans = [], []
-        self.app = SimpleNamespace(engine=SimpleNamespace(devices=lambda: eng.OpenRGBClient().devices),
+        self.app = SimpleNamespace(engine=SimpleNamespace(devices=lambda: eng.OpenRGBClient().devices, client=object()),
+                                   manager=SimpleNamespace(started_by_us=lambda: True, own_copies=lambda: []),
                                    log=lambda m, level="info": self.logs.append((level, m)), q=queue.Queue(),
-                                   _full_rescan=lambda: self.rescans.append(1))
+                                   _full_rescan=lambda **k: self.rescans.append(1))
 
     def tearDown(self):
         for p in self.patches:
@@ -121,34 +125,29 @@ class RamRetryTests(unittest.TestCase):
 
     def check(self, ram_blocked):
         fake_openrgb.install(eng, devices=fake_openrgb.B550_PC, ram_blocked=ram_blocked)
-        return cr.App._check_ram(self.app)
+        return cr.App._check_missing(self.app)
 
     def test_blocked_ram_is_reported_without_restarting(self):
-        d = self.check(ram_blocked=True)
-        self.assertEqual(d["blockers"], ["MSI Center / Mystic Light", "MSI Mystic Light"])
-        self.assertEqual(self.rescans, [])               # Mystic Light still holds the bus: don't retry
-        self.assertEqual(self.app.q.get_nowait(), ("ram", d))
+        diags = self.check(ram_blocked=True)
+        self.assertEqual([d["kind"] for d in diags], ["ram"])
+        self.assertEqual(diags[0]["blockers"], ["MSI Center / Mystic Light", "MSI Mystic Light"])
+        self.assertEqual(self.rescans, [])               # checking never starts a scan by itself
+        self.assertEqual(self.app.q.get_nowait(), ("missing", diags))
         self.assertTrue(any("RGB RAM not detected" in m for lvl, m in self.logs if lvl == "warn"))
         self.check(ram_blocked=True)                     # same result again: no repeated warning
         self.assertEqual(sum("RGB RAM not detected" in m for _, m in self.logs), 1)
 
-    def test_retry_once_after_close_them(self):
+    def test_still_missing_after_close_them_does_not_loop(self):
         self.check(ram_blocked=True)
-        self.conflicts.clear()                           # Close them closed Mystic Light ...
-        self.app._ram_retry = True                       # ... and armed one retry
-        self.check(ram_blocked=True)                     # first pass after closing still missed the RAM
-        self.assertEqual(self.rescans, [1])
-        self.check(ram_blocked=True)                     # the retry missed it too: stop, no loop
-        self.check(ram_blocked=True)
-        self.assertEqual(self.rescans, [1])
+        self.conflicts.clear()                           # Close them closed Mystic Light
+        for _ in range(3):
+            self.check(ram_blocked=True)
+        self.assertEqual(self.rescans, [])
 
-    def test_found_after_retry_clears_the_warning(self):
+    def test_found_clears_the_warning(self):
         self.check(ram_blocked=True)
         self.conflicts.clear()
-        self.app._ram_retry = True
-        self.assertIsNone(self.check(ram_blocked=False))
-        self.assertEqual(self.rescans, [])
-        self.assertFalse(self.app._ram_retry)
+        self.assertEqual(self.check(ram_blocked=False), [])
         self.assertIn(("ok", "RGB RAM detected."), self.logs)
 
 
