@@ -1,0 +1,86 @@
+name: Release Central RGB
+
+# Publishes a release on its own once enough has changed and the agents are finished, so the app's
+# "Update now" picks it up. Small tweaks pile up: see tools/auto_release.py for the rule
+# (3+ changelog entries, one marked <!-- big -->, or an APP_VERSION bump).
+on:
+  workflow_run:            # after every main build that passes
+    workflows: ["Build Central RGB"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "23 9 * * *"   # nightly fallback, about 3:23 AM Central
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release now even if only small changes landed
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: read
+  checks: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'release' && github.event.workflow_run.event != 'workflow_call')
+    outputs:
+      release: ${{ steps.go.outputs.release }}
+      tag: ${{ steps.d.outputs.tag }}
+      version: ${{ steps.d.outputs.version }}
+      sha: ${{ steps.d.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Decide
+        id: d
+        env:
+          FORCE_RELEASE: ${{ inputs.force || 'false' }}
+        run: |
+          python3 tools/auto_release.py | tee decide.txt
+          cat decide.txt >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Main must be green and the agents finished
+        id: go
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force || 'false' }}
+          REASON: ${{ steps.d.outputs.reason }}
+        run: |
+          if [ "${{ steps.d.outputs.release }}" != "true" ]; then echo "No release: $REASON"; echo "release=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          sha=$(git rev-parse HEAD)
+          ok=$(gh api "repos/${{ github.repository }}/commits/$sha/check-runs" --jq '[.check_runs[]|select(.name=="windows" and .conclusion=="success")]|length')
+          if [ "$ok" = "0" ]; then echo "No release: the windows check hasn't passed on $sha yet"; echo "release=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          busy=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" --jq '[.[]|select(.pull_request==null)|select([.labels[].name]|any(.=="vizor:dispatch" or .=="gretchen" or .=="pluto" or .=="bastion" or .=="fabian"))]|length')
+          case "$REASON" in APP_VERSION*) explicit=1;; *) explicit=0;; esac
+          if [ "$busy" != "0" ] && [ "$FORCE" != "true" ] && [ "$explicit" = "0" ]; then echo "No release yet: $busy agent task(s) still open"; echo "release=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if gh release view "${{ steps.d.outputs.tag }}" >/dev/null 2>&1; then echo "No release: ${{ steps.d.outputs.tag }} already exists"; echo "release=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "Releasing ${{ steps.d.outputs.tag }}: $REASON"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        if: steps.go.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ steps.d.outputs.tag }}" --target "${{ steps.d.outputs.sha }}"
+          --title "Central RGB ${{ steps.d.outputs.version }}" --notes-file release-notes.md --latest
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ needs.decide.outputs.tag }}
+    permissions:
+      contents: write

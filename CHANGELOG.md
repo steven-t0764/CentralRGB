@@ -3,6 +3,7 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- **Updates arrive on their own:** new versions are now published automatically once a batch of changes (or one big change) is finished and tested, so **Settings → Updates** always finds the newest version without waiting for a manual release.
 - **Sidebar and page change together:** the sidebar no longer lights up the new page while the old page is still showing (for over 100 ms the first time a page opens, a few frames after that). The highlight now moves in the same repaint as the page.
 
 ## 2.4.0 (2026-11-20)

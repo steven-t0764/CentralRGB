@@ -51,3 +51,7 @@ Open an [issue](../../issues) and include:
 6. Add a plain-English line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) and update the README if anything you changed is visible to users. AI agents working in this repo follow [CLAUDE.md](CLAUDE.md).
 
 By contributing, you agree that your contribution is licensed under the project's [GPL-3.0-or-later](LICENSE) license.
+
+## Releases
+
+Releases are published automatically by `.github/workflows/release.yml` after a green build on `main` (and nightly), once at least 3 changelog entries, one entry marked `<!-- big -->`, or an `APP_VERSION` bump has landed since the last release and no agent task is still open. You can also start it by hand from **Actions → Release Central RGB → Run workflow** (tick *force* to release small changes now). It creates the `vX.Y.Z` release with notes from the changelog, and the build attaches the installer, the portable exe and `SHA256SUMS.txt`, which the in-app updater uses.

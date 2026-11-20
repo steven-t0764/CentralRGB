@@ -8,6 +8,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  workflow_call:         # release.yml calls this after it publishes a release, to build and attach the files
+    inputs:
+      tag:
+        description: Release tag to build and attach the files to
+        type: string
+        required: true
 
 permissions:
   contents: write   # lets release builds attach the installer and exe
@@ -15,6 +21,8 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,10 +41,10 @@ jobs:
         run: python -m unittest discover tests -v
 
       - name: Use the release tag as the version
-        if: github.event_name == 'release'
+        if: env.RELEASE_TAG != ''
         shell: pwsh
         run: |
-          $v = "${{ github.event.release.tag_name }}".TrimStart("v")
+          $v = "$env:RELEASE_TAG".TrimStart("v")
           (Get-Content rgb_engine.py) -replace '^APP_VERSION = ".*?"', "APP_VERSION = `"$v`"" | Set-Content rgb_engine.py
           "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "Building version $v"
@@ -111,9 +119,10 @@ jobs:
             SHA256SUMS.txt
 
       - name: Attach files to the release
-        if: github.event_name == 'release'
+        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             installer/*.exe
             dist/Central RGB.exe
