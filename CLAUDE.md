@@ -25,6 +25,7 @@ These apply to every Claude/Vizor worker in this repo, on every task, without be
 - No `Co-Authored-By`, `Claude-Session`, "Generated with Claude Code" or any Claude/Anthropic line in commits, PR descriptions or issue comments.
 
 ## Getting unstuck before calling it blocked
+- Don't stop for small questions or minor issues: pick the sensible option, say which in the PR or result, and keep going.
 - Try at least two different approaches, and check the other agents' open branches, PRs and issues for the same problem or a fix you can reuse.
 - If a check fails because of someone else's change, fix it in your PR or say exactly which commit broke it.
 - Report blocked (vizor-blocked) only for missing credentials, spending, an outside commitment, or a real product decision. Say what you tried and propose the next step, so the investigator can route it to another agent.
