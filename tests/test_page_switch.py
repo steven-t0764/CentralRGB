@@ -50,7 +50,8 @@ class RestoreAndSwitchCheck(unittest.TestCase):
                            capture_output=True, text=True, timeout=240)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("PASSED", r.stdout)
-        for name in ("before.png", "after_restore.png", "after_switching.png", "restore.gif", "switch.gif"):
+        for name in ("before.png", "after_restore.png", "after_switching.png", "restore.gif", "switch.gif",
+                     "scroll.gif", "stale_000.png"):
             self.assertTrue((Path(out) / name).exists(), name)
 
 

@@ -8,7 +8,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 Windows window styling: dark (or light) title bar and (Windows 11) title bar colours that match the app, plus the
-helpers that keep the window from flashing black while Tk draws (thaw, OPAQUE, panel_background).
+helpers that keep the window from flashing black while Tk draws (thaw, panel_background, cloak).
 The glass and opacity helpers below are no longer used by the app. Safe no-ops on other systems / older Windows.
 
 How the glass works with Tk: DWM blurs whatever is behind the window and the window's
@@ -139,15 +139,15 @@ def freeze(widget) -> int:
         return 0
 
 
-# What thaw asks Windows to do. No RDW_ERASE: Tk answers a repaint request at once but draws a moment later, so
-# erasing first left every label, card and sidebar item as an empty (black) box until Tk got to it. Without the
-# erase the old picture stays on screen until the caller has Tk draw the new one over it (App._paint_now).
-# No RDW_UPDATENOW either: the caller does the drawing, all in one go, right after.
-THAW_FLAGS = RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_FRAME
+# What thaw asks Windows to do: mark everything for repainting and erase it first. The erase uses the window class
+# brush, which panel_background() sets to the panel colour, so anything Tk has not drawn yet shows the panel colour,
+# never black and never the old picture. (Leaving RDW_ERASE out kept the old page's pixels on screen wherever Tk
+# didn't repaint.) No RDW_UPDATENOW: the caller does the drawing, all in one go, right after (App._paint_now).
+THAW_FLAGS = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME
 
 
 def thaw(h: int):
-    """Turn drawing back on and mark the whole area for repainting; the old picture stays until it is redrawn."""
+    """Turn drawing back on and mark the whole area for repainting, cleared to the panel colour first."""
     if not h:
         return
     try:
@@ -159,11 +159,11 @@ def thaw(h: int):
 
 
 # ---- never show black while Tk is still drawing
-# Fully opaque as far as the eye can tell (254 of 255), but it keeps the window "layered". Windows then keeps the
-# window's last picture itself: coming back from the taskbar shows that picture instead of an empty black window,
-# and Tk no longer erases and redraws the whole window (every widget black for a moment) each time a fade-in ends,
-# which it does when the opacity goes back to exactly 100 %. Off Windows it is simply 1.0.
-OPAQUE = 254 / 255 if IS_WIN else 1.0
+# Fade-ins end at exactly 100 %. Stopping at 254/255 kept the window "layered" all the time, and a layered window
+# smears when it scrolls (rows copied into repeated bands) and redraws more slowly. Coming back from the taskbar is
+# covered by cloak() instead, and anything Windows clears before Tk draws shows the panel colour
+# (panel_background). Kept as a name so older callers still work.
+OPAQUE = 1.0
 
 GCLP_HBRBACKGROUND = -10
 _panel_brush = 0

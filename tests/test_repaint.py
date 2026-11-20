@@ -6,7 +6,8 @@
 # License, or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY; see the
 # GNU General Public License for more details: <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""No black flashes when the window comes back from the taskbar or when switching sections.
+"""No black flashes when the window comes back from the taskbar or when switching sections, no pixels of the
+previous page left behind after a switch, and no smearing when Settings scrolls.
 
 The frame check (tests/restore_check.py) opens the real app, so it runs here only on Linux with a display
 (e.g. under xvfb-run) or when CENTRALRGB_GUI_TESTS=1 is set. The rest runs everywhere.
@@ -57,57 +58,93 @@ class BlackBoxDetector(unittest.TestCase):
         self.assertTrue(rc.theme_has_black({"BG": "#000000"}))
 
 
+class StaleAndSmearDetectors(unittest.TestCase):
+    """The checks that judge page switches and scrolling must see left-behind pixels and smears, and only those."""
+
+    def _page(self, box, colour="#d0d0d0"):
+        from PIL import Image, ImageDraw
+        im = Image.new("RGB", (400, 240), "#111214")
+        ImageDraw.Draw(im).rectangle(box, fill=colour)
+        return im
+
+    def test_clean_switch_has_nothing_left_behind(self):
+        old, new = self._page((20, 20, 180, 120)), self._page((220, 120, 380, 220))
+        self.assertEqual(rc.stale_share(new.copy(), old, new), 0.0)
+
+    def test_old_header_left_on_top_of_new_page_is_found(self):
+        old, new = self._page((20, 20, 180, 120)), self._page((220, 120, 380, 220))
+        frame = new.copy()
+        frame.paste(old.crop((0, 0, 400, 130)), (0, 0))          # the old page's top still on screen
+        self.assertGreater(rc.stale_share(frame, old, new), 0.1)
+
+    def test_live_numbers_changing_do_not_count(self):
+        old, new = self._page((20, 20, 180, 120)), self._page((220, 120, 380, 220))
+        frame = self._page((220, 120, 380, 220), colour="#e8e8e8")  # same page, slightly different values
+        self.assertEqual(rc.stale_share(frame, old, new), 0.0)
+
+    def test_smear_is_found_and_same_picture_is_not(self):
+        page = self._page((20, 20, 380, 60))
+        smeared = page.copy()
+        smeared.paste(page.crop((0, 20, 400, 60)), (0, 80))         # a row copied into a band below
+        smeared.paste(page.crop((0, 20, 400, 60)), (0, 140))
+        self.assertEqual(rc.changed_share(page, page.copy()), 0.0)
+        self.assertGreater(rc.changed_share(smeared, page), 0.02)
+
+
 class WindowsDrawingFlags(unittest.TestCase):
-    def test_thaw_does_not_erase(self):
-        """Erasing before Tk has drawn is what left every widget as a black box after a section switch."""
-        self.assertFalse(fx.THAW_FLAGS & fx.RDW_ERASE)
+    def test_thaw_erases_to_the_panel_colour(self):
+        """thaw must erase what it marks for repainting (the class brush is the panel colour), or the previous
+        page's pixels stay wherever Tk doesn't repaint."""
+        self.assertTrue(fx.THAW_FLAGS & fx.RDW_ERASE)
         self.assertFalse(fx.THAW_FLAGS & fx.RDW_UPDATENOW)
         self.assertTrue(fx.THAW_FLAGS & fx.RDW_INVALIDATE and fx.THAW_FLAGS & fx.RDW_ALLCHILDREN)
 
-    def test_opaque_keeps_the_window_layered_on_windows(self):
-        if sys.platform == "win32":
-            self.assertGreaterEqual(fx.OPAQUE, 0.99)    # looks fully opaque (the self-test wants >= 0.99)
-            self.assertLess(fx.OPAQUE, 1.0)             # but never exactly 100 %
-        else:
-            self.assertEqual(fx.OPAQUE, 1.0)
+    def test_window_is_not_left_layered(self):
+        """A window left at 254/255 stays layered, which smeared scrolling and slowed redraws."""
+        self.assertEqual(fx.OPAQUE, 1.0)
 
     @unittest.skipIf(sys.platform == "win32", "on Windows it really sets the brush")
     def test_panel_background_does_nothing_elsewhere(self):
         self.assertFalse(fx.panel_background(object(), "#111214"))
 
 
-class FadeInEndsLayered(unittest.TestCase):
-    """The fade-in after start-up, the tray and a theme change stops at fx.OPAQUE, never at exactly 1.0."""
+class FadeInEndsOpaque(unittest.TestCase):
+    """The fade-in after start-up, the tray and a theme change ends at exactly 100 % and then draws at once."""
 
-    def _run(self, opaque):
+    def test_reaches_full_and_paints_once(self):
         import central_rgb as cr
 
         class Win:
             def __init__(self):
-                self.alphas = []
+                self.alphas, self.paints = [], 0
 
             def attributes(self, name, value):
                 self.alphas.append(value)
 
             def after(self, ms, fn):
                 fn()
+
+            def _paint_now(self):
+                self.paints += 1
         w = Win()
-        old, fx.OPAQUE = fx.OPAQUE, opaque
-        try:
-            w._fade_in = lambda a: cr.App._fade_in(w, a)
-            cr.App._fade_in(w, 0.0)
-        finally:
-            fx.OPAQUE = old
-        return w.alphas
+        w._fade_in = lambda a: cr.App._fade_in(w, a)
+        cr.App._fade_in(w, 0.0)
+        self.assertEqual(w.alphas[-1], 1.0)
+        self.assertEqual(w.alphas, sorted(w.alphas))
+        self.assertEqual(w.paints, 1)
 
-    def test_windows_value(self):
-        alphas = self._run(254 / 255)
-        self.assertEqual(alphas[-1], 254 / 255)
-        self.assertLess(max(alphas), 1.0)
-        self.assertEqual(alphas, sorted(alphas))
 
-    def test_other_systems_reach_full(self):
-        self.assertEqual(self._run(1.0)[-1], 1.0)
+class PageSwitchDoesNotFreezeDrawing(unittest.TestCase):
+    """Switching pages raises a page that is already filled in and laid out, without WM_SETREDRAW (freezing
+    drawing is what left the previous page's pixels behind on Windows)."""
+
+    def test_swap_page_never_freezes(self):
+        import inspect
+        import central_rgb as cr
+        src = inspect.getsource(cr.App._swap_page)
+        self.assertNotIn("fx.freeze(", src)
+        self.assertLess(src.index("update_idletasks()"), src.index("tkraise()"))
+        self.assertLess(src.index("tkraise()"), src.index("_paint_now()"))
 
 
 @unittest.skipUnless(_gui_available(), "needs a display (run under xvfb-run) or CENTRALRGB_GUI_TESTS=1")
@@ -119,7 +156,10 @@ class NoBlackFramesOnRestoreOrSwitch(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         for line in ("every frame, canvas and window has its own background colour",
                      "no frame during the restore has near-black boxes",
-                     "no frame during rapid page switching has near-black boxes"):
+                     "no frame during rapid page switching has near-black boxes",
+                     "no page switch leaves pixels of the previous page behind",
+                     "scrolling really moved the Settings page",
+                     "Settings scrolls cleanly"):
             self.assertIn(line, r.stdout)
             self.assertNotIn("FAIL  " + line, r.stdout)
 
