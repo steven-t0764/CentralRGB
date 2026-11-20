@@ -52,3 +52,27 @@ Anyone running the suite on a bare Linux box needs `python3-tk` and a Pillow wit
   dependency or workflow file differs from what run #88 tested.
 - The same tree was checked by PR #13's run: run #93 on `1727c43`, whose tree is identical to `3c50514`:
   **success**, https://github.com/steven-t0764/CentralRGB/actions/runs/44678664765/job/136096514075
+
+## Review
+
+Independent check for issue #15, by Fabian, 2026-11-20.
+
+**Verdict: confirmed.** The report matches a fresh re-run, and both Windows links are what the report says they are.
+
+- **Same commit.** The branch is based on the latest `main`, `3c50514`, and the suite was re-run on a detached checkout of `3c50514`.
+- **Same counts.** `xvfb-run -a python3.12 -m unittest discover tests -v` (Python 3.12, `requirements.txt` plus `python3-tk`
+  and `python3-pil.imagetk`): `Ran 54 tests in 16.813s` / `OK`. 54 passed, 0 failed, 0 errors, 0 skipped. No failing tests.
+- **Fan safety ran and passed.** All 6 tests in `tests/test_fan_safety.py` ran and passed: `test_auto_leaves_fans_to_bios`,
+  `test_emergency_cpu`, `test_emergency_gpu_overrides_manual`, `test_floors`, `test_manual_below_floor_is_raised` and
+  `test_stop_hands_fans_back`.
+- **Windows links.** Job `135710956555` is the `windows` job of run #88, a push on `main` at `91446df`, with conclusion
+  success. Job `136096514075` is the `windows` job of run #93 on `plan-updater` at `1727c43`, with conclusion success.
+  Neither link points at `3c50514` itself. The run list for `main` confirms that no Build Central RGB run exists for `3c50514`,
+  so this is the closest evidence there is, and the report says so openly. I confirmed that `1727c43` and `3c50514` have the
+  same tree (`df173bf`) and that `91446df..3c50514` changes only `.github/vizor-plan.json` and `CLAUDE.md`, so the green
+  `windows` runs cover exactly the code on `main`.
+- **Branch scope.** `main...test-run-report` changes only `docs/test-run.md`. The commit author is `steven-t0764`, and the
+  commit has no Co-Authored-By, Claude-Session or Claude/Anthropic attribution line. The file's only mention of
+  `CLAUDE.md` is the name of a changed file, not an attribution.
+- One small extra environment note: on a bare Linux box, importing `pystray` directly fails without the GTK typelibs. The
+  test suite does not need them and is unaffected.
