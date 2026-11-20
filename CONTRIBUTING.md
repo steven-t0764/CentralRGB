@@ -42,7 +42,7 @@ Open an [issue](../../issues) and include:
 1. Create a branch (`fix-ram-detection`, `add-wave-effect`...). Collaborators can branch in this repo; everyone else, fork it first. Don't push straight to `main`.
 2. Keep each pull request focused on one thing, and describe what you tested and on which hardware.
 3. Push your branch and open a pull request into `main`. GitHub Actions runs the tests, builds the .exe and installer on Windows and runs the app's self-test.
-   - **If it all passes, the pull request merges itself** (for branches in this repo) and the branch is deleted. If something fails, it stays open: fix it and push again.
+   - **If it all passes, the pull request merges itself** (for branches in this repo) and the branch is deleted; the auto-merge then starts the Windows build on `main` so the merge commit gets its own `windows` check. If something fails, it stays open: fix it and push again.
    - Want someone to look first? Open it as a **draft**, or add the label `do-not-merge`; then it's merged by hand.
    - To try a build on a real PC before merging, push it to the `test` branch: it publishes a **Test build (not a release)** pre-release with the .exe and installer.
 4. Anything that touches **fan control** must keep the safety limits: the minimum speeds, the 90 °C override, and handing fans back to the BIOS on exit. `python -m unittest discover tests` checks them.

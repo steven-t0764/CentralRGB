@@ -5,6 +5,8 @@
 # - Only for branches in this repository (collaborators). Pull requests from forks are never auto-merged.
 # - Merges exactly the commit that was tested (a newer push waits for its own build).
 # - Draft pull requests and ones labelled "do-not-merge" are left for a person to merge.
+# - After merging it starts "Build Central RGB" on main. A merge made with GITHUB_TOKEN does not fire push
+#   workflows, so without this the merge commit on main would never get its windows check.
 name: Auto-merge passing pull requests
 
 on:
@@ -15,6 +17,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write      # to start the main build after a merge (workflow_dispatch is allowed with GITHUB_TOKEN)
+
+concurrency:
+  group: auto-merge-main   # one merge (and its main build dispatch) at a time, so each merge commit is built
+  cancel-in-progress: false
 
 jobs:
   merge:
@@ -41,3 +48,5 @@ jobs:
           fi
           echo "Build passed for pull request #$pr at $SHA - merging."
           gh pr merge "$pr" -R "$REPO" --merge --delete-branch
+          echo "Starting Build Central RGB on main for the merge commit."
+          gh workflow run build.yml -R "$REPO" --ref main
