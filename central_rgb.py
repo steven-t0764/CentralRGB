@@ -2439,8 +2439,9 @@ class App(ctk.CTk):
             show()
 
     def _fade_in(self, a):
-        # ends at fx.OPAQUE, not 1.0: on Windows exactly 100 % makes Tk erase and redraw the whole window (a black
-        # flash of every widget) and lets Windows drop the window's picture, so restoring it showed black
+        # ends at exactly 100 % (fx.OPAQUE): a window left see-through at 254/255 stays "layered", which smears
+        # when scrolling and redraws slowly. Reaching 100 % makes Tk redraw the whole window once (cleared to the
+        # panel colour), so that redraw is done at once instead of widget by widget.
         a = min(fx.OPAQUE, a + 0.12)
         try:
             self.attributes("-alpha", a)
@@ -2448,6 +2449,8 @@ class App(ctk.CTk):
             return
         if a < fx.OPAQUE:
             self.after(16, lambda: self._fade_in(a))
+        else:
+            self._paint_now()
 
     def _window_effects(self):
         fx.dark_titlebar(self, APPEARANCE != "light")      # light mode: light title bar
@@ -4291,30 +4294,26 @@ class App(ctk.CTk):
         for n, item in self.nav.items():
             item.set(n == name, self._led_color())
         mark("nav")
-        # Swap pages with drawing frozen, so the old page stays on screen until the new one is fully laid
-        # out and filled in, then it appears in a single repaint (no half-drawn frames).
-        h = fx.freeze(self._holder)
+        # The new page is filled in and laid out while still underneath, then raised and drawn in one go. No
+        # freezing of drawing (WM_SETREDRAW): with drawing frozen Windows never cleared what the raised page
+        # uncovered, so wherever Tk didn't repaint, the previous page's pixels stayed on screen.
+        if not page.winfo_manager():              # first visit: lay it out once, then keep it ready
+            page.place(relx=0, rely=0, relwidth=1, relheight=1)
         try:
-            if not page.winfo_manager():          # first visit: lay it out once, then keep it ready
-                page.place(relx=0, rely=0, relwidth=1, relheight=1)
-            page.tkraise()
-            mark("raise")
-            try:
-                self._refresh_page(name, self.snap)
-            except tk.TclError:
-                pass
-            except Exception as e:                # a bad reading must never stop the page from opening
-                self.log(f"Couldn't refresh the {name} page: {e}", "warn")
-            mark("refresh")
-            self.update_idletasks()
-            mark("layout")
-        finally:
-            fx.thaw(h)
-            mark("paint")
-        # thaw only asks for a repaint; Tk does the actual drawing afterwards, widget by widget. Do it now, in one
-        # go, so the page appears complete instead of over several screen frames.
+            self._refresh_page(name, self.snap)
+        except tk.TclError:
+            pass
+        except Exception as e:                    # a bad reading must never stop the page from opening
+            self.log(f"Couldn't refresh the {name} page: {e}", "warn")
+        mark("refresh")
+        self.update_idletasks()
+        mark("layout")
+        page.tkraise()
+        mark("raise")
+        # Tk draws later, widget by widget, spread over several screen frames; do it now, all in one go (the
+        # sidebar highlight included), so the page appears complete.
         self._paint_now()
-        mark("after")
+        mark("paint")
         self._switch_phases = ph
 
     def _update_accent(self):

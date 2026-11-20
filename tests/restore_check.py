@@ -19,6 +19,8 @@ Saved to tests/preview_out/restore_check/ (ignored by git):
   before.png, after_restore.png, after_switching.png   still screenshots
   restore_NNN.png / restore.gif                         frames grabbed while the window came back
   switch_NNN.png / switch.gif                           frames grabbed during rapid page switching
+  stale_NNN.png                                         the page area right after each back-to-back switch
+  scroll_NNN.png / scroll.gif                           the Settings page after each scroll step
   report.txt                                            what was checked and the result
 
 Checks (exit code 1 if any fails):
@@ -30,6 +32,11 @@ Checks (exit code 1 if any fails):
   - no frame grabbed during the restore (once the window is back on screen) or during the page switching has
     near-black boxes in it (the black flashes), as long as the theme itself has no colour that dark
   - every frame, canvas and window in the app has its own background colour (none left at Tk's default)
+  - right after a page switch (including back-to-back switches such as Overlay -> Monitor -> Fans) the page
+    area shows none of the previous page: no part that matches the old page and not the new one
+  - scrolling Settings up and down draws cleanly: after every step the page looks the same as when it is
+    fully redrawn at that spot (no rows smeared into repeated copies, no blank bands)
+  - page-switch timings (App._switch_phases) and scroll-step timings are reported
 """
 from __future__ import annotations
 
@@ -97,6 +104,36 @@ def default_backgrounds(app) -> list[str]:
     return bad
 
 
+def stale_share(frame, old, new, tol=10, diff=40) -> float:
+    """Share of the page area that still shows the previous page: pixels that match `old` (the previous page
+    drawn on its own) but not `new` (the page that should be showing), counted only where the two pages
+    really differ. Live content (graphs, numbers) changing a little never matches the old page, so it
+    doesn't count."""
+    from PIL import ImageChops
+    a, b, f = (im.convert("L") for im in (old, new, frame))
+    if not (a.size == b.size == f.size):
+        return 0.0
+    pages_differ = ImageChops.difference(a, b).point(lambda v: 255 if v > diff else 0)
+    like_old = ImageChops.difference(f, a).point(lambda v: 255 if v <= tol else 0)
+    unlike_new = ImageChops.difference(f, b).point(lambda v: 255 if v > diff else 0)
+    hit = ImageChops.multiply(ImageChops.multiply(pages_differ, like_old), unlike_new)
+    return hit.histogram()[255] / max(1, f.width * f.height)
+
+
+def changed_share(a, b, diff=40) -> float:
+    """Share of pixels that differ clearly between two pictures of the same spot."""
+    from PIL import ImageChops
+    d = ImageChops.difference(a.convert("L"), b.convert("L")).point(lambda v: 255 if v > diff else 0)
+    return d.histogram()[255] / max(1, a.width * a.height)
+
+
+def walk_widgets(w):
+    """Every widget inside w."""
+    for c in w.winfo_children():
+        yield c
+        yield from walk_widgets(c)
+
+
 def black_share(img) -> float:
     """Share of pixels that are (almost) pure black."""
     g = img.convert("L")
@@ -153,7 +190,7 @@ def main():
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    for old in list(out.glob("restore_*.png")) + list(out.glob("switch_*.png")):
+    for old in [f for stem in ("restore", "switch", "stale", "scroll") for f in out.glob(f"{stem}_*.png")]:
         old.unlink()
     tmp = Path(tempfile.mkdtemp(prefix="centralrgb-restore-"))
     app_mod, app = preview.start_app(tmp)
@@ -272,6 +309,94 @@ def main():
             ok(app.current_page == "Settings", f"clicks 25 ms apart end on the page clicked last (got {app.current_page})")
             ok(on_top_and_full("Settings"), "Settings is fully laid out and on top")
             save_frames(frames, out, "switch", limit)
+
+            # ---- no pixels of the previous page left behind, and Settings scrolls cleanly
+            from PIL import ImageGrab
+            app.monitor.INTERVAL = 30                  # hold the live numbers still while pages are compared
+
+            def page_box():
+                app.update_idletasks()
+                hd = app._holder
+                x, y = hd.winfo_rootx(), hd.winfo_rooty()
+                return (x, y, x + hd.winfo_width(), y + hd.winfo_height())
+
+            def full_redraw():
+                """Have the whole page area drawn again from scratch: cover it with another window and uncover
+                it (X11), and on Windows freeze, erase and repaint it."""
+                x0, y0, x1, y1 = page_box()
+                cover = app_mod.tk.Toplevel(app, bg="#7f007f")
+                cover.overrideredirect(True)
+                cover.geometry(f"{x1 - x0}x{y1 - y0}+{x0}+{y0}")
+                app.update()
+                cover.destroy()
+                app.update()
+                app_mod.fx.thaw(app_mod.fx.freeze(app._holder))
+                app._paint_now()
+                wait(40)
+
+            wait(1200)
+            refs = {}
+            for name in pages:
+                app.show_page(name)
+                wait(250)
+                full_redraw()
+                refs[name] = ImageGrab.grab(page_box())
+            pairs = [("Overlay", "Monitor"), ("Monitor", "Fans")] + list(zip(pages, pages[1:])) \
+                + list(zip(pages[::-1], pages[::-1][1:]))
+            pairs = [(a, b) for a, b in pairs if a in refs and b in refs]
+            worst, shot, times = [], 0, []
+            for a, b in pairs:
+                app.show_page(a)                       # back to back, nothing in between
+                t0 = time.perf_counter()
+                app.show_page(b)
+                times.append(((time.perf_counter() - t0) * 1000, dict(getattr(app, "_switch_phases", {}))))
+                img = ImageGrab.grab(page_box())
+                if shot < limit:
+                    img.save(out / f"stale_{shot:03d}.png")
+                    shot += 1
+                share = stale_share(img, refs[a], refs[b])
+                worst.append((share, a, b))
+            worst.sort(reverse=True)
+            bad = [(f"{a} -> {b}", round(sh * 100, 1)) for sh, a, b in worst if sh > 0.03]
+            ok(not bad, f"no page switch leaves pixels of the previous page behind ({len(pairs)} back-to-back "
+                        f"switches, worst {worst[0][0] * 100:.1f} % of the page area)"
+                        + (f" (left behind, % of the page: {bad[:6]})" if bad else ""))
+            ms = sorted(t for t, _ in times)
+            phases = {}
+            for _, ph in times:
+                for k, v in ph.items():
+                    phases.setdefault(k, []).append(v)
+            report.append(f"INFO  page switch: median {ms[len(ms) // 2]:.1f} ms, slowest {ms[-1]:.1f} ms; phases "
+                          f"(median ms): " + ", ".join(f"{k} {sorted(v)[len(v) // 2]:.1f}" for k, v in phases.items()))
+
+            app.show_page("Settings")
+            wait(300)
+            areas = [w for w in walk_widgets(app.pages["Settings"]) if isinstance(w, app_mod.LightScroll)]
+            ok(bool(areas), "the Settings page has a scrolling area")
+            if areas:
+                area = max(areas, key=lambda w: w.inner.winfo_reqheight())
+                area.cv.yview_moveto(0)
+                wait(100)
+                frames, smears, steps = [], [], []
+                for i, d in enumerate([3] * 8 + [-3] * 8):
+                    t0 = time.perf_counter()
+                    area.cv.yview_scroll(d, "units")
+                    app._paint_now()
+                    steps.append((time.perf_counter() - t0) * 1000)
+                    img = ImageGrab.grab(page_box())
+                    frames.append((i * 0.05, img))
+                    full_redraw()
+                    ref = ImageGrab.grab(page_box())
+                    if (sh := changed_share(img, ref)) > 0.02:
+                        smears.append((i, round(sh * 100, 1)))
+                moved = changed_share(frames[0][1], frames[7][1])
+                ok(moved > 0.02, f"scrolling really moved the Settings page ({moved * 100:.0f} % of it changed)")
+                ok(not smears, f"Settings scrolls cleanly: each of {len(frames)} scroll steps looks the same as the "
+                               f"page fully redrawn there" + (f" (step, % different: {smears[:6]})" if smears else ""))
+                st = sorted(steps)
+                report.append(f"INFO  Settings scroll step: median {st[len(st) // 2]:.1f} ms, slowest {st[-1]:.1f} ms")
+                save_frames(frames, out, "scroll", limit)
+            app.monitor.INTERVAL = 0.3
 
             # ---- a sidebar click while the window is being resized
             app.show_page("Home")
