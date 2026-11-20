@@ -12,6 +12,7 @@ These apply to every Claude/Vizor worker in this repo, on every task, without be
 - Add or update tests in `tests/` for the behaviour you changed (new fakes, harnesses and preview scripts go there too, with a line in `tests/README.md`).
 - Before pushing: `python -m py_compile` every changed `.py`, then `python -m unittest discover tests` (use `xvfb-run -a` on Linux). Both must pass.
 - Update the docs in the **same PR**: add a line under `## Unreleased` in `CHANGELOG.md` (plain English, what the user notices), and update `README.md` / `CONTRIBUTING.md` / `tests/README.md` wherever behaviour, settings or pages changed.
+- Releases are automatic (`.github/workflows/release.yml`, rule in `tools/auto_release.py`): never bump `APP_VERSION` or create tags yourself. End your CHANGELOG line with `<!-- feature -->` for a new feature, or `<!-- big -->` for a change big enough to ship on its own; plain lines are small changes that wait until there are 3. A release only goes out once no agent task is open and `windows` is green.
 - Visual changes: run `tests/preview.py` (or `tests/preview_user_pc.py`) under Xvfb, look at the screenshots, and link them or describe them in the PR.
 
 ## Rules that must not break
