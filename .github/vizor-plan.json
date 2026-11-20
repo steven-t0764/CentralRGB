@@ -104,6 +104,44 @@
           ],
           "paths": [],
           "priority": 10
+        },
+        {
+          "key": "updater",
+          "agent": "pluto",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "priority": 10,
+          "paths": [
+            "updater.py",
+            "central_rgb.py",
+            "rgb_engine.py",
+            "central_rgb.iss",
+            ".github/workflows/build.yml",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "title": "One-click updates: Central RGB fetches and installs the latest version itself",
+          "body": "Steven wants the most efficient way to get the newest Central RGB onto a PC. A stable 'latest' download link already exists (releases/latest/download/CentralRGB-Setup.exe); there is no in-app update yet.",
+          "assignment": "Branch: add-updater. Build a built-in updater so users always get the latest release with one click. 1) New updater.py (GPL header): ask the GitHub Releases API for steven-t0764/CentralRGB's latest release (skip drafts and pre-releases, including the 'Test build' ones), compare its tag with APP_VERSION using proper version ordering, and download the matching asset with progress: CentralRGB-Setup.exe when the app was installed by the installer, Central.RGB.exe when it runs portable (decide from where it runs / the installer's uninstall entry). Verify the download against a SHA-256 published with the release before running it; refuse and say why if it does not match. Use only the standard library (urllib), a timeout, and fail quietly with a clear message when offline or rate-limited. 2) Installed copy: close Central RGB through its normal exit path (so fans are handed back to the BIOS exactly as on a normal close), then run the installer silently (/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS or the Inno flags that do the same) so it reopens on the new version; adjust central_rgb.iss only if it needs to support this. Portable copy: download next to the exe, swap it in after exit (rename trick or a tiny helper started just before exit), and relaunch. 3) In the app: a 'Check for updates' button and an 'Automatically check for updates' toggle (default on, at most once a day, stored in settings.json with old settings still loading) on the Settings page, and a small non-blocking notice when a newer version exists with 'Update now' / 'Later'. Match the existing look; do not restyle anything else. 4) .github/workflows/build.yml: publish a SHA256SUMS.txt (or per-asset .sha256) next to the exe and installer on every release so the updater can verify. Keep the existing stable latest-download links working. 5) Tests in tests/: version comparison, picking the right asset, checksum mismatch refused, offline/rate-limit handled, pre-releases ignored, settings toggle, using a fake GitHub API (no network). Preview the Settings page and the update notice under Xvfb. 6) Docs: README section 'Updating' (in-app update, plus the direct latest-installer link for a fresh download), CHANGELOG line. Follow the repo's agent rules file. Do not stop for small questions: pick the sensible option, say which in the PR, and keep going. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR."
+        },
+        {
+          "key": "updater-review",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "updater"
+          ],
+          "priority": 10,
+          "paths": [],
+          "title": "Review the built-in updater",
+          "body": "Independent check of the one-click updater before anyone relies on it.",
+          "assignment": "Branch: review-updater (report only). Check the merged updater on main: the checksum is really verified before anything runs; pre-releases and test builds are never offered; the app exits through its normal path before the installer runs (fan hand-back to BIOS on close still happens; tests/test_fan_safety.py passes); offline and GitHub rate-limit cases show a message and never crash; old settings.json files still load; the release workflow publishes the checksum file; README and CHANGELOG are updated; nothing outside the task was restyled; no Claude/Anthropic attribution in commits or the PR. Run the tests and the Settings preview yourself. If something is wrong, fix it in a small PR (gate: windows must pass) and say so. Write docs/review-updater.md with your verdict, commit it on review-updater, push, and link that commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. Do not stop for small questions: pick the sensible option and note it."
         }
       ]
     },
