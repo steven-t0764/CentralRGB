@@ -1,0 +1,75 @@
+# Review of the Dark / Light appearance toggle
+
+Reviewed on 2026-11-20 against `main` at `37b6a8d` (merge of PR #34, commit `e527a8f`). The dark look was compared
+with `cc9004a`, the commit before the merge.
+
+**Verdict: needs changes.** Three small fixes, all in `central_rgb.py`. Nothing is broken: the toggle works live,
+it is remembered, old settings open in Dark, and every dark theme is unchanged. But in Light mode two kinds of
+control become invisible: slider knobs while you hover or drag them, and the white colour swatch. That fails the
+"no invisible" check. Item 3 is cosmetic and can wait if the owner prefers.
+
+## What I checked
+
+| Check | Result |
+| --- | --- |
+| `xvfb-run -a python -m unittest discover tests` (Python 3.12, CustomTkinter, Pillow) | **142 tests, OK** |
+| `tests/preview.py` and `tests/preview.py --appearance light` | Both run cleanly and save all 8 pages |
+| Toggle switches live, no restart | Yes. I ran Dark to Light and Light to Dark, each from Settings, on Gunmetal and Nebula Glass. No callback errors. Afterwards every page matched a fresh start in that mode, except for live graph values. Nothing was left in the old colours. |
+| Remembered after reopening | Yes. `settings.json` gets `"appearance"`, and a new start with it seeded opens in that mode (all 9 themes) |
+| Old `settings.json` with no `appearance` key | Opens in Dark (`appearance_of`, and `test_appearance.py` covers it) |
+| Every dark theme unchanged | **Yes.** I dumped `SOLID`, the accent and chart colours, `GRAD`, the border, `DEFAULT_ACCENT` and `OK/WARN/BAD/INFO` after `_apply_theme(key)` for all 9 themes on `cc9004a` and on `37b6a8d`, and the output is byte-identical. I also took screenshots of all 8 pages × 9 themes before and after. The only pixels that differ are live sensor values and graphs, plus Settings, where the new Appearance row moves the rows below it down by one row. |
+| Light mode, all 8 pages × 9 themes | Readable. Text, cards, charts, LED strips, the warning bars (conflict and missing-device), the Monitor → Advanced sensor tree, dropdowns, scrollbars, the device editor and the Create preset dialog all read correctly. Exceptions are items 1–3 below. |
+| FPS overlay | Unchanged and fine. On Windows it draws on a see-through key colour, so the appearance doesn't matter. The Overlay page preview reads correctly in Light. |
+| Fan safety | `hw_monitor.py`, the fan code and `tests/test_fan_safety.py` are untouched, and the tests pass |
+| DDR5 once-per-boot guard | Untouched (no diff in `rgb_engine.py` or `tests/test_ddr5_guard.py`), and the tests pass |
+| Claude/Anthropic lines | None in `e527a8f`, the merge commit or the PR #34 description |
+| Docs | `CHANGELOG.md` (Unreleased), `README.md` (feature list, UI section, Settings row) and `tests/README.md` (`test_appearance.py`, `preview.py --appearance/--theme`) were all updated. `tests/test_appearance.py` has the GPL-3.0 header. |
+
+Screenshot names below are the files `tests/preview.py --appearance light --theme <key>` writes (`<page>.png`).
+Names starting with `light-` come from extra Light-mode captures I made on the same fake hardware (hover, dialogs,
+device editor).
+
+## Problems found
+
+1. **Slider knobs disappear on hover or drag in Light mode.** This affects Lighting (Brightness and Speed), the
+   device editor (Brightness and Speed) and Fans (every fan card slider), in every theme.
+   Screenshot: `light-lighting-slider-hover.png` (Gunmetal). While the pointer is over a slider, its knob turns
+   pure white and is invisible on the near-white card, so you can't see where you're dragging.
+   Cause: hover colours are hard-coded to `"white"` at `central_rgb.py:2483` (`slider_row`) and
+   `central_rgb.py:1731` (fan card slider).
+   **Fix:** use a hover colour that works in both modes: `button_hover_color=P["TEXT"]` for the fan slider, and
+   `button_hover_color=self.accent if APPEARANCE == "light" else "white"` in `slider_row`. Dark keeps `"white"`,
+   so the dark look is unchanged.
+
+2. **The white colour swatch can't be seen in Light mode, and the soft row is very faint.** This affects the Lighting
+   page (colour card, the last swatch in both rows) and the device editor (the last swatch in the colour row), in
+   every theme. Screenshots: `lighting.png` (any theme, top-right of the swatch grid) and `light-device-editor.png`.
+   The white swatch has a contrast of 1.01–1.10 against the light cards, so it shows as an empty gap. The soft row's
+   white, `mix(white, (230, 230, 240))`, is the same.
+   Cause: the swatch outline is `P["CARD"]` (`central_rgb.py:2781` and the `<Leave>` handler at `2784` for the
+   Lighting page, and `central_rgb.py:3130` for the device editor), so nothing separates a white swatch from the
+   card.
+   **Fix:** in Light mode, outline the swatches with `P["LINE"]` (1 px), or with `P["BTN_LINE"]` only for
+   swatches whose contrast against the card is under 1.5. Keep `P["CARD"]` in Dark so the dark look is unchanged.
+
+3. **Breathing previews fade to black instead of into the panel (cosmetic).** This affects the Lighting effect
+   tile "Breathing", the Profiles card "Red breathing" and every live LED strip (Home, Lighting, Devices) while the
+   Breathing effect runs. Screenshots: `lighting.png` (Cyber Glitch: the Breathing tile bar is near-black) and
+   `profiles.png` (Gunmetal: the Red breathing bar is dark maroon). `LedStrip` draws the dimmed LED colour as is.
+   In Dark that blends into the panel. In Light the low point of the breath shows as a hard black bar, which looks
+   like a leftover dark element.
+   **Fix:** in `LedStrip`, when `APPEARANCE == "light"`, treat brightness as opacity over the panel. Draw
+   `mix(bg, full_colour, v)`, where `v = max(r, g, b) / 255` and `full_colour` is the colour scaled back to full
+   brightness, instead of drawing the dimmed colour. Keep the current drawing in Dark.
+
+## Notes (no change needed)
+
+- In Gunmetal, a switch that is **on** looks like a single solid pill: the knob is `P["TEXT"]` on the
+  `chrome` track. The contrast is 1.3:1 in Light and 1.0:1 in Dark, so this is the same Gunmetal design in both
+  modes, not a Light regression. The knob position still shows the state.
+- The device drawing in the device editor stays a dark board on a light card. It's a picture of the hardware, so
+  that's fine.
+- Not fixed here, and the same in Dark: the GPU name on Monitor ("RTX 4070 SU") and the GPU fan subtitle on Fans
+  are cut off at 1120 px wide.
+- Xvfb has no DWM, so I couldn't check the light title bar (`dark_titlebar(root, False)`) or the Windows accent
+  shade "Dark 1". They need a look on the real PC.
