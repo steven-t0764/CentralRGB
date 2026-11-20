@@ -385,6 +385,82 @@
           "priority": 20
         }
       ]
+    },
+    {
+      "id": "regressions-1",
+      "tasks": [
+        {
+          "key": "fix-switch-regression",
+          "agent": "pluto",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "priority": 20,
+          "paths": [
+            "central_rgb.py",
+            "win_effects.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "title": "Regression: pages leave old pixels behind, Settings smears when scrolling, app feels sluggish",
+          "body": "Evidence from Steven's PC (screen recording, 2026-11-20, build from main labelled 2.3.2, 240 Hz, Windows 11): switching pages leaves the previous page's pixels behind under the new page (Overlay header over Monitor graphs, Monitor graphs bleeding into Fans); scrolling the Settings page smears rows into repeated copies ('Startup animation' / 'Updates' repeated, blank bands); the sidebar highlight lags behind the page shown; the app feels less responsive than before. These appeared after 'No black flashes on restore or section switch' (#29, commit 1cec327).",
+          "assignment": "Branch: fix-switch-regression. Evidence from Steven's PC (screen recording, 2026-11-20, build from main labelled 2.3.2, 240 Hz, Windows 11): switching pages leaves the previous page's pixels behind under the new page (Overlay header over Monitor graphs, Monitor graphs bleeding into Fans); scrolling the Settings page smears rows into repeated copies ('Startup animation' / 'Updates' repeated, blank bands); the sidebar highlight lags behind the page shown; the app feels less responsive than before. Likely causes to confirm in central_rgb.py and win_effects.py from #29: (a) _swap_page freezes the holder with WM_SETREDRAW and thaw() deliberately leaves out RDW_ERASE, so any area the new page does not repaint keeps the old page's pixels; (b) the window is kept 'layered' at alpha 254/255, and scrolling (CTkScrollableFrame / canvas moves use ScrollWindow) on a layered window smears and redraws slower; (c) _paint_now forces a full synchronous repaint on every switch, and the hidden-restore path may add more. Fix it so that: switching pages never shows any pixels from the previous page; Settings and every scrollable page scroll cleanly; switching and scrolling feel at least as fast as 2.3.2 (measure: log _switch_phases timings before/after and keep a page switch well under one 240 Hz frame budget where possible, report the numbers); and the original goal of #29 still holds as far as it can, with no black flash when restoring from the taskbar. Prefer the simplest approach that is correct over clever tricks: for example drop the layered 254 alpha except during the restore itself, erase-and-repaint only the page area, or switch pages by raising a fully built page without WM_SETREDRAW. If a full fix needs a trade-off, choose no stale pixels and no smear over a brief flash, and say so. Add a test in tests/ that switches pages rapidly and scrolls Settings under Xvfb and checks no frame shows content from the previous page (extend tests/restore_check.py), and attach before/after frames in the PR. Follow the repo's agent rules file. Do not stop for small questions: pick the sensible option, say which in the PR, and keep going. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR."
+        },
+        {
+          "key": "fix-switch-regression-review",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "fix-switch-regression"
+          ],
+          "priority": 20,
+          "paths": [],
+          "title": "Review the page-switch and scrolling regression fix",
+          "body": "Independent check that the regression is gone and nothing else broke.",
+          "assignment": "Branch: review-switch-regression (report only). On main after the fix: run the tests and tests/restore_check.py yourself, switch pages rapidly and scroll Settings in the Xvfb preview and inspect the frames for leftover pixels or smear, compare switch timings with 2.3.2 (tag v2.3.2), check the restore-from-taskbar path, confirm fan safety and the DDR5 guard are untouched and nothing was restyled. If anything is still wrong, fix it in a small PR (windows must pass). Write docs/review-switch-regression.md with the verdict and what can only be confirmed on Steven's Windows PC, commit on review-switch-regression, push, and link that commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. Do not stop for small questions: pick the sensible option and note it."
+        },
+        {
+          "key": "ram-vengeance-pro",
+          "agent": "gretchen",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "priority": 20,
+          "paths": [
+            "rgb_engine.py",
+            "device_models.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "title": "RAM still not detected: Corsair Vengeance RGB PRO DDR4-3600 (CMW32GX4M2D3600C18) x4",
+          "body": "After the device-detection fix (#23) Steven's RAM is still missing.",
+          "assignment": "Branch: fix-ram-vengeance-pro. Steven's PC (screen recording 2026-11-20): MSI B550-A PRO (MS-7C56), Ryzen 7 5800X3D, four sticks reported by Windows as part number CMW32GX4M2D3600C18 (Corsair Vengeance RGB PRO DDR4-3600 C18, 2x16 GB kits, 64 GB total). The Settings system check shows 'RAM sticks: 4 (Unknown CMW32GX4M2D3600C18, ...)', 'PawnIO driver found', and 'Other RGB software is running: SteelSeries Engine, SteelSeries GG'. Devices still shows no RAM. 1) Fix the 'Unknown' vendor: identify Corsair from the CMW/CMK/CMT/CMH/CMG part-number prefixes (and the JEDEC/SPD manufacturer when Windows gives it) and name the product line (CMW = Vengeance RGB PRO). 2) Find out plainly why OpenRGB does not report these sticks on this board and fix what the app can: which OpenRGB version Central RGB downloads or uses and whether its Corsair Vengeance Pro (DDR4) controller supports them; whether that OpenRGB build uses PawnIO for SMBus on AMD (piix4) and whether Central RGB starts OpenRGB in a way that lets it load PawnIO (elevation, the right PawnIO modules installed, OpenRGB's 'Corsair Vengeance Pro' / SMBus detectors enabled in its config); whether Central RGB connects before OpenRGB finished its SMBus scan; whether SteelSeries Engine/GG can hold the SMBus; and whether all four sticks at 0x58-0x5B could be skipped. Read rgb_engine.py, device_models.py and what #23 and #26 merged. 3) Make the app collect what we need next time: a 'RAM diagnostics' entry written to activity.log (and copyable) with the OpenRGB version, how it was started (elevated or not), PawnIO status, the SMBus/RAM detectors it ran and their result, and the RAM part numbers, so the cause can be read off Steven's PC without guessing. Keep the UI changes inside rgb_engine.py's existing messages or the existing Devices/Settings rows: do NOT edit central_rgb.py (Pluto is fixing a regression there in parallel); if a UI change is unavoidable, describe it in the PR for a follow-up instead. Add tests in tests/ (part-number parsing incl. CMW32GX4M2D3600C18, the diagnostics report, detection retry) with fakes. Follow the repo's agent rules file. Do not stop for small questions: pick the sensible option, say which in the PR, and keep going. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR."
+        },
+        {
+          "key": "ram-vengeance-pro-review",
+          "agent": "fabian",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "ram-vengeance-pro",
+            "fix-switch-regression-review"
+          ],
+          "priority": 20,
+          "paths": [],
+          "title": "Review the Vengeance RGB PRO detection fix",
+          "body": "Independent check of the RAM fix and diagnostics.",
+          "assignment": "Branch: review-ram-vengeance-pro (report only). Check the merged RAM change on main: CMW32GX4M2D3600C18 is named Corsair Vengeance RGB PRO; the diagnostics entry contains OpenRGB version, elevation, PawnIO, detectors run and part numbers; nothing touches the DDR5 once-per-boot guard or fan safety; tests pass; docs updated. If something is wrong, fix it in a small PR (windows must pass). Write docs/review-ram-vengeance-pro.md listing exactly what Steven must check on his PC (with the steps), commit on review-ram-vengeance-pro, push, and link that commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. Do not stop for small questions: pick the sensible option and note it."
+        }
+      ]
     }
   ]
 }
