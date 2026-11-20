@@ -13,6 +13,9 @@
   - switching to Light and back to Dark gives every dark theme its exact original colours
   - in the real app (Linux + display, e.g. xvfb-run), flipping the toggle rebuilds the Settings page in place
     without errors and saves the choice
+  - Light-mode polish (review of the toggle): slider knobs stay visible on hover, the white swatch has an outline,
+    Breathing fades into the panel instead of to black, sensor-tree selection and chart guides show, and the
+    title bar / panel colour switch before the window is rebuilt. Each helper gives Dark its old value exactly.
 
 Run from the repo root:  python -m unittest discover tests
 """
@@ -154,6 +157,99 @@ class DarkStaysIdentical(unittest.TestCase):
                              ("#2a2112", "#ffd166", "#1a1a1a", "#4a1f28"))
         finally:
             cr._apply_theme(start_theme, start_app)
+
+
+class LightModePolish(unittest.TestCase):
+    """The fixes from docs/review-theme-toggle.md, and Dark staying exactly as it was for each of them."""
+
+    def setUp(self):
+        self.cr = _cr()
+        self._start = (self.cr.THEME, self.cr.APPEARANCE)
+
+    def tearDown(self):
+        self.cr._apply_theme(*self._start)
+
+    def _each(self, mode):
+        for key in self.cr.THEMES:
+            self.cr._apply_theme(key, mode)
+            yield key
+
+    # 1. slider knobs on hover / drag
+    def test_slider_hover_is_white_in_dark(self):
+        cr = self.cr
+        for key in self._each("dark"):
+            with self.subTest(theme=key):
+                self.assertEqual(cr.slider_hover(cr.DEFAULT_ACCENT), "white")
+                self.assertEqual(cr.slider_hover(cr.P["TEXT"]), "white")
+
+    def test_slider_hover_is_visible_on_light_cards(self):
+        cr = self.cr
+        for key in self._each("light"):
+            for knob in (cr.DEFAULT_ACCENT, cr.CYAN, cr.P["TEXT"]):
+                with self.subTest(theme=key, knob=knob):
+                    hov = cr.slider_hover(knob)
+                    self.assertRegex(hov, HEX)
+                    self.assertGreaterEqual(cr.contrast(hov, cr.P["CARD"]), 3.0)
+                    self.assertGreaterEqual(cr.contrast(hov, cr.P["TRACK"]), 1.5)
+
+    # 2. white swatch outline
+    def test_swatch_outline_is_the_card_in_dark(self):
+        cr = self.cr
+        for key in self._each("dark"):
+            for c in cr.SWATCHES:
+                with self.subTest(theme=key, swatch=c):
+                    self.assertEqual(cr.swatch_outline(c), cr.P["CARD"])
+
+    def test_white_swatches_are_outlined_in_light(self):
+        cr = self.cr
+        soft_white = tuple(int(v) for v in cr.mix((255, 255, 255), (230, 230, 240), 0.42))
+        for key in self._each("light"):
+            for c in ((255, 255, 255), soft_white):
+                with self.subTest(theme=key, swatch=c):
+                    line = cr.swatch_outline(c)
+                    self.assertNotEqual(line, cr.P["CARD"])
+                    self.assertGreaterEqual(cr.contrast(line, cr.P["CARD"]), 1.8)
+            for c in cr.SWATCHES:
+                with self.subTest(theme=key, swatch=c):
+                    self.assertNotEqual(cr.swatch_outline(c), cr.P["CARD"])
+
+    # 3. Breathing fades into the panel
+    def test_led_on_is_unchanged_in_dark(self):
+        cr = self.cr
+        cr._apply_theme("gunmetal", "dark")
+        for c in ((255, 0, 0), (40, 0, 0), (3, 2, 1), (0, 0, 0)):
+            self.assertEqual(cr.led_on(c, (250, 250, 250)), c)
+
+    def test_breathing_low_point_fades_into_the_light_panel(self):
+        cr = self.cr
+        for key in self._each("light"):
+            bg = cr.hex2rgb(cr.P["CARD"])
+            with self.subTest(theme=key):
+                full = cr.led_on((255, 0, 0), bg)
+                self.assertEqual(tuple(round(v) for v in full), (255, 0, 0))     # full brightness: the colour
+                low = cr.led_on((12, 0, 0), bg)                                  # breath low point
+                self.assertLess(max(abs(a - b) for a, b in zip(low, bg)), 20)    # close to the card, not black
+                self.assertGreater(cr._lum(cr.hexcol(low)), 0.6)
+
+    # sensor tree selection, chart guides, theme switch order
+    def test_tree_selection_shows_in_light(self):
+        cr = self.cr
+        for key in self._each("light"):
+            with self.subTest(theme=key):
+                self.assertNotEqual(cr.P["SEL"], cr.P["CARD"])
+                self.assertGreater(cr.contrast(cr.P["SEL"], cr.P["CARD"]),
+                                   cr.contrast(cr.P["CARD2"], cr.P["CARD"]))
+
+    def test_source_uses_the_helpers(self):
+        src = (HERE.parent / "central_rgb.py").read_text(encoding="utf-8")
+        self.assertNotIn('button_hover_color="white"', src)
+        self.assertIn("button_hover_color=slider_hover(acc)", src)          # accent changes keep it right
+        self.assertNotIn('outline=P["CARD"], width=2', src)
+        self.assertIn('sel = P["SEL"] if APPEARANCE == "light" else P["CARD2"]', src)
+        self.assertIn("imix(bgc, (0, 0, 0), 0.07)", src)                     # chart guides darken in Light
+        sw = src[src.index("    def _switch_theme"):src.index("    def _restart")]
+        # title bar and Windows clear colour change before the old widgets are destroyed and rebuilt
+        self.assertLess(sw.index("self._window_effects()"), sw.index("for w in self.winfo_children()"))
 
 
 @unittest.skipIf(sys.platform == "win32", "the Windows title bar is checked on Windows by the full check")
