@@ -27,6 +27,9 @@ Checks (exit code 1 if any fails):
   - a sidebar click during a window resize still opens its page, and the page that was open when the resize
     began comes back at the new size (not stuck at the old one)
   - frames grabbed during the restore that are much blacker than the window before minimizing (reported)
+  - no frame grabbed during the restore (once the window is back on screen) or during the page switching has
+    near-black boxes in it (the black flashes), as long as the theme itself has no colour that dark
+  - every frame, canvas and window in the app has its own background colour (none left at Tk's default)
 """
 from __future__ import annotations
 
@@ -45,6 +48,55 @@ sys.path[:0] = [str(ROOT), str(HERE)]
 import preview  # noqa: E402
 
 
+DARK = 6          # brightness (0-255) counted as "near-black"
+TILE = 16         # black boxes are looked for in squares of this size
+
+
+def black_tiles(img, tile=TILE, dark=DARK, share=0.9) -> int:
+    """How many tile x tile squares of the image are (almost) entirely near-black: a black box shows up as some.
+    Thin dark lines or a few dark pixels never fill a square, so normal content counts as 0."""
+    g = img.convert("L").point(lambda v: 255 if v < dark else 0)
+    n = 0
+    for y in range(0, g.height - tile + 1, tile):
+        for x in range(0, g.width - tile + 1, tile):
+            if g.crop((x, y, x + tile, y + tile)).histogram()[255] >= share * tile * tile:
+                n += 1
+    return n
+
+
+def theme_has_black(palette) -> bool:
+    """True if one of the theme's own colours is near-black (then black boxes can't be told from content)."""
+    for v in palette.values():
+        if isinstance(v, str) and v.startswith("#") and len(v) == 7:
+            r, g, b = (int(v[i:i + 2], 16) for i in (1, 3, 5))
+            if 0.299 * r + 0.587 * g + 0.114 * b < DARK:
+                return True
+    return False
+
+
+def default_backgrounds(app) -> list[str]:
+    """Frames, canvases and windows still on Tk's default background (they show it, or black on Windows, before
+    their content is drawn)."""
+    import tkinter as tk
+    probe = tk.Frame(app)
+    default = str(probe.tk.call(probe._w, "cget", "-background"))
+    probe.destroy()
+    bad = []
+
+    def walk(w):
+        for c in w.winfo_children():
+            if isinstance(c, (tk.Frame, tk.Canvas, tk.Toplevel)):
+                try:
+                    bg = str(c.tk.call(c._w, "cget", "-background"))
+                except Exception:
+                    bg = ""
+                if bg in ("", default) or bg.lower() in ("black", "#000000", "#000", "systembuttonface"):
+                    bad.append(f"{c} ({bg or 'none'})")
+            walk(c)
+    walk(app)
+    return bad
+
+
 def black_share(img) -> float:
     """Share of pixels that are (almost) pure black."""
     g = img.convert("L")
@@ -57,19 +109,19 @@ class FrameGrabber:
 
     def __init__(self, box):
         self.box, self.frames, self._stop = box, [], threading.Event()
-        self._t = None
+        self._t, self.t0 = None, time.perf_counter()
 
     def start(self):
         self.frames, self._stop = [], threading.Event()
+        self.t0 = time.perf_counter()
         self._t = threading.Thread(target=self._run, daemon=True)
         self._t.start()
 
     def _run(self):
         from PIL import ImageGrab
-        t0 = time.perf_counter()
         while not self._stop.is_set():
             try:
-                self.frames.append((time.perf_counter() - t0, ImageGrab.grab(self.box)))
+                self.frames.append((time.perf_counter() - self.t0, ImageGrab.grab(self.box)))
             except Exception:
                 return
             time.sleep(0.004)
@@ -147,6 +199,23 @@ def main():
     def run():
         try:
             # ---- minimize and restore
+            dark_theme_colour = theme_has_black(app_mod.P)
+            if dark_theme_colour:
+                report.append("INFO  this theme has a near-black colour, so black boxes in frames are only reported")
+
+            def no_black_boxes(frames, what, since=0.0):
+                boxes = [(round(t * 1000), n) for t, im in frames if t >= since and (n := black_tiles(im)) >= 2]
+                text = (f"no frame during {what} has near-black boxes"
+                        + (f" (got {len(boxes)} frames with them, at ms/boxes {boxes[:8]})" if boxes else ""))
+                if dark_theme_colour:
+                    report.append("INFO  " + text)
+                else:
+                    ok(not boxes, text)
+
+            missing = default_backgrounds(app)
+            ok(not missing, "every frame, canvas and window has its own background colour"
+                            + (f" (left at the default: {', '.join(missing[:8])})" if missing else ""))
+
             app.show_page("Home")
             wait(400)
             before = grab("before.png")
@@ -162,7 +231,9 @@ def main():
                 app.withdraw()
                 wait(300)
                 app._was_minimized = True
-            restores = []
+            restores, mapped = [], []
+            app.bind("<Map>", lambda e: (e.widget is app and not mapped
+                                         and mapped.append(time.perf_counter())), add="+")
             real_restore = getattr(app, "_restore_drawn", None)
             if real_restore is not None:
                 app._restore_drawn = lambda: (restores.append(1), real_restore())
@@ -178,6 +249,8 @@ def main():
             report.append(f"INFO  {len(frames)} frames grabbed during the restore; much blacker than before "
                           f"minimizing: {len(blackish)}" + (f" (at ms {blackish[:10]})" if blackish else ""))
             ok(black_share(after) <= base + 0.05, "window is fully drawn after the restore")
+            # frames before the window is back on screen show the desktop / taskbar, not the window
+            no_black_boxes(frames, "the restore", since=(mapped[0] - g.t0) if mapped else 0.0)
             save_frames(frames, out, "restore", limit)
 
             # ---- rapid page switching: a burst of clicks queued at once, then clicks every 25 ms
@@ -195,6 +268,7 @@ def main():
                 app.after(25 * i, lambda n=name: click(n))
             wait(25 * len(seq) + 900)
             frames = g.stop()
+            no_black_boxes(frames, "rapid page switching")
             ok(app.current_page == "Settings", f"clicks 25 ms apart end on the page clicked last (got {app.current_page})")
             ok(on_top_and_full("Settings"), "Settings is fully laid out and on top")
             save_frames(frames, out, "switch", limit)
