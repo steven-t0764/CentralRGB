@@ -164,7 +164,7 @@ A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sid
 
 1. Checks whether OpenRGB's SDK server is already listening on `127.0.0.1:6742`.
 2. If not, looks for `OpenRGB.exe` next to the app, in Program Files, in `%LOCALAPPDATA%\Programs` and in its own download folder.
-3. If it can't find one, it offers to **download the newest Windows build** automatically. It reads the official releases page and falls back to a known 1.1 link. Every path inside the zip is checked before extracting.
+3. If it can't find one, it offers to **download the newest Windows build** automatically. It reads the official releases page, picks the newest Windows 64-bit zip that is 1.0 or newer (older builds use WinRing0, which Windows 11 blocks, so RGB RAM is never found) and falls back to a known 1.1 link. Every path inside the zip is checked before extracting, and the zip's name is noted next to `OpenRGB.exe` so the version is known later. With RGB RAM installed, OpenRGB RAM detectors that were switched off in `OpenRGB.json` are switched back on before it starts.
 4. Starts it hidden in the tray with the SDK server turned on:
 
 ```text
@@ -183,7 +183,7 @@ A background thread pushes frames to every selected device:
 - `compute_colors()` produces every effect from color, brightness, speed and time. **Rainbow Wave** shifts the hue across each device's LEDs and offsets each device slightly, so the colors flow from one device to the next.
 - **Save to hardware** writes the current static color into each device's own memory where supported, so it stays even with the app closed.
 
-**System check (`system_check()`)** looks at admin rights, the PawnIO driver (service or install folder), running vendor RGB apps (from `tasklist`), and your motherboard, GPU and RAM models, mice and keyboards (from PowerShell `Get-CimInstance`). After hardware detection, the Devices page compares those with what OpenRGB found and explains any RGB RAM or RGB mouse it missed.
+**System check (`system_check()`)** looks at admin rights, the PawnIO driver (service or install folder), running vendor RGB apps (from `tasklist`), and your motherboard, GPU and RAM models, mice and keyboards (from PowerShell `Get-CimInstance`). RAM makers Windows reports as "Unknown" or as a JEDEC code are named from the part number (Corsair CMW... is Vengeance RGB PRO). After hardware detection, the Devices page compares those with what OpenRGB found and explains any RGB RAM or RGB mouse it missed. For missing RGB RAM it also writes a **RAM diagnostics** report (`ram_diagnostics()`) to the activity log and `%APPDATA%\CentralRGB\ram-diagnostics.txt`.
 
 ### 3. Sensors & fans: `hw_monitor.py`
 
@@ -286,7 +286,7 @@ py central_rgb.py
 
 | Problem | Fix |
 |---|---|
-| RGB RAM or motherboard lighting is missing | If the Devices page shows **Other RGB software is running**, press **Close them** (on MSI boards, Mystic Light holds the motherboard and RAM lighting; all MSI Center services and LEDKeeper2 are stopped, then your devices are re-detected once). The **RGB RAM not detected** note under it lists every cause it found: not admin, no **PawnIO** (rerun the installer, or get it from pawnio.eu), an OpenRGB older than 1.0, or an OpenRGB you started yourself (quit it, then press **Rescan**). Give it about 30 seconds |
+| RGB RAM or motherboard lighting is missing | If the Devices page shows **Other RGB software is running**, press **Close them** (on MSI boards, Mystic Light holds the motherboard and RAM lighting; all MSI Center services and LEDKeeper2 are stopped, then your devices are re-detected once). The **RGB RAM not detected** note under it lists every cause it found: not admin, no **PawnIO** (rerun the installer, or get it from pawnio.eu), an OpenRGB older than 1.0, or an OpenRGB you started yourself (quit it, then press **Rescan**). Give it about 30 seconds. If it's still missing, attach `%APPDATA%\CentralRGB\ram-diagnostics.txt` to an issue: it shows what OpenRGB did on the SMBus |
 | DDR5 RGB RAM is missing | See [DDR5 RGB RAM](#ddr5-rgb-ram): DDR5 lighting is usually only found on the first search after a full shutdown. Shut down fully (Shift + Shut down), turn on, open Central RGB first. The Devices page says when OpenRGB doesn't support the kit |
 | An RGB mouse is missing | The Devices page shows **Mouse not detected** with the mouse's USB ID. If its own app (SteelSeries GG, Razer Synapse, G HUB, iCUE) is running, press **Close them** and keep that app from starting with Windows. If it still doesn't show, OpenRGB doesn't support that model yet: check openrgb.org/devices.html |
 | A device keeps changing back to its old color | Another RGB app is running. Close it and turn off its auto-start. |
