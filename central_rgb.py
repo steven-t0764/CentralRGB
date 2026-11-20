@@ -4291,9 +4291,6 @@ class App(ctk.CTk):
             now = time.perf_counter()
             ph[k] = (now - t) * 1000
             t = now
-        for n, item in self.nav.items():
-            item.set(n == name, self._led_color())
-        mark("nav")
         # The new page is filled in and laid out while still underneath, then raised and drawn in one go. No
         # freezing of drawing (WM_SETREDRAW): with drawing frozen Windows never cleared what the raised page
         # uncovered, so wherever Tk didn't repaint, the previous page's pixels stayed on screen.
@@ -4308,6 +4305,12 @@ class App(ctk.CTk):
         mark("refresh")
         self.update_idletasks()
         mark("layout")
+        # The sidebar highlight moves only now, after the layout pass: update_idletasks() above would otherwise
+        # draw it straight away, showing the new page lit while the old page stays up (for over 100 ms on a
+        # page's first visit). Set here, it is drawn in the same go as the page.
+        for n, item in self.nav.items():
+            item.set(n == name, self._led_color())
+        mark("nav")
         page.tkraise()
         mark("raise")
         # Tk draws later, widget by widget, spread over several screen frames; do it now, all in one go (the

@@ -3,6 +3,7 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- **Sidebar and page change together:** the sidebar no longer lights up the new page while the old page is still showing (for over 100 ms the first time a page opens, a few frames after that). The highlight now moves in the same repaint as the page.
 
 ## 2.4.0 (2026-11-20)
 - **Corsair Vengeance RGB PRO RAM:** sticks Windows lists with the maker "Unknown" (for example 4x CMW32GX4M2D3600C18) now show as **Corsair Vengeance RGB PRO** in the Settings system check; the maker and product line are read from Corsair part numbers (CMW, CMN, CMG, CMR, CMH, CMT, CMP, CMK...) and from JEDEC maker codes. When Central RGB downloads OpenRGB it now always picks the newest Windows build that is 1.0 or newer (older ones can't reach RGB RAM on Windows 11), notes which version it installed, and the activity log says which OpenRGB version starts. If OpenRGB's RAM detectors were switched off in OpenRGB's settings and RGB RAM is installed, they are switched back on before OpenRGB starts. When RGB RAM still isn't found, a **RAM diagnostics** report (OpenRGB version, how it was started and whether it runs as administrator, PawnIO and its SMBus modules, the CPU's SMBus, OpenRGB's RAM detectors, the apps holding the SMBus, OpenRGB's own SMBus log lines and the RAM part numbers) is added to the activity log and saved to `%APPDATA%\CentralRGB\ram-diagnostics.txt` to copy into a bug report.

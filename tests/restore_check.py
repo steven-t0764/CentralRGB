@@ -36,6 +36,7 @@ Checks (exit code 1 if any fails):
     area shows none of the previous page: no part that matches the old page and not the new one
   - scrolling Settings up and down draws cleanly: after every step the page looks the same as when it is
     fully redrawn at that spot (no rows smeared into repeated copies, no blank bands)
+  - the sidebar highlight is not drawn before the new page is laid out (it moves in the same repaint as the page)
   - page-switch timings (App._switch_phases) and scroll-step timings are reported
 """
 from __future__ import annotations
@@ -345,10 +346,19 @@ def main():
                 + list(zip(pages[::-1], pages[::-1][1:]))
             pairs = [(a, b) for a, b in pairs if a in refs and b in refs]
             worst, shot, times = [], 0, []
+            early = []                                 # switches whose sidebar highlight was drawn before the page
             for a, b in pairs:
                 app.show_page(a)                       # back to back, nothing in between
+                lit = []
+                app.update_idletasks = lambda: (lit.append(getattr(app.nav[b], "on", False)),
+                                                type(app).update_idletasks(app))
                 t0 = time.perf_counter()
-                app.show_page(b)
+                try:
+                    app.show_page(b)
+                finally:
+                    del app.update_idletasks
+                if any(lit):
+                    early.append(f"{a} -> {b}")
                 times.append(((time.perf_counter() - t0) * 1000, dict(getattr(app, "_switch_phases", {}))))
                 img = ImageGrab.grab(page_box())
                 if shot < limit:
@@ -361,6 +371,8 @@ def main():
             ok(not bad, f"no page switch leaves pixels of the previous page behind ({len(pairs)} back-to-back "
                         f"switches, worst {worst[0][0] * 100:.1f} % of the page area)"
                         + (f" (left behind, % of the page: {bad[:6]})" if bad else ""))
+            ok(not early, "the sidebar highlight moves in the same repaint as the page, not before it is laid out"
+                          + (f" (lit early: {early[:6]})" if early else ""))
             ms = sorted(t for t, _ in times)
             phases = {}
             for _, ph in times:
