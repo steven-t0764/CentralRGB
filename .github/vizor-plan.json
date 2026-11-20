@@ -75,6 +75,278 @@
           "priority": 10
         }
       ]
+    },
+    {
+      "id": "test-run",
+      "tasks": [
+        {
+          "key": "run-tests",
+          "agent": "bastion",
+          "title": "Run the Central RGB test suite on latest main",
+          "body": "Steven asked for a test run. Assumption: this means running the full automated test suite (and confirming the Windows CI check) on the latest main and reporting the results; no code changes.",
+          "assignment": "Branch: test-run-report (for your report only). On the latest main: python -m py_compile every .py file in the repo root and tests/, then run xvfb-run -a python -m unittest discover tests -v and keep the full output. Also look up the most recent 'windows' check run of the Build Central RGB workflow on main and note its result and link. Write docs/test-run.md with: the main commit tested, pass/fail/skip/error counts, the name and traceback of any failing test, the windows check result with its link, and a one-line plain-English verdict. Commit it on test-run-report and push. Do not fix failures in this task; list them so a follow-up can be planned. In your result, link the commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. RULES FOR THIS TASK: Start from the latest main. Do not change any source file and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules and the DDR5 once-per-boot RAM guard exactly as they are.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [],
+          "paths": [],
+          "priority": 10
+        },
+        {
+          "key": "run-tests-review",
+          "agent": "fabian",
+          "title": "Check the test-run report",
+          "body": "Independent check of Bastion's test-run report before it is accepted.",
+          "assignment": "Check out test-run-report. Re-run xvfb-run -a python -m unittest discover tests on the same main commit named in docs/test-run.md and confirm the counts and any failures match. Confirm tests/test_fan_safety.py ran and passed, that the windows check link points at that main commit, and that the branch changes only docs/test-run.md with no Claude/Anthropic attribution lines. Add a short 'Review' section to docs/test-run.md (verdict: confirmed / does not match, and why), commit on test-run-report, push, and link the commit as an immutable https://github.com/steven-t0764/CentralRGB/commit/<sha> link. RULES FOR THIS TASK: Start from the latest main. Do not change any source file and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits. Keep the fan safety rules and the DDR5 once-per-boot RAM guard exactly as they are.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "run-tests"
+          ],
+          "paths": [],
+          "priority": 10
+        }
+      ]
+    },
+    {
+      "id": "device-detection",
+      "tasks": [
+        {
+          "key": "detect-ram-mouse",
+          "agent": "gretchen",
+          "title": "Detect the RAM and the mouse on Steven's PC",
+          "body": "Steven's PC: AMD Ryzen 7 5800X3D, MSI B550-A PRO (MS-7C56), Corsair Vengeance RGB DDR4 3200 (4 x 16 GB), Razer Huntsman V2 TKL keyboard, a mouse, Windows 11; MSI Center / Mystic Light and SteelSeries GG are running (the app's own banner says so). Only the keyboard and the motherboard appear; the RAM and the mouse are missing. The earlier ram-detect fix (merged as test-ram-detect) did not solve it on the real PC.",
+          "assignment": "Branch: fix-device-detection. Find out why the Corsair Vengeance RGB DDR4 sticks and the mouse are not detected and fix detection, or, where the app cannot fix it, make the app tell the user exactly what to do. Check and report on each: OpenRGB's SMBus/RAM access on AMD B550 (piix4 bus, PawnIO driver installed and loaded, admin rights, which OpenRGB version Central RGB ships and whether it supports these sticks); MSI Center / Mystic Light holding the SMBus (does 'Close them' really stop the service and LEDKeeper, and does Central RGB rescan afterwards); SteelSeries GG / Razer Synapse holding the mouse's HID interface; whether the mouse is a model OpenRGB supports and whether Central RGB filters or drops it during enumeration (read the device list code in rgb_engine.py, device_models.py and the Devices page in central_rgb.py, and what was merged in test-ram-detect). Fix what is fixable: for example a single rescan once the blocking software is closed (never restart OpenRGB in a loop), not dropping unknown or HID-only devices, and a clear Devices-page message naming the program that blocks the RAM or mouse and what to change. Tests: extend tests/fake_openrgb.py with a fake Corsair Vengeance RGB DDR4 set and a fake mouse, and add tests/test_device_detection.py covering: RAM and mouse listed when OpenRGB reports them; the blocked-by-Mystic-Light / blocked-by-SteelSeries-GG message when they are missing and those programs run; the rescan happens once after Close them. Show the Devices page via tests/preview_user_pc.py. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "paths": [
+            "rgb_engine.py",
+            "device_models.py",
+            "central_rgb.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "detect-ram-mouse-review",
+          "agent": "fabian",
+          "title": "Review: RAM and mouse detection",
+          "body": "Independent review of detect-ram-mouse after its PR lands on main.",
+          "assignment": "Branch: review-detect-ram-mouse (for your report only). Start from the latest main, which now holds the merged detect-ram-mouse PR. Check that the RAM and mouse fixes are sound: walk through each cause listed in the PR, run tests/test_device_detection.py and tests/preview_user_pc.py, confirm the Devices-page message names the blocking program and the action, and confirm OpenRGB is never restarted in a loop. Also confirm: xvfb-run -a python -m unittest discover tests passes; fan safety rules and the DDR5 guard are unchanged; GPL headers present; nothing outside the task was restyled; CHANGELOG/README/tests README were updated; no Claude/Anthropic lines in the commits or PR. Write docs/review-device-detection.md with a verdict (ready / needs changes) and numbered findings (file or page, what is wrong, concrete fix), commit it on review-detect-ram-mouse and push. RULES FOR THIS TASK: Read-only on product code; commit only your report and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/docs/review-device-detection.md link. If you find a defect, say so plainly in the verdict so a follow-up task can be planned.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "detect-ram-mouse"
+          ],
+          "paths": [],
+          "priority": 20
+        }
+      ]
+    },
+    {
+      "id": "ddr5-lighting",
+      "tasks": [
+        {
+          "key": "ddr5-lighting",
+          "agent": "bastion",
+          "title": "Make DDR5 RGB RAM lighting work",
+          "body": "Steven's friend's DDR5 RGB RAM lighting still does not work. The DDR5 once-per-boot RAM guard lives on origin/test-ddr5 (commit 7a5ce09: rgb_engine.py, tests/ddr5_scenario.py, tests/test_ddr5_guard.py) and must not be weakened.",
+          "assignment": "Branch: fix-ddr5-lighting. Make DDR5 RGB lighting work in Central RGB. Start from the latest main. Read the guard on origin/test-ddr5 first; if DDR5 lighting needs it, bring it onto your branch byte-for-byte (cherry-pick 7a5ce09 or copy its code unchanged) and build on top of it without editing the guard's behaviour, and keep tests/test_ddr5_guard.py passing unchanged. Use only OpenRGB's supported DDR5 path: check which DDR5 RGB modules (Corsair Vengeance RGB DDR5, Kingston Fury, G.Skill Trident Z5, ...) the OpenRGB version Central RGB ships supports, whether a newer OpenRGB is needed and whether Central RGB's installer/updater can ship it, and that PawnIO/SMBus access on Intel and AMD DDR5 boards works. Never write to SPD/SMBus directly from Central RGB. Make sure detected DDR5 sticks receive effects (mode, update rate like the DDR4 one-stick-per-tick path) and that the Devices page explains clearly when a DDR5 kit is unsupported or blocked. Document the limits (supported modules, need for a reboot/once-per-boot scan, unsupported kits) in README.md. Tests: add a fake DDR5 kit to tests/fake_openrgb.py and tests/test_ddr5_lighting.py covering detection, effects being applied, the unsupported/blocked message, and that the guard still allows only one scan per boot. If DDR5 cannot be made to work safely with what OpenRGB supports, ship the clear message and docs, and say exactly what is missing in the result. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "paths": [
+            "rgb_engine.py",
+            "device_models.py",
+            "central_rgb.py",
+            "central_rgb.iss",
+            "tools/**",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "ddr5-lighting-review",
+          "agent": "fabian",
+          "title": "Review: DDR5 lighting",
+          "body": "Independent review of ddr5-lighting after its PR lands on main.",
+          "assignment": "Branch: review-ddr5-lighting (for your report only). Start from the latest main, which now holds the merged ddr5-lighting PR. Diff the guard code on main against origin/test-ddr5 commit 7a5ce09 and confirm it is unchanged in behaviour; confirm Central RGB never writes to SPD/SMBus itself and only uses OpenRGB's supported DDR5 path; check the README limits match the code; run tests/test_ddr5_guard.py and tests/test_ddr5_lighting.py. Also confirm: xvfb-run -a python -m unittest discover tests passes; fan safety rules and the DDR5 guard are unchanged; GPL headers present; nothing outside the task was restyled; CHANGELOG/README/tests README were updated; no Claude/Anthropic lines in the commits or PR. Write docs/review-ddr5-lighting.md with a verdict (ready / needs changes) and numbered findings (file or page, what is wrong, concrete fix), commit it on review-ddr5-lighting and push. RULES FOR THIS TASK: Read-only on product code; commit only your report and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/docs/review-ddr5-lighting.md link. If you find a defect, say so plainly in the verdict so a follow-up task can be planned.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "ddr5-lighting"
+          ],
+          "paths": [],
+          "priority": 20
+        }
+      ]
+    },
+    {
+      "id": "repaint-glitches",
+      "tasks": [
+        {
+          "key": "fix-repaint-black",
+          "agent": "pluto",
+          "title": "No black flashes on restore or section switch",
+          "body": "Steven recorded a video: restoring the window from the Windows taskbar paints the whole window solid black first, then every text label, card and sidebar item shows as a solid black box for a moment before its content draws. The same black-box flashing happens when switching sections (Devices, Monitor, Fans, Profiles, ...). Earlier fixes (b1ec458, fix-restore-flicker) did not solve it on the real PC.",
+          "assignment": "Branch: fix-repaint-black. Find and fix the cause of both black flashes. Start with: App._on_unmap/_on_map and the restore path in central_rgb.py; the page switch that uses fx.freeze/fx.thaw (WM_SETREDRAW + RedrawWindow with RDW_ERASE) around self._holder; tk.Frame/Canvas widgets whose bg or the window class background brush is black or unset; the DWM title-bar/glass calls and alpha changes in win_effects.py; and whether pages are destroyed and rebuilt on switch instead of being kept and raised. Fix it so the window keeps showing its last frame (or the panel colour, never black) until the new content is drawn, for example: give the root and every container an explicit P['BG']/P['CARD'] background, drop RDW_ERASE or erase with the panel brush, keep built pages and raise them instead of rebuilding, and repaint once after restore. Do not restyle anything. Verify with tests/preview.py and tests/restore_check.py under Xvfb (minimize/restore and rapid section switching), capturing frames during the restore and the switch; add tests/test_repaint.py that fails if any captured frame during restore or switch contains large near-black regions where the theme has no black, and that every container widget has a non-default background. Describe or attach the before/after frames in the PR. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "paths": [
+            "central_rgb.py",
+            "win_effects.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "fix-repaint-black-review",
+          "agent": "fabian",
+          "title": "Review: repaint black flashes",
+          "body": "Independent review of fix-repaint-black after its PR lands on main.",
+          "assignment": "Branch: review-fix-repaint-black (for your report only). Start from the latest main, which now holds the merged fix-repaint-black PR. Run tests/restore_check.py and tests/preview.py under Xvfb, look at the frames captured during restore and during switching between every section, and confirm there are no black window or black boxes; confirm the cause explained in the PR matches the code change and that tests/test_repaint.py would fail on the old code. Also confirm: xvfb-run -a python -m unittest discover tests passes; fan safety rules and the DDR5 guard are unchanged; GPL headers present; nothing outside the task was restyled; CHANGELOG/README/tests README were updated; no Claude/Anthropic lines in the commits or PR. Write docs/review-repaint.md with a verdict (ready / needs changes) and numbered findings (file or page, what is wrong, concrete fix), commit it on review-fix-repaint-black and push. RULES FOR THIS TASK: Read-only on product code; commit only your report and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/docs/review-repaint.md link. If you find a defect, say so plainly in the verdict so a follow-up task can be planned.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "fix-repaint-black"
+          ],
+          "paths": [],
+          "priority": 20
+        }
+      ]
+    },
+    {
+      "id": "theme-toggle",
+      "tasks": [
+        {
+          "key": "theme-light-toggle",
+          "agent": "gretchen",
+          "title": "Settings: Dark / Light appearance toggle",
+          "body": "Steven asked for a dark/light theme toggle on the Settings page. Today every theme in central_rgb.py THEMES is dark and ctk.set_appearance_mode('dark') is hard-coded.",
+          "assignment": "Branch: feat-theme-toggle. Add an Appearance setting with two choices, Dark and Light, as a Windows 11-style row on the Settings page next to the existing theme dropdown (reuse the existing settings row helper). Save it as settings['appearance'] = 'dark' | 'light'; a missing or unknown value means dark, so older settings files load unchanged. Give every entry in THEMES (and the default gunmetal SOLID palette) a light variant: light BG/SIDE/CARD/CARD2/LINE/TEXT/MUTED/TRACK/HOVER/SEL/BTN values, keeping each theme's accent hue but darkened enough for readable contrast on light panels (aim for WCAG AA 4.5:1 for body text; use the existing readable-text helper for text on accent colours). Apply it through _apply_theme (e.g. _apply_theme(key, appearance)) and the existing live rebuild in _switch_theme, so flipping the toggle repaints the window in place with no restart and lighting, fans, sensors and OpenRGB keep running. Set ctk.set_appearance_mode to match, and make win_effects use a light title bar in light mode (failing quietly off Windows). Tests: add tests/test_appearance.py covering: default is dark when the key is missing; every theme has a complete light palette (all SOLID keys present, valid hex); body text vs card contrast is at least 4.5:1 in light mode for every theme; toggling through the harness rebuilds the Settings page without errors and persists the value. Add a light-mode option to tests/preview.py (e.g. --appearance light) and capture Home, Lighting, Fans, Monitor and Settings in light mode. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (tests/test_fan_safety.py must keep passing) and do not touch the DDR5 once-per-boot RAM guard (test-ddr5 branch). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load (a missing appearance key means dark). Do not restyle anything outside this task: the dark look of every existing theme must stay pixel-identical. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, README.md (Settings section) and tests/README.md for any new test or preview script. Run tests/preview.py under Xvfb and attach or describe the screenshots in the PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [
+            "fix-repaint-black-review"
+          ],
+          "paths": [
+            "central_rgb.py",
+            "win_effects.py",
+            "fps_overlay.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "theme-light-toggle-review",
+          "agent": "fabian",
+          "title": "Review: Dark / Light appearance toggle",
+          "body": "Independent review of the theme-light-toggle change after it lands on main.",
+          "assignment": "Branch: review-theme-toggle (for your report only). Start from the latest main, which now holds the merged theme-light-toggle PR. Check: the Settings toggle switches live between Dark and Light with no restart and is remembered after reopening; an old settings.json without an appearance key opens in Dark exactly as before; every existing dark theme looks unchanged (compare tests/preview.py shots against the commit before the merge); in Light mode every page (Home, Lighting, Devices, Fans, Monitor, Overlay, Profiles, Settings), dialogs, dropdowns, scrollbars, charts, LED previews and the FPS overlay are readable with no leftover dark panels or invisible text; fan safety tests and the DDR5 guard are untouched; no Claude/Anthropic lines in the commits or PR; CHANGELOG/README/tests README were updated. Run xvfb-run -a python -m unittest discover tests and xvfb-run -a python tests/preview.py in both modes. Write docs/review-theme-toggle.md listing every problem found as a numbered item with page, screenshot name and a concrete fix, commit it on review-theme-toggle and push. RULES FOR THIS TASK: Read-only on product code; commit only your report. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Do not open a pull request for the report. In your result give a verdict (ready / needs changes) with reasons and link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/<path> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "theme-light-toggle"
+          ],
+          "paths": [],
+          "priority": 20
+        },
+        {
+          "key": "theme-light-polish",
+          "agent": "pluto",
+          "title": "Light mode: fix the review findings and cover the remaining surfaces",
+          "body": "Follow-up to the Dark / Light toggle: fix everything Fabian's review (docs/review-theme-toggle.md on the review-theme-toggle branch) lists as needing changes.",
+          "assignment": "Branch: fix-light-mode-polish. Read docs/review-theme-toggle.md on origin/review-theme-toggle and fix every numbered finding. Also make sure the surfaces that draw their own colours follow the appearance setting: the FPS overlay window (fps_overlay.py), the canvas charts and LED strips, the sidebar nav pills, tooltips, messageboxes/ttk styles (_ttk_style) and the window fade during _switch_theme (no dark flash when switching to Light). Do not change dark-mode colours. If the review found nothing to fix, check those surfaces anyway, fix what is wrong, and say so plainly in the PR. Extend tests/test_appearance.py with a test for each fix you make, and refresh the light-mode screenshots with tests/preview.py. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (tests/test_fan_safety.py must keep passing) and do not touch the DDR5 once-per-boot RAM guard (test-ddr5 branch). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load (a missing appearance key means dark). Do not restyle anything outside this task: the dark look of every existing theme must stay pixel-identical. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, README.md (Settings section) and tests/README.md for any new test or preview script. Run tests/preview.py under Xvfb and attach or describe the screenshots in the PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [
+            "theme-light-toggle-review"
+          ],
+          "paths": [
+            "central_rgb.py",
+            "win_effects.py",
+            "fps_overlay.py",
+            "tests/**",
+            "CHANGELOG.md",
+            "README.md",
+            "CONTRIBUTING.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "theme-light-polish-review",
+          "agent": "fabian",
+          "title": "Review: light mode polish",
+          "body": "Final independent check of the Dark / Light toggle after the polish PR lands on main.",
+          "assignment": "Branch: review-theme-toggle (for your report only). Start from the latest main, which now holds the merged theme-light-polish PR. Re-check every finding in docs/review-theme-toggle.md and mark each fixed / not fixed, then repeat the full check from the first review (live toggle, old settings load in Dark, dark themes unchanged, every page and the FPS overlay readable in Light, tests pass, fan safety and DDR5 guard untouched, docs updated, no Claude/Anthropic lines). Add a 'Second pass' section to docs/review-theme-toggle.md with the results and an overall verdict, commit it on review-theme-toggle and push. RULES FOR THIS TASK: Read-only on product code; commit only your report. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Do not open a pull request for the report. In your result give a verdict (ready / needs changes) with reasons and link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/<path> link.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "theme-light-polish"
+          ],
+          "paths": [],
+          "priority": 20
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "tasks": [
+        {
+          "key": "vizor-report",
+          "agent": "bastion",
+          "title": "Brief report: what works and what doesn't",
+          "body": "Final short status report for Steven after every other phase.",
+          "assignment": "Branch: vizor-report. Write docs/vizor-report.md: a BRIEF report, two short lists, 'Works now' and 'Still not working', one line per item, each with a link to the merged PR (or the review report) that shows it. Cover the bug fixes, the test run, device detection (RAM, mouse), DDR5 lighting, the repaint black flashes and the Dark/Light toggle, using the merged PRs, Fabian's review reports and docs/test-run.md. No long detail, no code. Add a line under ## Unreleased in CHANGELOG.md pointing to the report. RULES FOR THIS TASK: Follow CLAUDE.md. Start from the latest main and open a pull request into main from the branch named above; it merges itself once the windows check passes, so if windows fails read the log, fix it on the same branch and push again. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, and never add Co-Authored-By, Claude-Session, 'Generated with Claude Code' or any Claude/Anthropic line to commits or the PR. Keep the fan safety rules exactly as they are (fans never below 20%, pumps never below 70%, every fan 100% at 90 C CPU or GPU, closing the app hands fans back to the BIOS; tests/test_fan_safety.py must keep passing) and do not weaken or edit the DDR5 once-per-boot RAM guard (origin/test-ddr5, commit 7a5ce09). Keep the GPL-3.0 header on every source file. Windows-only code must fail quietly elsewhere. Settings files from older versions must still load. Do not restyle anything outside this task. Before pushing: python -m py_compile every changed .py and xvfb-run -a python -m unittest discover tests; both must pass. Same PR: a line under ## Unreleased in CHANGELOG.md, and README.md / CONTRIBUTING.md / tests/README.md wherever behaviour, settings, pages or tests changed. For anything visible, run tests/preview.py (or tests/preview_user_pc.py) under Xvfb and attach or describe the screenshots in the PR. In your result say plainly what works now, what could not be verified without the real PC, and link the merged PR.",
+          "gate": "merge",
+          "checks": [
+            "windows"
+          ],
+          "dependsOn": [],
+          "paths": [
+            "docs/vizor-report.md",
+            "CHANGELOG.md"
+          ],
+          "priority": 20
+        },
+        {
+          "key": "vizor-report-review",
+          "agent": "fabian",
+          "title": "Review: final report",
+          "body": "Independent review of vizor-report after its PR lands on main.",
+          "assignment": "Branch: review-vizor-report (for your report only). Start from the latest main, which now holds the merged vizor-report PR. Check every line of docs/vizor-report.md against the merged PRs and review reports: each claim is true, each link works and points to the right PR, and nothing known to be broken is listed as working. Also confirm: xvfb-run -a python -m unittest discover tests passes; fan safety rules and the DDR5 guard are unchanged; GPL headers present; nothing outside the task was restyled; CHANGELOG/README/tests README were updated; no Claude/Anthropic lines in the commits or PR. Write docs/review-vizor-report.md with a verdict (ready / needs changes) and numbered findings (file or page, what is wrong, concrete fix), commit it on review-vizor-report and push. RULES FOR THIS TASK: Read-only on product code; commit only your report and do not open a pull request. Commit as the user: git -c user.name=\"steven-t0764\" -c user.email=\"323795143+steven-t0764@users.noreply.github.com\" commit, no Claude/Anthropic lines. Link the report as an immutable https://github.com/steven-t0764/CentralRGB/blob/<sha>/docs/review-vizor-report.md link. If you find a defect, say so plainly in the verdict so a follow-up task can be planned.",
+          "gate": "review",
+          "checks": [],
+          "dependsOn": [
+            "vizor-report"
+          ],
+          "paths": [],
+          "priority": 20
+        }
+      ]
     }
   ]
 }
