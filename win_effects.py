@@ -7,7 +7,7 @@
 # GNU General Public License for more details: <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Windows window styling: dark title bar and (Windows 11) title bar colours that match the app, plus the
+Windows window styling: dark (or light) title bar and (Windows 11) title bar colours that match the app, plus the
 helpers that keep the window from flashing black while Tk draws (thaw, OPAQUE, panel_background).
 The glass and opacity helpers below are no longer used by the app. Safe no-ops on other systems / older Windows.
 
@@ -58,13 +58,15 @@ def _dwm_set(hwnd, attr, value: int):
     return ctypes.windll.dwmapi.DwmSetWindowAttribute(wintypes.HWND(hwnd), attr, ctypes.byref(v), ctypes.sizeof(v))
 
 
-def dark_titlebar(root):
+def dark_titlebar(root, dark: bool = True):
+    """Dark title bar (or, with dark=False, the light one for the app's Light appearance)."""
     if not IS_WIN:
         return
     try:
         h = _hwnd(root)
-        if _dwm_set(h, 20, 1) != 0:      # DWMWA_USE_IMMERSIVE_DARK_MODE
-            _dwm_set(h, 19, 1)           # older Win10 builds
+        on = 1 if dark else 0
+        if _dwm_set(h, 20, on) != 0:     # DWMWA_USE_IMMERSIVE_DARK_MODE
+            _dwm_set(h, 19, on)          # older Win10 builds
         if win_build() >= 22000:
             _dwm_set(h, 33, 2)           # DWMWA_WINDOW_CORNER_PREFERENCE = round
     except Exception:

@@ -111,6 +111,79 @@ THEMES = {
 }
 DEFAULT_THEME = "gunmetal"
 
+# ----------------------------------------------------------------------------- appearance (dark / light)
+# Settings > Appearance picks Dark (every theme exactly as above) or Light. Light mode keeps each theme's
+# tint and accent hue on Windows 11-style light panels; LIGHT_THEMES (built below) has the full palette.
+APPEARANCES = ("dark", "light")
+DEFAULT_APPEARANCE = "dark"
+# colours that are not part of a theme: status colours, the amber warning bars and the delete hover
+_DARK_EXTRA = dict(OK=OK, WARN=WARN, BAD=BAD, INFO=INFO, WARN_BG="#2a2112", WARN_TEXT="#ffd166",
+                   ON_STATUS="#1a1a1a", DEL_HOVER="#4a1f28")
+_LIGHT_EXTRA = dict(OK="#0f7b0f", WARN="#9d5d00", BAD="#c42b1c", INFO="#005fb8", WARN_BG="#fff4ce",
+                    WARN_TEXT="#6b4100", ON_STATUS="#ffffff", DEL_HOVER="#f6d6da")
+WARN_BG, WARN_TEXT, ON_STATUS, DEL_HOVER = (_DARK_EXTRA[k] for k in ("WARN_BG", "WARN_TEXT", "ON_STATUS", "DEL_HOVER"))
+
+
+def appearance_of(value) -> str:
+    """'light' or 'dark'; anything missing or unknown (older settings files) means dark."""
+    return value if value in APPEARANCES else DEFAULT_APPEARANCE
+
+
+def _lum(hex_color) -> float:
+    """WCAG relative luminance."""
+    def ch(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (ch(c) for c in hex2rgb(hex_color))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(a, b) -> float:
+    """WCAG contrast ratio between two colours (1 to 21)."""
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def darken_for(hex_color, bg, ratio=4.5) -> str:
+    """The same hue, darkened only as far as needed to reach `ratio` contrast against `bg`."""
+    r, g, b = (c / 255 for c in hex2rgb(hex_color))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    out = hex_color
+    while contrast(out, bg) < ratio and l > 0:
+        l = max(0.0, l - 0.01)
+        out = hexcol([c * 255 for c in colorsys.hls_to_rgb(h, l, s)])
+    return out
+
+
+def _light_palette(t) -> dict:
+    """Light variant of a theme: near-white panels with a trace of the theme's tint, near-black text and the
+    accent colours darkened (same hue) until they read on white."""
+    dark = {**_BASE_SOLID, **t} if "BG" in t else dict(_BASE_SOLID)
+    acc = t.get("accent", _BASE_COLORS[0])
+    tint = hex2rgb(dark["CARD2"])                   # the theme's own panel tint
+
+    def tinted(base, amount):
+        # the tint's hue at low strength: push the base colour toward the tint's direction from grey
+        g = sum(tint) / 3
+        return hexcol([min(255, max(0, c + (x - g) * amount)) for c, x in zip(hex2rgb(base), tint)])
+    s = dict(BG=tinted("#f3f3f3", 0.9), SIDE=tinted("#eeeeee", 0.9), CARD=tinted("#fcfcfc", 0.5),
+             CARD2=tinted("#f5f5f5", 0.7), LINE=tinted("#e0e0e0", 1.0), TEXT=tinted("#1b1b1b", 0.6),
+             MUTED=tinted("#555555", 1.0), FAINT=tinted("#666666", 1.0), TRACK=tinted("#d6d6d6", 1.0),
+             HOVER=tinted("#f9f9f9", 0.6), BTN=tinted("#fdfdfd", 0.4), BTN_HOVER=tinted("#f3f3f3", 0.6),
+             BTN_LINE=tinted("#d9d9d9", 1.0))
+    card = s["CARD"]
+    s["accent"] = darken_for(acc, card, 4.5)
+    s["SEL"] = hexcol(mix(hex2rgb(s["BG"]), hex2rgb(s["accent"]), 0.10))
+    base = _BASE_COLORS
+    for i, k in enumerate(("PURPLE", "TEAL", "BLUE", "PINK", "VIOLET"), start=1):
+        s[k] = darken_for(t.get(k, base[i]), card, 3.0)
+    if t.get("border"):
+        s["border"] = darken_for(hexcol(mix(hex2rgb(t["border"]), hex2rgb(s["LINE"]), 0.4)), s["BG"], 1.6)
+        s["border_w"] = t.get("border_w", 1)
+    if t.get("chrome"):
+        s["chrome"] = "#2b2d31"                     # Gunmetal: dark buttons and sliders instead of off-white
+    return s
+
 
 def _saved_theme() -> str:
     try:
@@ -121,9 +194,36 @@ def _saved_theme() -> str:
         return DEFAULT_THEME
 
 
-def _apply_theme(key: str):
-    """Swap the module colours for a theme (widgets made afterwards use them)."""
-    global CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W, DEFAULT_ACCENT
+def _saved_appearance() -> str:
+    try:
+        import json
+        return appearance_of(json.loads((eng.settings_dir() / "settings.json").read_text(encoding="utf-8"))
+                             .get("appearance"))
+    except Exception:
+        return DEFAULT_APPEARANCE
+
+
+def _apply_extra(extra):
+    global OK, WARN, BAD, INFO, WARN_BG, WARN_TEXT, ON_STATUS, DEL_HOVER
+    OK, WARN, BAD, INFO = extra["OK"], extra["WARN"], extra["BAD"], extra["INFO"]
+    WARN_BG, WARN_TEXT, ON_STATUS, DEL_HOVER = extra["WARN_BG"], extra["WARN_TEXT"], extra["ON_STATUS"], extra["DEL_HOVER"]
+
+
+def _apply_theme(key: str, appearance: str = DEFAULT_APPEARANCE):
+    """Swap the module colours for a theme in Dark or Light appearance (widgets made afterwards use them)."""
+    global CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W, DEFAULT_ACCENT, APPEARANCE
+    APPEARANCE = appearance_of(appearance)
+    if APPEARANCE == "light":
+        s = LIGHT_THEMES.get(key) or LIGHT_THEMES[DEFAULT_THEME]
+        SOLID.update({k: s[k] for k in SOLID})
+        P.update(SOLID)
+        CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET = s["accent"], s["PURPLE"], s["TEAL"], s["BLUE"], s["PINK"], s["VIOLET"]
+        GRAD = (PINK, VIOLET, CYAN)
+        CARD_BORDER, CARD_BORDER_W = s.get("border"), s.get("border_w", 0)
+        DEFAULT_ACCENT = s.get("chrome", CYAN)
+        _apply_extra(_LIGHT_EXTRA)
+        return
+    _apply_extra(_DARK_EXTRA)
     t = THEMES.get(key) or THEMES[DEFAULT_THEME]
     if "BG" not in t:                         # the default theme: the original values exactly
         SOLID.update(_BASE_SOLID)
@@ -149,14 +249,16 @@ def _apply_theme(key: str):
 
 
 def windows_accent(fallback="#60cdff") -> str:
-    """The user's Windows accent colour, in the lighter shade Windows 11 uses for controls in dark mode."""
+    """The user's Windows accent colour, in the shade Windows 11 uses for controls: a lighter one in dark mode,
+    a darker one in light mode."""
     if not eng.IS_WIN:
         return fallback
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent") as k:
             pal, _ = winreg.QueryValueEx(k, "AccentPalette")      # 8 RGBA shades, lightest first
-        r, g, b = pal[4], pal[5], pal[6]                           # shade 1 = "Light 2"
+        i = 16 if APPEARANCE == "light" else 4                       # shade 4 = "Dark 1", shade 1 = "Light 2"
+        r, g, b = pal[i], pal[i + 1], pal[i + 2]
         return "#%02x%02x%02x" % (r, g, b)
     except Exception:
         return fallback
@@ -216,8 +318,10 @@ def on_color(hex_color) -> str:
 _BASE_SOLID = dict(SOLID)                 # the default theme, so it can be switched back to live
 _BASE_COLORS = (CYAN, PURPLE, TEAL, BLUE, PINK, VIOLET, GRAD, CARD_BORDER, CARD_BORDER_W)
 DEFAULT_ACCENT = CYAN
+LIGHT_THEMES = {k: _light_palette(t) for k, t in THEMES.items()}
 THEME = _saved_theme()
-_apply_theme(THEME)
+APPEARANCE = _saved_appearance()
+_apply_theme(THEME, APPEARANCE)
 
 
 def lerp_grad(t, stops=GRAD):
@@ -1860,7 +1964,7 @@ class App(ctk.CTk):
         eng.CUSTOM_PRESETS.clear()
         eng.CUSTOM_PRESETS.update(self.settings.data.get("custom_presets", {}))
         P.update(SOLID)
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode(APPEARANCE)
         self.splash_proc = None
         if not background and selftest is None and self.settings.data.get("animations", True) and not eng.is_onefile():
             try:
@@ -2301,7 +2405,7 @@ class App(ctk.CTk):
             self.after(16, lambda: self._fade_in(a))
 
     def _window_effects(self):
-        fx.dark_titlebar(self)
+        fx.dark_titlebar(self, APPEARANCE != "light")      # light mode: light title bar
         fx.titlebar_colors(self, P["BG"], P["LINE"], P["TEXT"])   # seamless title bar on Windows 11
         fx.panel_background(self, P["BG"])     # anything Windows clears before Tk draws shows the panel colour
 
@@ -2852,22 +2956,23 @@ class App(ctk.CTk):
         self.dev_summary.pack(side="right")
         yield
         # warning when vendor RGB apps are holding the hardware, with a button to close them
-        self.conflict_bar = SmoothFrame(p, fg_color="#2a2112", corner_radius=8)
+        self.conflict_bar = SmoothFrame(p, fg_color=WARN_BG, corner_radius=8)
         cb_txt = ctk.CTkFrame(self.conflict_bar, fg_color="transparent")
         self.conflict_btn = ctk.CTkButton(self.conflict_bar, text="Close them", width=110, height=32, corner_radius=16,
-                                          font=F(13, "bold"), fg_color=WARN, hover_color="#ffd166", text_color="#1a1a1a",
+                                          font=F(13, "bold"), fg_color=WARN, hover_color=WARN_TEXT if APPEARANCE == "light" else "#ffd166",
+                                          text_color=ON_STATUS,
                                           command=self._close_conflicts)
         self.conflict_btn.pack(side="right", padx=14, pady=12)
         cb_txt.pack(side="left", fill="x", expand=True, padx=16, pady=10)
-        self.conflict_title = self.label(cb_txt, "", 13, "bold", anchor="w", color="#ffd166")
+        self.conflict_title = self.label(cb_txt, "", 13, "bold", anchor="w", color=WARN_TEXT)
         self.conflict_title.pack(fill="x")
         self.label(cb_txt, "They can hide devices from Central RGB (on MSI boards, Mystic Light holds the motherboard "
                            "and RAM lighting).", 12, color=P["MUTED"], anchor="w", justify="left",
                    wraplength=760).pack(fill="x")
         yield
         # warning when RGB RAM or an RGB mouse is installed but OpenRGB didn't report it, with the exact reason(s)
-        self.missing_bar = SmoothFrame(p, fg_color="#2a2112", corner_radius=8)
-        self.missing_title = self.label(self.missing_bar, "", 13, "bold", anchor="w", color="#ffd166")
+        self.missing_bar = SmoothFrame(p, fg_color=WARN_BG, corner_radius=8)
+        self.missing_title = self.label(self.missing_bar, "", 13, "bold", anchor="w", color=WARN_TEXT)
         self.missing_title.pack(fill="x", padx=16, pady=(10, 0))
         self.missing_text = self.label(self.missing_bar, "", 12, color=P["MUTED"], anchor="w", justify="left",
                                        wraplength=780)
@@ -3188,10 +3293,10 @@ class App(ctk.CTk):
         yield
         self.mon_seg.set("Overview")
         yield
-        self.pawn_bar = SmoothFrame(p, fg_color="#2a2112", corner_radius=8)
+        self.pawn_bar = SmoothFrame(p, fg_color=WARN_BG, corner_radius=8)
         self.primary(self.pawn_bar, "Install PawnIO", self._install_pawnio, height=32, width=140).pack(side="right", padx=14, pady=12)
         self.label(self.pawn_bar, "CPU temperatures (and fan control) need the free PawnIO driver, which isn't installed.",
-                   13, color="#ffd166", anchor="w").pack(side="left", fill="x", expand=True, padx=16, pady=12)
+                   13, color=WARN_TEXT, anchor="w").pack(side="left", fill="x", expand=True, padx=16, pady=12)
         if eng.IS_WIN and not eng.pawnio_installed():
             self.pawn_bar.pack(fill="x", pady=(0, 12))
         yield
@@ -3806,7 +3911,7 @@ class App(ctk.CTk):
             r = ctk.CTkFrame(c, fg_color="transparent")
             r.pack(fill="x", padx=16, pady=(8, 12))
             self.secondary(r, "Load", lambda n=name: self._load_profile(n), height=28, font=F(12)).pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(r, text="✕", width=28, height=28, corner_radius=6, fg_color=P["BTN"], hover_color="#4a1f28",
+            ctk.CTkButton(r, text="✕", width=28, height=28, corner_radius=6, fg_color=P["BTN"], hover_color=DEL_HOVER,
                           text_color=P["MUTED"], command=lambda n=name: self._delete_profile(n)).pack(side="left", padx=(6, 0))
 
     # ---------------------------------------------------------------- Settings
@@ -3857,6 +3962,19 @@ class App(ctk.CTk):
             return self.theme_menu
         yield
         self.setting_row(body, "\ue771", "◑", "Theme", "The look of the whole app, applied straight away", theme)
+        yield
+        def appearance(row):
+            self.appearance_seg = PillSwitcher(row, values=["Dark", "Light"], command=self._set_appearance,
+                                               height=32, font=F(13), corner_radius=6, fg_color=P["CARD2"],
+                                               unselected_color=P["CARD2"], unselected_hover_color=P["BTN_HOVER"],
+                                               selected_color=self.accent, selected_hover_color=self.accent,
+                                               text_color=P["TEXT"])
+            self.appearance_seg.set(appearance_of(self.settings.data.get("appearance")).capitalize())
+            self.accent_widgets.append(("seg", self.appearance_seg))
+            return self.appearance_seg
+        yield
+        self.setting_row(body, "\ue706", "☼", "Appearance", "Dark or light panels for the theme, applied straight away",
+                         appearance)
         yield
         def accent(row):
             self.accent_seg = PillSwitcher(row, values=["Theme", "Windows", "Match lighting"], command=self._set_accent_mode,
@@ -3955,7 +4073,7 @@ class App(ctk.CTk):
             g, col = icons.get(level, ("•", P["MUTED"]))
             r = SmoothFrame(self.check_list, fg_color=P["CARD"], corner_radius=6)
             r.pack(fill="x", pady=2)
-            ctk.CTkLabel(r, text=g, width=22, height=22, corner_radius=11, fg_color=col, text_color="#1a1a1a",
+            ctk.CTkLabel(r, text=g, width=22, height=22, corner_radius=11, fg_color=col, text_color=ON_STATUS,
                          font=F(12, "bold")).pack(side="left", padx=(18, 14), pady=12)
             if "PawnIO driver not found" in msg and eng.IS_WIN:
                 self.primary(r, "Install PawnIO", self._install_pawnio, height=32, width=140).pack(side="right", padx=14)
@@ -3994,10 +4112,18 @@ class App(ctk.CTk):
         if key != THEME:
             self.after(60, lambda: self._switch_theme(key))   # after the dropdown has closed
 
-    def _switch_theme(self, key):
-        """Apply a theme live: the window fades out, is rebuilt in the new colours and fades back in.
-        Lighting, fan control, sensors and OpenRGB keep running untouched (no restart, no re-detection)."""
+    def _set_appearance(self, choice):
+        mode = appearance_of(str(choice).lower())
+        self.settings["appearance"] = mode
+        if mode != APPEARANCE:
+            self.after(60, lambda: self._switch_theme(THEME, mode))
+
+    def _switch_theme(self, key, appearance=None):
+        """Apply a theme (and Dark / Light appearance) live: the window fades out, is rebuilt in the new colours
+        and fades back in. Lighting, fan control, sensors and OpenRGB keep running untouched (no restart, no
+        re-detection)."""
         global THEME
+        appearance = appearance_of(appearance or APPEARANCE)
         t0 = time.perf_counter()
         for a in (0.7, 0.4, 0.15, 0.0):                         # quick fade out
             try:
@@ -4006,8 +4132,9 @@ class App(ctk.CTk):
             except tk.TclError:
                 break
             time.sleep(0.012)
-        _apply_theme(key)
+        _apply_theme(key, appearance)
         THEME = key
+        ctk.set_appearance_mode(appearance)
         page = self.current_page
         rows = list(self.device_rows)
         if self.overlay_win is not None:
@@ -4160,6 +4287,9 @@ class App(ctk.CTk):
             acc = windows_accent(CYAN)
         elif not match or s < 0.25:
             acc = DEFAULT_ACCENT
+        elif APPEARANCE == "light":
+            # light mode: the same hue, dark enough to read on the light panels
+            acc = darken_for(hexcol([c * 255 for c in colorsys.hsv_to_rgb(h, min(s, 0.85), 0.75)]), P["CARD"], 4.5)
         else:
             # a light, softened shade like Windows' own dark-mode accents
             acc = hexcol([c * 255 for c in colorsys.hsv_to_rgb(h, min(s, 0.55), 1.0)])

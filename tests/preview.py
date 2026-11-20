@@ -9,7 +9,7 @@
 """
 Run Central RGB on simulated hardware and save a screenshot of every page.
 
-    python tests/preview.py [output folder] [--pages Home,Fans] [--warmup 8] [--keep-open]
+    python tests/preview.py [output folder] [--pages Home,Fans] [--warmup 8] [--keep-open] [--appearance light]
 
 On Linux with no display, wrap it:  xvfb-run -a -s "-screen 0 1300x840x24" python3 tests/preview.py
 On Windows it also works and leaves your real settings alone (a temporary settings folder is used).
@@ -58,16 +58,23 @@ def _demo_stats(hwm):
     hwm.HardwareMonitor._basic_metrics = demo
 
 
-def start_app(tmp: Path, effect: str | None = None, real_stats: bool = False):
+def start_app(tmp: Path, effect: str | None = None, real_stats: bool = False, appearance: str | None = None,
+              theme: str | None = None):
     """Build the real app on simulated hardware, with its settings in the temporary folder `tmp`.
-    Returns (central_rgb module, App). Also used by restore_check.py."""
+    Returns (central_rgb module, App). Also used by restore_check.py and test_appearance.py."""
     os.environ["APPDATA"] = str(tmp / "roaming")          # fresh settings, never the real ones
     os.environ["LOCALAPPDATA"] = str(tmp / "local")
+    seed = {}
     if effect:                                          # seed the saved lighting state
+        seed["state"] = {"effect": effect, "color": [150, 0, 255], "brightness": 100, "speed": 50}
+    if appearance:                                      # "dark" or "light"
+        seed["appearance"] = appearance
+    if theme:
+        seed["theme"] = theme
+    if seed:
         import json
         (tmp / "roaming" / "CentralRGB").mkdir(parents=True, exist_ok=True)
-        (tmp / "roaming" / "CentralRGB" / "settings.json").write_text(json.dumps(
-            {"state": {"effect": effect, "color": [150, 0, 255], "brightness": 100, "speed": 50}}))
+        (tmp / "roaming" / "CentralRGB" / "settings.json").write_text(json.dumps(seed))
 
     import fake_openrgb
     import rgb_engine as eng
@@ -96,12 +103,14 @@ def main():
     ap.add_argument("--effect", help="start with this lighting effect, e.g. Nebula or \"Rainbow Wave\"")
     ap.add_argument("--real-stats", action="store_true",
                     help="show this machine's real CPU/RAM/network/disk use instead of demo values")
+    ap.add_argument("--appearance", choices=["dark", "light"], help="start in Dark or Light appearance")
+    ap.add_argument("--theme", help="start with this theme key, e.g. gunmetal or cyber_cyan")
     args = ap.parse_args()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix="centralrgb-preview-"))
-    app_mod, app = start_app(tmp, args.effect, args.real_stats)
+    app_mod, app = start_app(tmp, args.effect, args.real_stats, args.appearance, args.theme)
 
     pages = [n for n, *_ in app_mod.NAV]
     if args.pages:
