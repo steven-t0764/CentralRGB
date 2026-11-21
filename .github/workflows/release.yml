@@ -80,3 +80,4 @@ jobs:
       tag: ${{ needs.decide.outputs.tag }}
     permissions:
       contents: write
+      actions: write
