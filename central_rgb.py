@@ -1127,6 +1127,7 @@ class LedStrip(tk.Canvas):
         self._img = self._photo = None
         self._size = None
         self._last = None
+        self._shown = None                                       # the colours in the picture now
         self.bind("<Configure>", lambda e=None: self._layout())
 
     def _layout(self):
@@ -1150,6 +1151,7 @@ class LedStrip(tk.Canvas):
         self.delete("all")
         self._photo = ImageTk.PhotoImage(self._bg)
         self.create_image(0, 0, image=self._photo, anchor="nw")
+        self._shown = None
         if self._last is not None:                               # resized: redraw what was last shown
             self.show(self._last)
 
@@ -1157,6 +1159,10 @@ class LedStrip(tk.Canvas):
         self._last = colors
         if self._photo is None:
             return
+        key = tuple(tuple(c) for c in colors or ())
+        if key == self._shown:                                   # same colours as the picture: nothing to do
+            return
+        self._shown = key
         w, h = self._size
         dim = mix(self.bgc, (60, 64, 76), 0.5)
         if APPEARANCE == "light":                                # dimmed LEDs fade into the panel, not to black
@@ -1657,6 +1663,7 @@ class EffectTile(tk.Canvas):
         self.name, self.big, self.bars, self.selected = name, big, [], False
         self.accent, self._bg = CYAN, None
         self.n = self.COLS
+        self._colors, self._fills = None, []          # last colours shown, and each bar's fill now
         self.bind("<Configure>", lambda e=None: self._layout())
         self.bind("<Button-1>", lambda e=None: on_click(name))
 
@@ -1671,6 +1678,7 @@ class EffectTile(tk.Canvas):
         step = (x1 - x0) / self.COLS
         self.bars = [self.create_rectangle(x0 + i * step, 4, x0 + (i + 1) * step + 1, 7, width=0, fill=P["TRACK"])
                      for i in range(self.COLS)]
+        self._fills = [P["TRACK"]] * self.COLS
         y = self.h - 30 if self.big else self.h / 2 + 2
         icon = EFFECT_ICONS.get(self.name, "•")
         if self.big:
@@ -1680,19 +1688,28 @@ class EffectTile(tk.Canvas):
                          font=(FONT_SEMI if on or self.big else FONT, 11 if self.big else 10))
         self.sub = self.create_text(14, y + 19, text="", anchor="w", fill=P["MUTED"], font=(FONT, 8))
         self._sub()
+        if self._colors is not None:                                # laid out again: put the colours back
+            self.show(self._colors)
 
     def _sub(self):
         if hasattr(self, "sub"):
             self.itemconfigure(self.sub, text=EFFECT_INFO.get(self.name, "") if (self.selected and self.big) else "")
 
     def show(self, colors):
+        self._colors = colors
+        if not colors:
+            return
+        light = APPEARANCE == "light"
+        card2 = hex2rgb(P["CARD2"]) if light else None
         for i, it in enumerate(self.bars):
             c = colors[int(i * len(colors) / len(self.bars))]
-            if APPEARANCE == "light":                         # dimmed colours fade into the tile, not to black
-                fill = hexcol(led_on(c, hex2rgb(P["CARD2"]))) if max(c) > 0 else P["TRACK"]
+            if light:                                         # dimmed colours fade into the tile, not to black
+                fill = hexcol(led_on(c, card2)) if max(c) > 0 else P["TRACK"]
             else:
                 fill = hexcol(c) if max(c) > 10 else P["TRACK"]
-            self.itemconfigure(it, fill=fill)
+            if fill != self._fills[i]:                        # only bars whose colour changed are touched
+                self._fills[i] = fill
+                self.itemconfigure(it, fill=fill)
 
     def select(self, on, accent):
         if (on, accent) != (self.selected, self.accent):
@@ -2000,6 +2017,8 @@ QUEUE_BATCH = 200         # queue items handled per _poll_queue tick, so a burst
 LOG_PREFIX = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}
 OVERLAY_FAST_MS = 250     # overlay on, or its page open: follow the game this often
 OVERLAY_IDLE_MS = 1000    # overlay off and its page not showing: only check whether that changed
+ANIM_MS = 40              # the live previews' frame time (25 fps)
+TILE_EVERY = 2            # effect tiles redraw every 2nd frame (12.5 fps), not all of them on the same frame
 
 
 class App(ctk.CTk):
@@ -4416,36 +4435,79 @@ class App(ctk.CTk):
         if self._hidden():                       # in the tray or minimized: draw nothing
             self.after(250, self._animate)
             return
-        t = time.time()
-        st = self._current_state()
         try:
-            if self.current_page == "Lighting":
-                self.preview.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], self.preview.n, t))
-                tw = max(self.preview_track.winfo_width(), 20)
-                self.preview_track.delete("all")
-                self.preview_track.create_rectangle(0, 1, tw, 3, fill=P["TRACK"], width=0)
-                pos = (t * (0.05 + st["speed"] / 400)) % 1.0
-                self.preview_track.create_rectangle(0, 1, tw * pos, 3, fill=self.accent, width=0)
-            if self.current_page == "Home":
-                self.home_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 48, t))
-                self.home_light_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 24, t))
-            elif self.current_page == "Lighting":
-                for name, tile in self.tiles.items():
-                    if isinstance(tile, EffectTile):
-                        tile.show(eng.compute_colors(name, self.color, 100, 50, tile.n, t))
-            elif self.current_page == "Devices":
-                ex = set(self.settings["excluded"])
-                for i, card in enumerate(self.device_cards):
-                    ds = self._state_for(card.key, self.settings["state"])
-                    card.strip.show([(0, 0, 0)] if card.key in ex else eng.compute_colors(
-                        ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"], card.strip.n, t, offset=i * 0.07))
-                if self.editor is not None:
-                    ds = self._state_for(self.editor_key, self.settings["state"])
-                    self.editor_art.show(eng.compute_colors(ds["effect"], ds["color"], max(ds["brightness"], 8),
-                                                            ds["speed"], max(1, len(self.editor_art.leds)), t))
+            self._draw_frame(time.time())
         except tk.TclError:
             pass
-        self.after(40, self._animate)
+        self.after(ANIM_MS, self._animate)
+
+    def _draw_frame(self, t):
+        """One frame of the live previews on the page showing. A preview is only redrawn when its effect moves
+        (effect tiles at half the frame rate, staggered), or when what it shows changed. Still effects, and
+        every effect while animations are off in Settings, are drawn once and then left alone."""
+        frame = self._anim_frame = getattr(self, "_anim_frame", 0) + 1
+        live = self.settings.data.get("animations", True)
+        page = self.current_page
+        memo = {}                                     # one compute_colors per set of arguments per frame
+
+        def draw(widget, effect, color, bright, speed, n, offset=0.0, every=1, phase=0):
+            custom = eng.CUSTOM_PRESETS.get(effect)
+            sig = (effect, tuple(color), bright, speed, n, offset, repr(custom) if custom else None)
+            if sig == getattr(widget, "_anim_sig", None):
+                if not (live and eng.is_animated(eng.RENAMED.get(effect, effect))) or (frame + phase) % every:
+                    return False
+            widget._anim_sig = sig
+            key = sig[:6]
+            if key not in memo:
+                memo[key] = eng.compute_colors(effect, color, bright, speed, n, t, offset=offset)
+            widget.show(memo[key])
+            return True
+
+        if page in ("Home", "Lighting"):
+            st = self._current_state()
+            eff, col, bright, speed = st["effect"], st["color"], max(st["brightness"], 8), st["speed"]
+            if page == "Home":
+                draw(self.home_strip, eff, col, bright, speed, 48)
+                if self.home_light_strip.winfo_ismapped():        # not on screen: nothing to draw
+                    draw(self.home_light_strip, eff, col, bright, speed, 24)
+            else:
+                if draw(self.preview, eff, col, bright, speed, self.preview.n):
+                    self._move_track(t, speed)
+                for i, (name, tile) in enumerate(self.tiles.items()):
+                    if isinstance(tile, EffectTile):
+                        draw(tile, name, self.color, 100, 50, tile.n, every=TILE_EVERY, phase=i)
+        elif page == "Devices":
+            ex = set(self.settings["excluded"])           # read once per frame, not once per card
+            overrides = self.settings.data.get("device_overrides", {})
+            base = self.settings["state"]
+            for i, card in enumerate(self.device_cards):
+                if card.key in ex:
+                    if getattr(card.strip, "_anim_sig", None) != "excluded":
+                        card.strip._anim_sig = "excluded"
+                        card.strip.show([(0, 0, 0)])
+                    continue
+                ds = overrides.get(card.key) or base
+                draw(card.strip, ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"], card.strip.n,
+                     offset=i * 0.07)
+            if self.editor is not None:
+                ds = overrides.get(self.editor_key) or base
+                draw(self.editor_art, ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"],
+                     max(1, len(self.editor_art.leds)))
+
+    def _move_track(self, t, speed):
+        """The preview's progress line: two bars made once, then only moved."""
+        trk = self.preview_track
+        items = getattr(trk, "_track_bars", None)
+        if items is None:
+            items = trk._track_bars = (trk.create_rectangle(0, 1, 20, 3, fill=P["TRACK"], width=0),
+                                       trk.create_rectangle(0, 1, 0, 3, fill=self.accent, width=0))
+            trk._track_fill = self.accent
+        tw = max(trk.winfo_width(), 20)
+        trk.coords(items[0], 0, 1, tw, 3)
+        trk.coords(items[1], 0, 1, tw * ((t * (0.05 + speed / 400)) % 1.0), 3)
+        if trk._track_fill != self.accent:
+            trk._track_fill = self.accent
+            trk.itemconfigure(items[1], fill=self.accent)
 
     # ---------------------------------------------------------------- threads / queue
     def _bg(self, fn, *a):
