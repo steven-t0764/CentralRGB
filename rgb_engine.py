@@ -16,6 +16,7 @@ Central RGB - engine (no GUI code in here).
 """
 from __future__ import annotations
 
+import atexit
 import colorsys
 import ctypes
 import json
@@ -413,8 +414,24 @@ class Settings:
         "ram_note_boot": 0,         # boot_id() when the "RAM not found" pop-up was last shown
     }
 
+    SAVE_DELAY = 0.6            # seconds: changes inside this window are written to disk once
+    # Written straight away, not after SAVE_DELAY: rare, and they record what happened this boot (the
+    # hardware search / RAM pop-up), so a hard kill right after must not lose them.
+    SAVE_NOW = frozenset({"openrgb_boot", "ram_seen", "ram_note_boot"})
+    _live: "list[Settings]" = []   # instances with writes possibly pending (flushed before another one loads)
+    _live_lock = threading.Lock()
+
     def __init__(self):
         self.path = settings_dir() / "settings.json"
+        self._lock = threading.RLock()        # guards self.data snapshots, the dirty flag and the file write
+        self._dirty = False
+        self._timer: threading.Timer | None = None
+        with Settings._live_lock:
+            others = [s for s in Settings._live if s.path == self.path]
+            Settings._live.append(self)
+        for s in others:                      # another Settings in this process may still have a change queued
+            s.flush()
+        atexit.register(self.flush)
         self.data = json.loads(json.dumps(self.DEFAULTS))
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
@@ -438,13 +455,57 @@ class Settings:
         return self.data[k]
 
     def __setitem__(self, k, v):
-        self.data[k] = v
-        self.save()
+        with self._lock:
+            self.data[k] = v
+            self._dirty = True
+        if k in self.SAVE_NOW:
+            self.flush()
+        else:
+            self._schedule()
+
+    def _schedule(self):
+        """Write once, SAVE_DELAY after the first of a burst of changes, on a background thread."""
+        with self._lock:
+            if self._timer is not None:
+                return                        # already queued: it will write the newest data
+            t = threading.Timer(self.SAVE_DELAY, self.flush)
+            t.daemon = True
+            self._timer = t
+        t.start()
+
+    def flush(self):
+        """Write any pending change now (on the calling thread). Does nothing if nothing is pending."""
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            if not self._dirty:
+                return
+            self._dirty = False
+            self._write()
 
     def save(self):
+        """Write the settings file now, whether or not anything changed."""
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            self._dirty = False
+            self._write()
+
+    def _write(self):
+        # caller holds self._lock, so no __setitem__ changes the dict while it is serialised
         try:
+            for attempt in range(3):
+                try:
+                    text = json.dumps(self.data, indent=2)
+                    break
+                except RuntimeError:          # a nested dict changed in place on another thread: try again
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.001)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+            tmp.write_text(text, encoding="utf-8")
             tmp.replace(self.path)
         except Exception:
             pass
@@ -1538,9 +1599,13 @@ def _preset(effect, n, t, offset=0.0):
 # --------------------------------------------------------------------------- engine
 class LightingEngine(threading.Thread):
     FPS = 30
+    IDLE_HZ = 4          # ticks per second while nothing animates and nothing changed
 
     def __init__(self, log, on_disconnect=lambda: None):
         super().__init__(daemon=True)
+        self._wake_evt = threading.Event()   # set by any change, so an idling loop runs its next tick at once
+        self._dirty = True
+        self._paused = False
         self.log = log
         self.on_disconnect = on_disconnect
         self.lock = threading.RLock()  # guards the SDK socket + state
@@ -1558,6 +1623,35 @@ class LightingEngine(threading.Thread):
         self.ram_pending: set[str] = set()     # RAM sticks with a change still waiting for their bus slot
         self._stop_evt = threading.Event()
         self.paused = False
+
+    @property
+    def dirty(self) -> bool:
+        return self._dirty
+
+    @dirty.setter
+    def dirty(self, value):
+        self._dirty = value
+        if value:
+            self._wake_evt.set()
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @paused.setter
+    def paused(self, value):
+        self._paused = value
+        self._wake_evt.set()
+
+    def _is_idle(self) -> bool:
+        """True when the next tick has nothing to do: no animation, no change and no RAM write waiting."""
+        with self.lock:
+            if self.client is None or self.paused:
+                return True
+            if self._dirty or self.ram_pending:
+                return False
+            return not (is_animated(self.state["effect"])
+                        or any(is_animated(o.get("effect", "")) for o in self.overrides.values()))
 
     # ---- connection
     def connect(self) -> bool:
@@ -1633,6 +1727,7 @@ class LightingEngine(threading.Thread):
 
     def stop(self):
         self._stop_evt.set()
+        self._wake_evt.set()
 
     # ---- device handling
     @staticmethod
@@ -1841,14 +1936,27 @@ class LightingEngine(threading.Thread):
                         self.log(f"  {dev.name}: {e}")
                         self.broken.add(key)  # stop retrying a broken device
 
+    def tick(self) -> float:
+        """Run one loop tick and return how long to wait before the next one (seconds)."""
+        budget = 1 / self.FPS
+        start = time.perf_counter()
+        self._wake_evt.clear()               # a change from here on wakes the wait below straight away
+        try:
+            self.step()
+        except (ConnectionError, OSError) as e:
+            with self.lock:
+                self.client = None
+            self.log(f"Lost connection to OpenRGB ({e}).")
+            self.on_disconnect()
+        self.frame += 1
+        if self._is_idle():
+            return 1 / self.IDLE_HZ
+        return max(0.001, budget - (time.perf_counter() - start))   # steady cadence, whatever the step cost
+
     def run(self):
         while not self._stop_evt.is_set():
-            try:
-                self.step()
-            except (ConnectionError, OSError) as e:
-                with self.lock:
-                    self.client = None
-                self.log(f"Lost connection to OpenRGB ({e}).")
-                self.on_disconnect()
-            self.frame += 1
-            time.sleep(1 / self.FPS)
+            wait = self.tick()
+            if wait > 1 / self.FPS:
+                self._wake_evt.wait(wait)    # idle: a state change (or stop) ends the wait at once
+            else:
+                self._stop_evt.wait(wait)

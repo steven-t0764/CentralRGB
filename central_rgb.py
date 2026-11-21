@@ -1127,6 +1127,7 @@ class LedStrip(tk.Canvas):
         self._img = self._photo = None
         self._size = None
         self._last = None
+        self._shown = None                                       # the colours in the picture now
         self.bind("<Configure>", lambda e=None: self._layout())
 
     def _layout(self):
@@ -1150,6 +1151,7 @@ class LedStrip(tk.Canvas):
         self.delete("all")
         self._photo = ImageTk.PhotoImage(self._bg)
         self.create_image(0, 0, image=self._photo, anchor="nw")
+        self._shown = None
         if self._last is not None:                               # resized: redraw what was last shown
             self.show(self._last)
 
@@ -1157,6 +1159,10 @@ class LedStrip(tk.Canvas):
         self._last = colors
         if self._photo is None:
             return
+        key = tuple(tuple(c) for c in colors or ())
+        if key == self._shown:                                   # same colours as the picture: nothing to do
+            return
+        self._shown = key
         w, h = self._size
         dim = mix(self.bgc, (60, 64, 76), 0.5)
         if APPEARANCE == "light":                                # dimmed LEDs fade into the panel, not to black
@@ -1657,6 +1663,7 @@ class EffectTile(tk.Canvas):
         self.name, self.big, self.bars, self.selected = name, big, [], False
         self.accent, self._bg = CYAN, None
         self.n = self.COLS
+        self._colors, self._fills = None, []          # last colours shown, and each bar's fill now
         self.bind("<Configure>", lambda e=None: self._layout())
         self.bind("<Button-1>", lambda e=None: on_click(name))
 
@@ -1671,6 +1678,7 @@ class EffectTile(tk.Canvas):
         step = (x1 - x0) / self.COLS
         self.bars = [self.create_rectangle(x0 + i * step, 4, x0 + (i + 1) * step + 1, 7, width=0, fill=P["TRACK"])
                      for i in range(self.COLS)]
+        self._fills = [P["TRACK"]] * self.COLS
         y = self.h - 30 if self.big else self.h / 2 + 2
         icon = EFFECT_ICONS.get(self.name, "•")
         if self.big:
@@ -1680,19 +1688,28 @@ class EffectTile(tk.Canvas):
                          font=(FONT_SEMI if on or self.big else FONT, 11 if self.big else 10))
         self.sub = self.create_text(14, y + 19, text="", anchor="w", fill=P["MUTED"], font=(FONT, 8))
         self._sub()
+        if self._colors is not None:                                # laid out again: put the colours back
+            self.show(self._colors)
 
     def _sub(self):
         if hasattr(self, "sub"):
             self.itemconfigure(self.sub, text=EFFECT_INFO.get(self.name, "") if (self.selected and self.big) else "")
 
     def show(self, colors):
+        self._colors = colors
+        if not colors:
+            return
+        light = APPEARANCE == "light"
+        card2 = hex2rgb(P["CARD2"]) if light else None
         for i, it in enumerate(self.bars):
             c = colors[int(i * len(colors) / len(self.bars))]
-            if APPEARANCE == "light":                         # dimmed colours fade into the tile, not to black
-                fill = hexcol(led_on(c, hex2rgb(P["CARD2"]))) if max(c) > 0 else P["TRACK"]
+            if light:                                         # dimmed colours fade into the tile, not to black
+                fill = hexcol(led_on(c, card2)) if max(c) > 0 else P["TRACK"]
             else:
                 fill = hexcol(c) if max(c) > 10 else P["TRACK"]
-            self.itemconfigure(it, fill=fill)
+            if fill != self._fills[i]:                        # only bars whose colour changed are touched
+                self._fills[i] = fill
+                self.itemconfigure(it, fill=fill)
 
     def select(self, on, accent):
         if (on, accent) != (self.selected, self.accent):
@@ -1993,6 +2010,15 @@ def run_splash():
     root.after(30000, lambda: setattr(sp, "ready", True))   # never hang around
     sp.begin()
     root.mainloop()
+
+
+LOG_LINES = 500           # the Activity box keeps this many lines (activity.log keeps everything)
+QUEUE_BATCH = 200         # queue items handled per _poll_queue tick, so a burst can't hold up the window
+LOG_PREFIX = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}
+OVERLAY_FAST_MS = 250     # overlay on, or its page open: follow the game this often
+OVERLAY_IDLE_MS = 1000    # overlay off and its page not showing: only check whether that changed
+ANIM_MS = 40              # the live previews' frame time (25 fps)
+TILE_EVERY = 2            # effect tiles redraw every 2nd frame (12.5 fps), not all of them on the same frame
 
 
 class App(ctk.CTk):
@@ -3857,6 +3883,7 @@ class App(ctk.CTk):
         self._overlay_save()
         if on:
             self.fps.start()
+            self._overlay_wake()
         else:
             self.fps.stop_async()       # flag set now, so switching back on right away can't be undone by it
             if self.overlay_win is not None:
@@ -3866,9 +3893,23 @@ class App(ctk.CTk):
     def _overlay_tick(self):
         """Follow the game: pick the app you're playing, then keep the overlay on it even after you tab out.
         Anything that stops the counter (PresentMon refused, crashed, no frames...) is shown on this page and in
-        the overlay itself instead of the overlay just vanishing."""
+        the overlay itself instead of the overlay just vanishing.
+        With the overlay off and its page not on screen there is nothing to follow or draw, so no Win32 calls are
+        made and it only checks again every OVERLAY_IDLE_MS (_overlay_wake brings it back at once)."""
+        cfg = self.overlay_cfg
+        page_showing = self.current_page == "Overlay" and not self._hidden()
+        if not cfg["enabled"] and not page_showing:
+            if self.overlay_win is not None:
+                try:
+                    self.overlay_win.hide()
+                except tk.TclError:
+                    pass
+            self._overlay_idle = True
+            self._overlay_job = self.after(OVERLAY_IDLE_MS, self._overlay_tick)
+            return
+        self._overlay_idle = False
         try:
-            cfg, metrics = self.overlay_cfg, self.snap.get("metrics", {})
+            metrics = self.snap.get("metrics", {})
             if not hasattr(self, "game_tracker"):
                 self.game_tracker = fpo.GameTracker(self.fps)
             fg_hwnd, fg_pid = fpo.foreground_window()
@@ -3898,7 +3939,7 @@ class App(ctk.CTk):
                 self.overlay_win.update_overlay(cfg, fps, metrics, target, in_front, st["stale"], st["note"])
             elif self.overlay_win is not None:
                 self.overlay_win.hide()
-            if self.current_page == "Overlay":
+            if page_showing:                          # in the tray: keep following the game, skip the preview
                 sample = fps or {"name": "", "fps": 144, "low": 112, "ms": 6.9}
                 self.overlay_preview.render(cfg, sample, metrics, note=st["note"] if st else "")
                 self.overlay_preview_note.configure(
@@ -3910,7 +3951,20 @@ class App(ctk.CTk):
             pass
         except Exception:
             traceback.print_exc()
-        self.after(250, self._overlay_tick)
+        self._overlay_job = self.after(OVERLAY_FAST_MS, self._overlay_tick)
+
+    def _overlay_wake(self):
+        """The overlay was switched on or its page opened: if the tick is waiting out its slow idle delay,
+        run it now instead of up to OVERLAY_IDLE_MS later."""
+        job = getattr(self, "_overlay_job", None)
+        if job is None or not getattr(self, "_overlay_idle", False):
+            return                               # not started yet, or already on the fast schedule
+        try:
+            self.after_cancel(job)
+        except (tk.TclError, ValueError):
+            pass
+        self._overlay_idle = False
+        self._overlay_job = self.after(0, self._overlay_tick)
 
     # ---------------------------------------------------------------- Profiles
     def _page_profiles(self, p):
@@ -4269,6 +4323,8 @@ class App(ctk.CTk):
             self._swap_page(name)
         finally:
             self._switching = False
+        if self.current_page == "Overlay":
+            self._overlay_wake()
         nxt, self._pending_page = self._pending_page, None
         if nxt is not None and nxt != self.current_page:
             self.show_page(nxt)
@@ -4379,36 +4435,79 @@ class App(ctk.CTk):
         if self._hidden():                       # in the tray or minimized: draw nothing
             self.after(250, self._animate)
             return
-        t = time.time()
-        st = self._current_state()
         try:
-            if self.current_page == "Lighting":
-                self.preview.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], self.preview.n, t))
-                tw = max(self.preview_track.winfo_width(), 20)
-                self.preview_track.delete("all")
-                self.preview_track.create_rectangle(0, 1, tw, 3, fill=P["TRACK"], width=0)
-                pos = (t * (0.05 + st["speed"] / 400)) % 1.0
-                self.preview_track.create_rectangle(0, 1, tw * pos, 3, fill=self.accent, width=0)
-            if self.current_page == "Home":
-                self.home_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 48, t))
-                self.home_light_strip.show(eng.compute_colors(st["effect"], st["color"], max(st["brightness"], 8), st["speed"], 24, t))
-            elif self.current_page == "Lighting":
-                for name, tile in self.tiles.items():
-                    if isinstance(tile, EffectTile):
-                        tile.show(eng.compute_colors(name, self.color, 100, 50, tile.n, t))
-            elif self.current_page == "Devices":
-                ex = set(self.settings["excluded"])
-                for i, card in enumerate(self.device_cards):
-                    ds = self._state_for(card.key, self.settings["state"])
-                    card.strip.show([(0, 0, 0)] if card.key in ex else eng.compute_colors(
-                        ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"], card.strip.n, t, offset=i * 0.07))
-                if self.editor is not None:
-                    ds = self._state_for(self.editor_key, self.settings["state"])
-                    self.editor_art.show(eng.compute_colors(ds["effect"], ds["color"], max(ds["brightness"], 8),
-                                                            ds["speed"], max(1, len(self.editor_art.leds)), t))
+            self._draw_frame(time.time())
         except tk.TclError:
             pass
-        self.after(40, self._animate)
+        self.after(ANIM_MS, self._animate)
+
+    def _draw_frame(self, t):
+        """One frame of the live previews on the page showing. A preview is only redrawn when its effect moves
+        (effect tiles at half the frame rate, staggered), or when what it shows changed. Still effects, and
+        every effect while animations are off in Settings, are drawn once and then left alone."""
+        frame = self._anim_frame = getattr(self, "_anim_frame", 0) + 1
+        live = self.settings.data.get("animations", True)
+        page = self.current_page
+        memo = {}                                     # one compute_colors per set of arguments per frame
+
+        def draw(widget, effect, color, bright, speed, n, offset=0.0, every=1, phase=0):
+            custom = eng.CUSTOM_PRESETS.get(effect)
+            sig = (effect, tuple(color), bright, speed, n, offset, repr(custom) if custom else None)
+            if sig == getattr(widget, "_anim_sig", None):
+                if not (live and eng.is_animated(eng.RENAMED.get(effect, effect))) or (frame + phase) % every:
+                    return False
+            widget._anim_sig = sig
+            key = sig[:6]
+            if key not in memo:
+                memo[key] = eng.compute_colors(effect, color, bright, speed, n, t, offset=offset)
+            widget.show(memo[key])
+            return True
+
+        if page in ("Home", "Lighting"):
+            st = self._current_state()
+            eff, col, bright, speed = st["effect"], st["color"], max(st["brightness"], 8), st["speed"]
+            if page == "Home":
+                draw(self.home_strip, eff, col, bright, speed, 48)
+                if self.home_light_strip.winfo_ismapped():        # not on screen: nothing to draw
+                    draw(self.home_light_strip, eff, col, bright, speed, 24)
+            else:
+                if draw(self.preview, eff, col, bright, speed, self.preview.n):
+                    self._move_track(t, speed)
+                for i, (name, tile) in enumerate(self.tiles.items()):
+                    if isinstance(tile, EffectTile):
+                        draw(tile, name, self.color, 100, 50, tile.n, every=TILE_EVERY, phase=i)
+        elif page == "Devices":
+            ex = set(self.settings["excluded"])           # read once per frame, not once per card
+            overrides = self.settings.data.get("device_overrides", {})
+            base = self.settings["state"]
+            for i, card in enumerate(self.device_cards):
+                if card.key in ex:
+                    if getattr(card.strip, "_anim_sig", None) != "excluded":
+                        card.strip._anim_sig = "excluded"
+                        card.strip.show([(0, 0, 0)])
+                    continue
+                ds = overrides.get(card.key) or base
+                draw(card.strip, ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"], card.strip.n,
+                     offset=i * 0.07)
+            if self.editor is not None:
+                ds = overrides.get(self.editor_key) or base
+                draw(self.editor_art, ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"],
+                     max(1, len(self.editor_art.leds)))
+
+    def _move_track(self, t, speed):
+        """The preview's progress line: two bars made once, then only moved."""
+        trk = self.preview_track
+        items = getattr(trk, "_track_bars", None)
+        if items is None:
+            items = trk._track_bars = (trk.create_rectangle(0, 1, 20, 3, fill=P["TRACK"], width=0),
+                                       trk.create_rectangle(0, 1, 0, 3, fill=self.accent, width=0))
+            trk._track_fill = self.accent
+        tw = max(trk.winfo_width(), 20)
+        trk.coords(items[0], 0, 1, tw, 3)
+        trk.coords(items[1], 0, 1, tw * ((t * (0.05 + speed / 400)) % 1.0), 3)
+        if trk._track_fill != self.accent:
+            trk._track_fill = self.accent
+            trk.itemconfigure(items[1], fill=self.accent)
 
     # ---------------------------------------------------------------- threads / queue
     def _bg(self, fn, *a):
@@ -4440,18 +4539,39 @@ class App(ctk.CTk):
     def status(self, sub, level="warn"):
         self.q.put(("status", sub, level))
 
+    def _add_log_lines(self, items):
+        """Put queued log lines into the Activity box in one go, then trim it to the last LOG_LINES lines (an
+        ever-growing Text widget made every insert slower the longer the app ran)."""
+        if not items:
+            return
+        box = self.logbox
+        box.configure(state="normal")
+        for _, msg, level in items:
+            box.insert("end", time.strftime("%H:%M:%S  ") + LOG_PREFIX.get(level, "") + msg + "\n", level or None)
+        lines = int(str(box.index("end-1c")).split(".")[0]) - 1     # every line ends in "\n"
+        if lines > LOG_LINES:
+            box.delete("1.0", f"{lines - LOG_LINES + 1}.0")
+        box.see("end")
+        box.configure(state="disabled")
+
     def _poll_queue(self):
+        logs = []                                # log lines go in together, before the next non-log item
+        handled = 0
         try:
-            while True:
+            while handled < QUEUE_BATCH:
                 item = self.q.get_nowait()
+                handled += 1
                 kind = item[0]
                 if kind == "log":
-                    self.logbox.configure(state="normal")
-                    prefix = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}.get(item[2], "")
-                    self.logbox.insert("end", time.strftime("%H:%M:%S  ") + prefix + item[1] + "\n", item[2] or None)
-                    self.logbox.see("end")
-                    self.logbox.configure(state="disabled")
-                elif kind == "tray":
+                    logs.append(item)
+                    continue
+                if logs:
+                    batch, logs = logs, []
+                    try:
+                        self._add_log_lines(batch)
+                    except tk.TclError:          # the log box is being rebuilt: still handle this item
+                        pass
+                if kind == "tray":
                     self._tray_action(item[1])
                 elif kind == "status":
                     dot, oval, sub = self.status_rows["rgb"]
@@ -4477,7 +4597,12 @@ class App(ctk.CTk):
             pass
         except tk.TclError:
             pass
-        self.after(100, self._poll_queue)
+        try:
+            self._add_log_lines(logs)
+        except tk.TclError:
+            pass
+        # more waiting: come back almost at once, but still let Tk draw and handle input in between
+        self.after(15 if handled >= QUEUE_BATCH else 100, self._poll_queue)
 
     # ---------------------------------------------------------------- startup / OpenRGB
     def _startup(self):
@@ -5177,7 +5302,9 @@ class App(ctk.CTk):
             if not self.settings.data.get("tray_hint_shown"):
                 self.settings["tray_hint_shown"] = True
                 self.tray.notify("Still running in the system tray. Right-click the icon to open or quit.")
+            self.settings.flush()                            # on disk now, not after the save delay
             return
+        self.settings.flush()
         self._confirm_quit()
 
     def _set_close_mode(self, value):
@@ -5197,6 +5324,8 @@ class App(ctk.CTk):
             self.attributes("-topmost", True)
             self.after(200, lambda: self.attributes("-topmost", False))
             self.focus_force()
+            if self.current_page == "Overlay":
+                self._overlay_wake()
         elif what == "off":
             self._set_effect("Off")
         elif what == "quit":
@@ -5228,6 +5357,7 @@ class App(ctk.CTk):
         except tk.TclError:
             pass
         self.settings["state"] = self._current_state()
+        self.settings.flush()     # the last change is written even if shutting down below is cut short
         if self.tray is not None:
             self.tray.stop()
         self.engine.stop()
