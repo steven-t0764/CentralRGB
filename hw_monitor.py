@@ -362,6 +362,7 @@ def sensor_worker(backend=None):
 
 class HardwareMonitor(threading.Thread):
     INTERVAL = 1.0
+    SLOW_INTERVAL = 5.0     # process count, CPU clock and disk usage change slowly
 
     def __init__(self, log, settings, backend=None):
         super().__init__(daemon=True)
@@ -383,6 +384,8 @@ class HardwareMonitor(threading.Thread):
         self.manual: dict[str, float] = dict(fan_cfg.get("manual", {}))
         self._net_last = None
         self._disk_last = None
+        self._slow_at = None
+        self._slow: dict = {}
 
     # ---------------- public, thread-safe
     def snapshot(self):
@@ -482,12 +485,11 @@ class HardwareMonitor(threading.Thread):
         m = {"cpu_load": psutil.cpu_percent(None), "cores": psutil.cpu_percent(None, percpu=True)}
         vm = psutil.virtual_memory()
         m.update(ram_used=vm.used / 2**30, ram_total=vm.total / 2**30, ram_pct=vm.percent)
-        try:
-            freq = psutil.cpu_freq()
-            m["cpu_clock"] = freq.current if freq else None
-        except Exception:
-            m["cpu_clock"] = None
         now = time.time()
+        if self._slow_at is None or now - self._slow_at >= self.SLOW_INTERVAL or now < self._slow_at:
+            self._slow = self._slow_metrics()
+            self._slow_at = now
+        m.update(self._slow)
         n = psutil.net_io_counters()
         if self._net_last:
             dt = max(now - self._net_last[0], 1e-3)
@@ -504,6 +506,17 @@ class HardwareMonitor(threading.Thread):
                 self._disk_last = (now, d.read_bytes, d.write_bytes)
         except Exception:
             pass
+        m["uptime"] = now - psutil.boot_time()
+        return m
+
+    def _slow_metrics(self) -> dict:
+        """Costly, slow-changing extras; refreshed every SLOW_INTERVAL and reused in between."""
+        m = {}
+        try:
+            freq = psutil.cpu_freq()
+            m["cpu_clock"] = freq.current if freq else None
+        except Exception:
+            m["cpu_clock"] = None
         disks = []
         for p in psutil.disk_partitions(all=False):
             if "cdrom" in p.opts or not p.fstype:
@@ -516,7 +529,6 @@ class HardwareMonitor(threading.Thread):
             except Exception:
                 pass
         m["disks"] = disks[:6]
-        m["uptime"] = now - psutil.boot_time()
         m["procs"] = len(psutil.pids())
         return m
 
