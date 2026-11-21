@@ -3,6 +3,10 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- **Smoother and lighter everywhere:** Central RGB lags and stutters less and uses much less CPU, especially when your lighting is a still colour, the app is idle, or it sits in the tray. The Lighting, Home and Devices previews, the lighting engine, the sensor monitor, settings saving and the activity panel were all made cheaper. <!-- big -->
+- **Settings saved a moment after a change:** dragging a slider no longer rewrites `settings.json` over and over; changes are written about half a second after you stop, and always when you close the app. The file looks the same and older settings still load.
+- **Activity panel keeps recent lines:** **Settings → Activity** now shows only the latest 500 lines so it never slows down in a long session. The full log is still in `%APPDATA%\CentralRGB\activity.log`.
+- **Less background work:** slow Monitor extras (process count, CPU clock, disk usage) refresh less often, the overlay only checks the game or redraws its preview when it is on or showing, and the lighting previews skip frames that wouldn't change anything.
 - **Updates arrive on their own:** new versions are now published automatically once a batch of changes (or one big change) is finished and tested, so **Settings → Updates** always finds the newest version without waiting for a manual release.
 - **Sidebar and page change together:** the sidebar no longer lights up the new page while the old page is still showing (for over 100 ms the first time a page opens, a few frames after that). The highlight now moves in the same repaint as the page.
 - **Old agent setup removed:** the leftover Vizor 0.14 config, plan, status report and skills were removed from the repository; the app itself is unchanged.

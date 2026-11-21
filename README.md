@@ -156,7 +156,7 @@ A [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) app with a sid
 - A navy palette with cyan and purple accents. **Settings → Accent color** switches between Cyan (default), your Windows accent color, or your lighting color.
 - Slow work (starting OpenRGB, downloads, the system check) runs on background threads. Results come back to the window through a queue that's checked every 100 ms, so the window never freezes.
 - **Settings → Appearance** switches every theme between Dark (default) and Light: bright panels, dark text and a deeper shade of the theme's accent, with a light title bar on Windows. It applies straight away, without a restart and without a dark flash. In Light, slider knobs, white colour swatches, Breathing previews, graph guides and the selected sensor row all stay visible.
-- Everything you change is saved instantly to `%APPDATA%\CentralRGB\settings.json`.
+- Everything you change is saved to `%APPDATA%\CentralRGB\settings.json` about half a second after the change, and always when you close the app.
 
 ### 2. Lighting: `rgb_engine.py`
 
@@ -343,7 +343,7 @@ CentralRGB/
 Bug reports, device reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run from source,
 what to include in an issue (it helps a lot to paste the **Settings → Activity** log and your hardware list from
 **Monitor → Advanced → Copy**), and how to send a change. The full log is also saved as
-`%APPDATA%\CentralRGB\activity.log`.
+`%APPDATA%\CentralRGB\activity.log` (the Activity box in Settings only shows the latest 500 lines).
 
 ## License
 
