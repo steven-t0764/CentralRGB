@@ -4600,8 +4600,9 @@ class App(ctk.CTk):
             external = not (ours_now or ours_kept) and bool(self.engine.client)
             # DDR5: a hidden OpenRGB kept from earlier this boot has already done its one RAM search
             searched = getattr(self, "_searched_before", False) or (not ours_now and ours_kept)
+            orgb = eng.running_openrgb_exe()
             diags = eng.diagnose_missing_devices(found, external_openrgb=external,
-                                                 openrgb_ver=eng.openrgb_version(eng.running_openrgb_exe()),
+                                                 openrgb_ver=eng.openrgb_version(orgb), openrgb_path=orgb,
                                                  ddr5=getattr(self, "ddr5", False),
                                                  searched_before=searched)
         except Exception as e:

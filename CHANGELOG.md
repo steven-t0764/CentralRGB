@@ -3,6 +3,7 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- **RAM message no longer blames an "OpenRGB 0.0.0":** OpenRGB leaves its Windows version number blank, and Central RGB read that as version 0.0.0 and said it was too old for RGB RAM. A blank version now counts as unknown; an OpenRGB with PawnIO modules next to it is recognised as 1.0 or newer; and if Central RGB is using an OpenRGB it didn't install and can't tell its version, the Devices page names that folder and says how to switch to OpenRGB 1.1.
 - **Updates arrive on their own:** new versions are now published automatically once a batch of changes (or one big change) is finished and tested, so **Settings → Updates** always finds the newest version without waiting for a manual release.
 - **Sidebar and page change together:** the sidebar no longer lights up the new page while the old page is still showing (for over 100 ms the first time a page opens, a few frames after that). The highlight now moves in the same repaint as the page.
 - **Old agent setup removed:** the leftover Vizor 0.14 config, plan, status report and skills were removed from the repository; the app itself is unchanged.

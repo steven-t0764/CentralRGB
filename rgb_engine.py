@@ -784,6 +784,7 @@ def _openrgb_version_from_path(path) -> str | None:
 
 
 OPENRGB_MARKER = "CentralRGB-download.txt"   # written next to OpenRGB.exe: which zip Central RGB installed
+OPENRGB_1_PLUS = "1.0 or newer"              # version exactly unknown, but it ships PawnIO modules
 
 
 _file_versions: dict[str, str | None] = {}
@@ -799,6 +800,8 @@ def _file_version(path) -> str | None:
                    f"(Get-Item -LiteralPath '{str(path).replace(chr(39), chr(39) * 2)}').VersionInfo.ProductVersion"],
                   timeout=15)
     v = ((r.stdout or "").strip() if r else "") or None
+    if v and not re.search(r"[1-9]", v):          # "0.0.0.0": the exe just doesn't say (OpenRGB leaves it blank)
+        v = None
     _file_versions[str(path)] = v
     return v
 
@@ -821,9 +824,12 @@ def openrgb_version(path) -> str | None:
     try:
         fv = _file_version(path)
         m = re.match(r"\s*(\d+\.\d+(?:\.\d+)?(?:\s*rc\d*)?)", fv or "", re.I)
-        return m.group(1).replace(" ", "") if m else None
+        if m and re.search(r"[1-9]", m.group(1)):
+            return m.group(1).replace(" ", "")
     except Exception:
-        return None
+        pass
+    # PawnIO SMBus modules next to the exe only ship with OpenRGB 1.0 and newer
+    return OPENRGB_1_PLUS if pawnio_modules(path) else None
 
 
 def _version_key(v) -> tuple:
@@ -1080,6 +1086,14 @@ def write_ram_diagnostics(lines) -> Path | None:
         return None
 
 
+def is_own_openrgb(path) -> bool:
+    """True for the OpenRGB that Central RGB downloaded itself (under its own install folder)."""
+    try:
+        return Path(install_dir(), "OpenRGB").resolve() in Path(path).resolve().parents
+    except Exception:
+        return False
+
+
 def openrgb_too_old(version) -> bool:
     """OpenRGB before 1.0 reached the SMBus through the WinRing0 driver, which Windows 11 now blocks."""
     m = re.match(r"(\d+)", str(version or ""))
@@ -1100,7 +1114,7 @@ def running_openrgb_exe() -> str | None:
 
 def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, conflicts=None,
                          external_openrgb=False, openrgb_ver=None, ddr5=None,
-                         searched_before=False) -> dict | None:
+                         searched_before=False, openrgb_path=None) -> dict | None:
     """If Windows reports RGB RAM but OpenRGB found no RAM device, explain why and what to change.
 
     found_types: the device type names OpenRGB reported ("RAM", "Motherboard"...).
@@ -1127,6 +1141,10 @@ def diagnose_missing_ram(found_types, rams=None, admin=None, pawnio=None, confli
         reasons.append(f"Your OpenRGB is version {openrgb_ver}. Before 1.0 it reached RGB RAM through the old "
                        "WinRing0 driver, which Windows 11 blocks. Install OpenRGB 1.0 or newer (openrgb.org) "
                        "together with PawnIO.")
+    if openrgb_path and not openrgb_ver and not is_own_openrgb(openrgb_path):
+        reasons.append(f"Central RGB is using an OpenRGB it didn't install ({openrgb_path}) and can't tell which "
+                       "version it is. If it's older than 1.0 it can't reach RGB RAM on Windows 11. Uninstall that "
+                       "OpenRGB (or delete its folder) and reopen Central RGB: it then downloads OpenRGB 1.1 itself.")
     if blockers:
         reasons.append(", ".join(blockers) + " is using the RAM's SMBus, so OpenRGB can't detect the sticks. "
                        "Press Close them: its services are stopped and set to start manually, then the RAM is "
