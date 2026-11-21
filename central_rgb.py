@@ -1995,6 +1995,13 @@ def run_splash():
     root.mainloop()
 
 
+LOG_LINES = 500           # the Activity box keeps this many lines (activity.log keeps everything)
+QUEUE_BATCH = 200         # queue items handled per _poll_queue tick, so a burst can't hold up the window
+LOG_PREFIX = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}
+OVERLAY_FAST_MS = 250     # overlay on, or its page open: follow the game this often
+OVERLAY_IDLE_MS = 1000    # overlay off and its page not showing: only check whether that changed
+
+
 class App(ctk.CTk):
     TEST_BACKEND = None   # tests can inject a simulated sensor backend
 
@@ -3857,6 +3864,7 @@ class App(ctk.CTk):
         self._overlay_save()
         if on:
             self.fps.start()
+            self._overlay_wake()
         else:
             self.fps.stop_async()       # flag set now, so switching back on right away can't be undone by it
             if self.overlay_win is not None:
@@ -3866,9 +3874,23 @@ class App(ctk.CTk):
     def _overlay_tick(self):
         """Follow the game: pick the app you're playing, then keep the overlay on it even after you tab out.
         Anything that stops the counter (PresentMon refused, crashed, no frames...) is shown on this page and in
-        the overlay itself instead of the overlay just vanishing."""
+        the overlay itself instead of the overlay just vanishing.
+        With the overlay off and its page not on screen there is nothing to follow or draw, so no Win32 calls are
+        made and it only checks again every OVERLAY_IDLE_MS (_overlay_wake brings it back at once)."""
+        cfg = self.overlay_cfg
+        page_showing = self.current_page == "Overlay" and not self._hidden()
+        if not cfg["enabled"] and not page_showing:
+            if self.overlay_win is not None:
+                try:
+                    self.overlay_win.hide()
+                except tk.TclError:
+                    pass
+            self._overlay_idle = True
+            self._overlay_job = self.after(OVERLAY_IDLE_MS, self._overlay_tick)
+            return
+        self._overlay_idle = False
         try:
-            cfg, metrics = self.overlay_cfg, self.snap.get("metrics", {})
+            metrics = self.snap.get("metrics", {})
             if not hasattr(self, "game_tracker"):
                 self.game_tracker = fpo.GameTracker(self.fps)
             fg_hwnd, fg_pid = fpo.foreground_window()
@@ -3898,7 +3920,7 @@ class App(ctk.CTk):
                 self.overlay_win.update_overlay(cfg, fps, metrics, target, in_front, st["stale"], st["note"])
             elif self.overlay_win is not None:
                 self.overlay_win.hide()
-            if self.current_page == "Overlay":
+            if page_showing:                          # in the tray: keep following the game, skip the preview
                 sample = fps or {"name": "", "fps": 144, "low": 112, "ms": 6.9}
                 self.overlay_preview.render(cfg, sample, metrics, note=st["note"] if st else "")
                 self.overlay_preview_note.configure(
@@ -3910,7 +3932,20 @@ class App(ctk.CTk):
             pass
         except Exception:
             traceback.print_exc()
-        self.after(250, self._overlay_tick)
+        self._overlay_job = self.after(OVERLAY_FAST_MS, self._overlay_tick)
+
+    def _overlay_wake(self):
+        """The overlay was switched on or its page opened: if the tick is waiting out its slow idle delay,
+        run it now instead of up to OVERLAY_IDLE_MS later."""
+        job = getattr(self, "_overlay_job", None)
+        if job is None or not getattr(self, "_overlay_idle", False):
+            return                               # not started yet, or already on the fast schedule
+        try:
+            self.after_cancel(job)
+        except (tk.TclError, ValueError):
+            pass
+        self._overlay_idle = False
+        self._overlay_job = self.after(0, self._overlay_tick)
 
     # ---------------------------------------------------------------- Profiles
     def _page_profiles(self, p):
@@ -4269,6 +4304,8 @@ class App(ctk.CTk):
             self._swap_page(name)
         finally:
             self._switching = False
+        if self.current_page == "Overlay":
+            self._overlay_wake()
         nxt, self._pending_page = self._pending_page, None
         if nxt is not None and nxt != self.current_page:
             self.show_page(nxt)
@@ -4440,18 +4477,39 @@ class App(ctk.CTk):
     def status(self, sub, level="warn"):
         self.q.put(("status", sub, level))
 
+    def _add_log_lines(self, items):
+        """Put queued log lines into the Activity box in one go, then trim it to the last LOG_LINES lines (an
+        ever-growing Text widget made every insert slower the longer the app ran)."""
+        if not items:
+            return
+        box = self.logbox
+        box.configure(state="normal")
+        for _, msg, level in items:
+            box.insert("end", time.strftime("%H:%M:%S  ") + LOG_PREFIX.get(level, "") + msg + "\n", level or None)
+        lines = int(str(box.index("end-1c")).split(".")[0]) - 1     # every line ends in "\n"
+        if lines > LOG_LINES:
+            box.delete("1.0", f"{lines - LOG_LINES + 1}.0")
+        box.see("end")
+        box.configure(state="disabled")
+
     def _poll_queue(self):
+        logs = []                                # log lines go in together, before the next non-log item
+        handled = 0
         try:
-            while True:
+            while handled < QUEUE_BATCH:
                 item = self.q.get_nowait()
+                handled += 1
                 kind = item[0]
                 if kind == "log":
-                    self.logbox.configure(state="normal")
-                    prefix = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}.get(item[2], "")
-                    self.logbox.insert("end", time.strftime("%H:%M:%S  ") + prefix + item[1] + "\n", item[2] or None)
-                    self.logbox.see("end")
-                    self.logbox.configure(state="disabled")
-                elif kind == "tray":
+                    logs.append(item)
+                    continue
+                if logs:
+                    batch, logs = logs, []
+                    try:
+                        self._add_log_lines(batch)
+                    except tk.TclError:          # the log box is being rebuilt: still handle this item
+                        pass
+                if kind == "tray":
                     self._tray_action(item[1])
                 elif kind == "status":
                     dot, oval, sub = self.status_rows["rgb"]
@@ -4477,7 +4535,12 @@ class App(ctk.CTk):
             pass
         except tk.TclError:
             pass
-        self.after(100, self._poll_queue)
+        try:
+            self._add_log_lines(logs)
+        except tk.TclError:
+            pass
+        # more waiting: come back almost at once, but still let Tk draw and handle input in between
+        self.after(15 if handled >= QUEUE_BATCH else 100, self._poll_queue)
 
     # ---------------------------------------------------------------- startup / OpenRGB
     def _startup(self):
@@ -5176,7 +5239,9 @@ class App(ctk.CTk):
             if not self.settings.data.get("tray_hint_shown"):
                 self.settings["tray_hint_shown"] = True
                 self.tray.notify("Still running in the system tray. Right-click the icon to open or quit.")
+            self.settings.flush()                            # on disk now, not after the save delay
             return
+        self.settings.flush()
         self._confirm_quit()
 
     def _set_close_mode(self, value):
@@ -5196,6 +5261,8 @@ class App(ctk.CTk):
             self.attributes("-topmost", True)
             self.after(200, lambda: self.attributes("-topmost", False))
             self.focus_force()
+            if self.current_page == "Overlay":
+                self._overlay_wake()
         elif what == "off":
             self._set_effect("Off")
         elif what == "quit":
@@ -5227,6 +5294,7 @@ class App(ctk.CTk):
         except tk.TclError:
             pass
         self.settings["state"] = self._current_state()
+        self.settings.flush()     # the last change is written even if shutting down below is cut short
         if self.tray is not None:
             self.tray.stop()
         self.engine.stop()
