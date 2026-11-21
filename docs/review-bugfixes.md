@@ -37,8 +37,6 @@ and fan code is not touched.
 
 **Notes.**
 
-- The branch starts one commit behind `main`: it lacks the `.github/vizor-plan.json` commit. Merging is clean and
-  keeps that file.
 - The extra detection restarts the hidden OpenRGB. When `test-ddr5` is merged later, this path should go through
   the DDR5 guard (on a DDR5 PC, a second search in the same boot loses the RAM). The user's PC is DDR4, so it
   doesn't matter for them now.
