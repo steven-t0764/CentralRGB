@@ -17,6 +17,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
 - **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** of 16 effects with picture previews: Tide, Drizzle, Sweep, Ember, Pulse, Drift, Volt, Frost, Aurora, Supernova, Cascade, Cyberpunk, Magma, Stardust, Nebula and Eclipse
 - **Per-device lighting**: click Customize on a device to see a model of it (RAM stick, graphics card, fans, cooler, keyboard, mouse, board) lit with its live colors, plus its exact model details, and give it its own effect, color and brightness
+- **ARGB headers and LED strips**: fans or strips plugged into a motherboard header (JRAINBOW, ADD_GEN2...) light up once you set how many LEDs are on it under **Customize → Connected LEDs**. Central RGB remembers the count, sets it again every time OpenRGB starts, and the Devices page tells you when a header is still at 0
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
 - **System monitor**: live CPU, GPU and memory gauges, network and storage graphs, and an **Advanced** view with every hardware sensor and full system details
 - **Profiles** to save your favorite looks and switch between them in one click

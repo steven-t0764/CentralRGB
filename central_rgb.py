@@ -1855,6 +1855,14 @@ class Tray:
 _instance_server = None
 
 
+def _zone_sizes(app) -> dict:
+    """The header sizes you set (device key -> {header: LEDs}); {} when there are none (or no settings)."""
+    try:
+        return dict(app.settings.data.get("zone_sizes") or {})
+    except Exception:
+        return {}
+
+
 def plural(n, word, many=None) -> str:
     """plural(1, "fan") -> '1 fan', plural(3, "fan") -> '3 fans'."""
     return f"{n} {word if n == 1 else (many or word + 's')}"
@@ -3211,6 +3219,71 @@ class App(ctk.CTk):
         r2, _s = self.slider_row(controls, "Speed", int(state["speed"]), lambda v: choose(speed=v))
         r2.pack(fill="x", pady=4)
         mode.configure(command=lambda v: commit())
+        self._header_controls(controls, key)
+
+    def _header_controls(self, parent, key):
+        """Connected LEDs: for each ARGB header / LED strip port of this device, how many LEDs are plugged in.
+        OpenRGB can't count them, and a header left at 0 keeps fans and strips on it dark."""
+        zones = self.engine.zones(key)
+        if not zones:
+            return
+        self.label(parent, "Connected LEDs", 13, color=P["MUTED"], anchor="w").pack(fill="x", pady=(14, 0))
+        self.label(parent, "How many LEDs are plugged into each header. Most RGB fans have 8 to 18 each; "
+                           "add them up if they're chained.", 12, color=P["FAINT"], anchor="w", justify="left",
+                   wraplength=300).pack(fill="x", pady=(0, 6))
+        saved = self.settings.data.get("zone_sizes", {}).get(key, {})
+        for z in zones:
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            self.label(row, z["name"], 13, anchor="w").pack(side="left")
+            val = tk.IntVar(value=int(saved.get(z["name"], z["leds"])))
+            job = {"id": None}
+
+            def push(z=z, val=val, job=job):
+                job["id"] = None
+                try:
+                    n = max(z["min"], min(z["max"], int(val.get())))
+                except (tk.TclError, ValueError):
+                    return
+                val.set(n)
+                self._bg(lambda: self._set_header(key, z, n))
+
+            def later(z=z, val=val, job=job, push=push):
+                if job["id"]:
+                    self.after_cancel(job["id"])
+                job["id"] = self.after(500, push)            # one write after you stop clicking or typing
+
+            def step(d, z=z, val=val, later=later):
+                try:
+                    val.set(max(z["min"], min(z["max"], int(val.get()) + d)))
+                except (tk.TclError, ValueError):
+                    val.set(z["leds"])
+                later()
+
+            self.secondary(row, "+", lambda st=step: st(1), height=28, width=28).pack(side="right")
+            ent = ctk.CTkEntry(row, textvariable=val, width=52, height=28, corner_radius=6, justify="center",
+                               fg_color=P["CARD2"], border_color=P["LINE"], text_color=P["TEXT"], font=F(13))
+            ent.pack(side="right", padx=4)
+            ent.bind("<Return>", lambda e=None, pu=push: pu())
+            ent.bind("<FocusOut>", lambda e=None, pu=push: pu())
+            self.secondary(row, "−", lambda st=step: st(-1), height=28, width=28).pack(side="right")
+            self.label(row, f"up to {z['max']}", 11, color=P["FAINT"]).pack(side="right", padx=(0, 8))
+
+    def _set_header(self, key, zone, n):
+        """Background thread: resize one header in OpenRGB, remember it, refresh the device list."""
+        try:
+            got = self.engine.resize_zone(key, zone["index"], n)
+        except Exception as e:
+            self.log(f"Couldn't set {zone['name']} to {n} LEDs: {e}", "bad")
+            return
+        if got is None:
+            return
+        sizes = dict(self.settings.data.get("zone_sizes") or {})
+        sizes[key] = dict(sizes.get(key) or {}, **{zone["name"]: got})
+        self.settings["zone_sizes"] = sizes
+        self.log(f"{zone['name']} set to {got} LEDs.", "ok")
+        self._rescan(quiet=True)
+        self._check_missing()
 
     def _update_dev_summary(self):
         ex = set(self.settings["excluded"])
@@ -4726,10 +4799,13 @@ class App(ctk.CTk):
             # DDR5: a hidden OpenRGB kept from earlier this boot has already done its one RAM search
             searched = getattr(self, "_searched_before", False) or (not ours_now and ours_kept)
             orgb = eng.running_openrgb_exe()
+            headers = eng.diagnose_unset_headers(self.engine.devices(), _zone_sizes(self))
             diags = eng.diagnose_missing_devices(found, external_openrgb=external,
                                                  openrgb_ver=eng.openrgb_version(orgb), openrgb_path=orgb,
                                                  ddr5=getattr(self, "ddr5", False),
                                                  searched_before=searched)
+            if headers:
+                diags.append(headers)
         except Exception as e:
             self.log(f"Couldn't check for missing RGB devices: {e}", "warn")
             return None
@@ -4856,14 +4932,22 @@ class App(ctk.CTk):
             self._rescan(initial=True)
             self._bg(self._settle_devices)
 
-    def _settle_devices(self, max_wait=90.0, quiet_for=12.0, min_wait=25.0):
+    def _settle_devices(self, max_wait=90.0, quiet_for=12.0, min_wait=25.0, long_wait=600.0):
         """OpenRGB keeps detecting hardware after its server opens: USB devices appear at once, but RAM and
-        graphics-card lighting are found by probing the SMBus and can take much longer. Keep reading the
-        device list until it has stopped changing for a while (runs on a background thread)."""
+        graphics-card lighting are found by probing the SMBus and can take much longer, and a USB device held
+        by its vendor app (SteelSeries GG, for example) can hold detection up for minutes. Keep reading the
+        device list until it has stopped changing, and for as long as OpenRGB's own log says it is still
+        detecting (up to long_wait). Runs on a background thread; never restarts or rescans OpenRGB."""
         t0 = last_change = time.time()
+        since = t0 - 120                       # OpenRGB was started (or reconnected) just before this
         count = len(self.engine.devices())
-        while time.time() - t0 < max_wait:
-            time.sleep(1.5)
+        told = False
+        while True:
+            elapsed = time.time() - t0
+            state, waiting = eng.openrgb_detection_state(since=since)
+            if elapsed > long_wait or (elapsed > max_wait and state != "running"):
+                break
+            time.sleep(1.5 if elapsed < max_wait else 5.0)
             try:
                 self._rescan(quiet=True)
             except Exception:
@@ -4872,9 +4956,14 @@ class App(ctk.CTk):
             if rows != count:
                 self.log(f"OpenRGB found more hardware: {rows} device(s) now.", "ok")
                 count, last_change = rows, time.time()
-            elif time.time() - t0 > min_wait and time.time() - last_change > quiet_for:
+            elif elapsed > min_wait and time.time() - last_change > quiet_for and state != "running":
                 break
+            if state == "running" and elapsed > min_wait and not told:
+                told = True
+                self.log(eng.still_detecting_note(waiting, eng.find_conflicts()), "warn")
+                self.status("Still detecting devices…", "warn")
         self.log(f"Hardware detection finished: {count} device(s) after {time.time() - t0:.0f} s.", "info")
+        self._rescan(quiet=True)
         self._check_missing()
         self._check_ram()
 
@@ -4904,6 +4993,10 @@ class App(ctk.CTk):
         except Exception as e:
             self.log(f"Rescan failed: {e}", "bad")
             return
+        sizes = _zone_sizes(self)
+        if sizes:                              # OpenRGB forgets header sizes when it restarts: set them again
+            for line in self.engine.apply_zone_sizes(sizes):
+                self.log(f"Header set to your LED count: {line}", "info")
         rows = [(eng.device_key(d), eng.type_name(d), d.name, len(d.leds)) for d in self.engine.devices()]
         if rows != self.device_rows:
             self.q.put(("devices", rows))
