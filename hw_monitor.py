@@ -65,6 +65,12 @@ def interp_curve(points, t: float) -> float:
 
 
 # ============================================================================ LHM backend
+
+def _fan_line(f) -> str:
+    """'System Fan #1 (Nuvoton NCT6687D, 820 RPM)' for the activity log."""
+    rpm = "no RPM reading" if f.get("rpm") is None else f"{f['rpm']:.0f} RPM"
+    return f"{f['name']} ({f['hw']}, {rpm})"
+
 class LHMBackend:
     """Thin wrapper around LibreHardwareMonitorLib. Only call from the monitor thread."""
 
@@ -472,6 +478,14 @@ class HardwareMonitor(threading.Thread):
         m = self._basic_metrics()
         self._derive(sensors, m)
         fans = self._fan_logic(sensors, m) if self.backend else {}
+        ids = tuple(sorted(fans))
+        if ids != getattr(self, "_fans_logged", None):     # log the fan list once, and whenever it changes
+            self._fans_logged = ids
+            if fans:
+                self.log("Fans found: " + "; ".join(_fan_line(f) for f in fans.values()))
+            elif self.backend:
+                self.log("No controllable fans found (the motherboard's fan chip isn't supported, or PawnIO / "
+                         "administrator rights are missing).")
         with self.lock:
             self.sensors = sensors
             self.metrics = m

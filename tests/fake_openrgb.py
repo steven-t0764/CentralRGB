@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from openrgb.utils import DeviceType, ModeColors, RGBColor
+from openrgb.utils import DeviceType, ModeColors, RGBColor, ZoneType
 
 # name, type, vendor, zones [(zone name, LED count)], modes
 DEMO_DEVICES = [
@@ -89,6 +89,19 @@ B550_PRO_PC = B550_PC[:3] + CORSAIR_VENGEANCE_PRO_DDR4
 # A DDR5 PC: Intel Z790 board with two Kingston FURY Beast RGB DDR5 sticks. OpenRGB's Kingston Fury detector
 # finds each stick behind the DDR5 SPD hub on the Intel (i801) SMBus, through PawnIO, on its first search
 # after boot. The sticks have Direct plus their own hardware modes.
+# The owner's PC as OpenRGB 1.1 reports it: the MSI B550-A PRO's two ARGB headers start at 0 LEDs (so case
+# fans on them stay dark until sized), a Razer Huntsman V2 TKL and a SteelSeries Aerox 3 Wireless (both of
+# which OpenRGB found only minutes in while SteelSeries GG held the mouse), and 4x Vengeance RGB PRO.
+OWNERS_BOARD = ("MSI B550-A PRO (MS-7C56)", DeviceType.MOTHERBOARD, "MSI",
+                [("JRGB1", 1), ("JRAINBOW1", 0, 0, 200), ("JRAINBOW2", 0, 0, 200), ("Onboard LEDs", 6)],
+                ("Direct", "Static", "Breathing", "Rainbow", "Off"))
+OWNERS_KEYBOARD = ("Razer Huntsman V2 TKL", DeviceType.KEYBOARD, "Razer", [("Keyboard", 102)],
+                   ("Direct", "Static", "Spectrum Cycle", "Off"))
+OWNERS_MOUSE = ("SteelSeries Aerox 3 Wireless", DeviceType.MOUSE, "SteelSeries", [("Logo", 1), ("Strip", 2)],
+                ("Direct", "Static", "Off"))
+OWNERS_PC = [OWNERS_BOARD, OWNERS_KEYBOARD, OWNERS_MOUSE] + CORSAIR_VENGEANCE_PRO_DDR4
+OWNERS_LATE = {"Razer Huntsman V2 TKL", "SteelSeries Aerox 3 Wireless"}
+
 KINGSTON_FURY_DDR5 = [
     (f"Kingston Fury DDR5 DRAM (DIMM {i})", DeviceType.DRAM, "Kingston",
      [("Kingston Fury DDR5", 12)], ("Direct", "Static", "Breathing", "Spectrum Cycle", "Rainbow", "Off"))
@@ -111,11 +124,10 @@ class FakeDevice:
         self.type = dtype
         self.metadata = SimpleNamespace(vendor=vendor, description=f"{vendor} {name}", version="1.0",
                                         serial=f"DEMO{idx:04d}", location=f"DEMO:{idx}")
-        self.zones, self.leds = [], []
-        for zname, count in zones:
-            zl = [SimpleNamespace(name=f"{zname} LED {i + 1}", id=len(self.leds) + i) for i in range(count)]
-            self.leds += zl
-            self.zones.append(SimpleNamespace(name=zname, leds=zl, colors=[RGBColor(0, 0, 0)] * count))
+        # zones: (name, LEDs) or, for an ARGB header you size yourself, (name, LEDs, min, max)
+        self._zone_specs = [list(z) + ([z[1], z[1]] if len(z) == 2 else []) for z in zones]
+        self.resized = []                      # (zone index, size) for every resize OpenRGB was asked for
+        self._build_zones()
         self.modes = []
         for i, mname in enumerate(mode_names):
             direct = mname.lower() == "direct"
@@ -124,8 +136,26 @@ class FakeDevice:
                 colors_max=0 if direct else 1,
                 color_mode=ModeColors.PER_LED if direct else ModeColors.MODE_SPECIFIC))
         self.active_mode = 0
-        self.colors = [RGBColor(0, 0, 0)] * len(self.leds)
         self.saved = False
+
+    def _build_zones(self):
+        self.zones, self.leds, data_zones = [], [], []
+        for zi, (zname, count, lo, hi) in enumerate(self._zone_specs):
+            zl = [SimpleNamespace(name=f"{zname} LED {i + 1}", id=len(self.leds) + i) for i in range(count)]
+            self.leds += zl
+            zone = SimpleNamespace(name=zname, leds=zl, colors=[RGBColor(0, 0, 0)] * count,
+                                   type=ZoneType.LINEAR if hi > lo else ZoneType.SINGLE)
+            zone.resize = (lambda n, zi=zi: self._resize(zi, n))
+            self.zones.append(zone)
+            data_zones.append(SimpleNamespace(name=zname, zone_type=zone.type, leds_min=lo, leds_max=hi,
+                                              num_leds=count))
+        self.data = SimpleNamespace(zones=data_zones)
+        self.colors = [RGBColor(0, 0, 0)] * len(self.leds)
+
+    def _resize(self, zi, n):
+        self.resized.append((zi, n))
+        self._zone_specs[zi][1] = n
+        self._build_zones()
 
     # ---- what the lighting engine calls
     def set_mode(self, mode, save=False):
@@ -165,6 +195,8 @@ class FakeClient:
     RAM_BLOCKED = False
     MOUSE_BLOCKED = False
     RAM_LATE = 0          # the RAM only shows up after this many update() calls (SMBus scan still running)
+    LATE_NAMES: set = set()   # these devices only show up after LATE_AFTER update() calls (detection held up)
+    LATE_AFTER = 0
 
     def __init__(self, address="127.0.0.1", port=6742, name="test", protocol_version=None):
         self.updates = 0
@@ -174,29 +206,37 @@ class FakeClient:
 
     def _build(self):
         hide_ram = self.RAM_BLOCKED or self.updates < self.RAM_LATE
+        hide_late = self.updates < self.LATE_AFTER
         devs = [d for d in self.DEVICES if not (hide_ram and d[1] == DeviceType.DRAM)
-                and not (self.MOUSE_BLOCKED and d[1] == DeviceType.MOUSE)]
-        self.devices = [FakeDevice(i, *d) for i, d in enumerate(devs)]
+                and not (self.MOUSE_BLOCKED and d[1] == DeviceType.MOUSE)
+                and not (hide_late and d[0] in self.LATE_NAMES)]
+        old = {d.name: d for d in getattr(self, "devices", [])}
+        self.devices = [old.get(d[0]) or FakeDevice(i, *d) for i, d in enumerate(devs)]   # keep sizes set so far
+        for i, d in enumerate(self.devices):
+            d.id = i
 
     def update(self):
         self.updates += 1
-        if self.RAM_LATE and self.updates == self.RAM_LATE:
+        if (self.RAM_LATE and self.updates == self.RAM_LATE) or (self.LATE_AFTER and self.updates == self.LATE_AFTER):
             self._build()
 
     def disconnect(self):
         pass
 
 
-def install(eng=None, devices=None, ram_blocked=False, mouse_blocked=False, ram_late=0):
+def install(eng=None, devices=None, ram_blocked=False, mouse_blocked=False, ram_late=0, late=(), late_after=0):
     """Point Central RGB's lighting engine at the fake devices. Pass rgb_engine, or it's imported.
     devices picks the device list (DEMO_DEVICES by default); ram_blocked hides its RAM sticks and
-    mouse_blocked its mice; ram_late shows the RAM only after that many device-list refreshes."""
+    mouse_blocked its mice; ram_late shows the RAM only after that many device-list refreshes; the devices
+    named in late show up only after late_after refreshes (OpenRGB's detection held up by a vendor app)."""
     if eng is None:
         import rgb_engine as eng
     FakeClient.DEVICES = DEMO_DEVICES if devices is None else devices
     FakeClient.RAM_BLOCKED = ram_blocked
     FakeClient.MOUSE_BLOCKED = mouse_blocked
     FakeClient.RAM_LATE = ram_late
+    FakeClient.LATE_NAMES = set(late)
+    FakeClient.LATE_AFTER = late_after
     eng.OpenRGBClient = FakeClient
     eng.OpenRGBManager.server_running = staticmethod(lambda timeout=0.5: True)
     eng.OpenRGBManager.replace_visible_copy = lambda self: False

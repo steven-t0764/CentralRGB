@@ -412,6 +412,7 @@ class Settings:
         "openrgb_boot": 0,          # boot_id() when the hidden OpenRGB last searched for hardware
         "ram_seen": False,          # RGB RAM has been found on this PC before
         "ram_note_boot": 0,         # boot_id() when the "RAM not found" pop-up was last shown
+        "zone_sizes": {},           # device key -> {header/zone name: LEDs plugged in} (ARGB headers)
     }
 
     SAVE_DELAY = 0.6            # seconds: changes inside this window are written to disk once
@@ -979,6 +980,47 @@ OPENRGB_LOG_WORDS = ("smbus", "i2c", "piix4", "i801", "pawnio", "winring0", "dra
 _last_ram_diag = {"text": ""}
 
 
+# USB vendor ids -> brand, to say which device OpenRGB is waiting on while detection is stuck
+USB_BRANDS = {"1038": "SteelSeries", "1532": "Razer", "046D": "Logitech", "1B1C": "Corsair", "0951": "HyperX",
+              "03F0": "HyperX", "1E7D": "Roccat", "0B05": "ASUS", "2516": "Cooler Master", "258A": "Glorious",
+              "1462": "MSI", "048D": "Gigabyte", "26CE": "ASRock", "1044": "Gigabyte", "0CF2": "Lian Li",
+              "1E71": "NZXT", "3633": "Glorious", "320F": "Glorious", "1A2C": "Generic"}
+
+
+def openrgb_detection_state(log_dir=None, since=None) -> tuple[str | None, str | None]:
+    """Whether OpenRGB has finished looking for hardware, read from its newest log:
+    ("done", None), ("running", brand of the last USB device it was checking, or None), or (None, None) when
+    there is no log written since `since` (a time.time() value) to tell."""
+    if log_dir is None:
+        if not os.environ.get("APPDATA"):
+            return None, None
+        log_dir = Path(os.environ["APPDATA"]) / "OpenRGB" / "logs"
+    try:
+        logs = sorted(Path(log_dir).glob("OpenRGB_*.log"), key=lambda p: p.stat().st_mtime)
+        if not logs or (since is not None and logs[-1].stat().st_mtime < since - 5):
+            return None, None
+        text = logs[-1].read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None, None
+    if "Detection completed" in text:
+        return "done", None
+    hits = re.findall(r"HID device connected: \[([0-9a-fA-F]{4}):[0-9a-fA-F]{4}", text)
+    return "running", (USB_BRANDS.get(hits[-1].upper()) if hits else None)
+
+
+def still_detecting_note(waiting=None, conflicts=None) -> str:
+    """What to tell the user while OpenRGB is still looking for hardware well after it started."""
+    apps = {"SteelSeries": ("SteelSeries GG", "SteelSeries Engine"), "Razer": ("Razer Synapse",),
+            "Corsair": ("Corsair iCUE",), "Logitech": ("Logitech G HUB",)}.get(waiting or "", ())
+    held = [a for a in apps if a in (conflicts or {})]
+    msg = "OpenRGB is still detecting hardware" + (f" (it's waiting on a {waiting} device)" if waiting else "") + \
+          ". Devices it finds later are added on their own, so keep Central RGB open."
+    if held:
+        msg += (f" {' and '.join(held)} is running and can hold that device for minutes; press Close them on the "
+                "Devices page to let OpenRGB finish sooner.")
+    return msg
+
+
 def openrgb_log_lines(log_dir=None, limit=12) -> tuple[Path | None, list[str]]:
     """(newest OpenRGB log file, its lines about the SMBus / RAM detection, at most `limit`)."""
     if log_dir is None:
@@ -1267,6 +1309,52 @@ RGB_MOUSE_VENDORS = {
     "2516": ("Cooler Master", ()),
     "258A": ("Glorious", ()),
 }
+
+
+# --------------------------------------------------------------------------- ARGB headers (resizable zones)
+def resizable_zones(dev) -> list[dict]:
+    """The zones of a device whose LED count you set yourself: ARGB headers (JRAINBOW, ADD_GEN2...) and LED
+    strip ports, which OpenRGB can't count. [{"index", "name", "leds", "min", "max"}], [] if none."""
+    out = []
+    data_zones = getattr(getattr(dev, "data", None), "zones", None) or []
+    for i, z in enumerate(getattr(dev, "zones", None) or []):
+        zd = data_zones[i] if i < len(data_zones) else z
+        lo, hi = getattr(zd, "leds_min", None), getattr(zd, "leds_max", None)
+        ztype = getattr(z, "type", getattr(zd, "zone_type", None))
+        if lo is None or hi is None or int(hi) <= int(lo) or int(ztype or 0) == 2:    # 2 = matrix (keyboards)
+            continue
+        out.append({"index": i, "name": z.name, "leds": len(z.leds), "min": int(lo), "max": int(hi)})
+    return out
+
+
+def unset_headers(devices, sizes=None) -> list[tuple[str, list[str]]]:
+    """Devices with ARGB headers left at 0 LEDs (nothing set up yet): [(device name, [header names])]."""
+    sizes = sizes or {}
+    out = []
+    for d in devices:
+        names = [z["name"] for z in resizable_zones(d) if z["leds"] == 0
+                 and z["name"] not in sizes.get(device_key(d), {})]      # a 0 you set yourself = not used
+        if names:
+            out.append((d.name, names))
+    return out
+
+
+def diagnose_unset_headers(devices, sizes=None) -> dict | None:
+    """A Devices-page note when lights plugged into a motherboard header can't light yet: the header is set to
+    0 LEDs (OpenRGB can't count what's plugged in). Same shape as diagnose_missing_ram."""
+    found = unset_headers(devices, sizes)
+    if not found:
+        return None
+    where = "; ".join(f"{dev}: {', '.join(names)}" for dev, names in found)
+    headers = [n for _, names in found for n in names]
+    devs = ", ".join(dev for dev, _ in found)
+    return {"kind": "headers", "title": "Fan or strip lights not set up", "names": where, "blockers": [],
+            "summary": f"{', '.join(headers)} {'is' if len(headers) == 1 else 'are'} at 0 LEDs ({devs})",
+            "reasons": ["Lights plugged into a header at 0 LEDs stay dark, because OpenRGB can't count them. Press "
+                        "Customize on that device and set Connected LEDs for each header to the number of LEDs "
+                        "plugged into it (most RGB fans have 8 to 18 each; add them up if they are chained). "
+                        "Central RGB remembers it and sets it again every time it starts. For a header with "
+                        "nothing on it, type 0 and press Enter to hide this note."]}
 
 
 def _vid_pid(entry) -> tuple[str, str] | None:
@@ -1714,6 +1802,55 @@ class LightingEngine(threading.Thread):
                             "leds": len(d.leds), "zones": [(z.name, len(z.leds)) for z in d.zones],
                             "modes": [m.name for m in d.modes]}
         return None
+
+    def zones(self, key) -> list[dict]:
+        """The resizable zones (ARGB headers) of one device, see resizable_zones()."""
+        with self.lock:
+            for d in self.devices():
+                if device_key(d) == key:
+                    return resizable_zones(d)
+        return []
+
+    def resize_zone(self, key, index, size) -> int | None:
+        """Tell OpenRGB how many LEDs are plugged into one header. Returns the size set (clamped), or None."""
+        with self.lock:
+            for d in self.devices():
+                if device_key(d) != key:
+                    continue
+                z = next((z for z in resizable_zones(d) if z["index"] == index), None)
+                if z is None:
+                    return None
+                size = max(z["min"], min(z["max"], int(size)))
+                if z["leds"] != size:
+                    d.zones[index].resize(size)
+                    try:
+                        d.update()
+                    except Exception:
+                        pass
+                    self.prepared.pop(key, None)       # LED count changed: set Direct mode and colours afresh
+                    self.last_sent.pop(key, None)
+                    self.broken.discard(key)
+                    self.dirty = True
+                return size
+        return None
+
+    def apply_zone_sizes(self, sizes) -> list[str]:
+        """Set every header to the size you chose before (OpenRGB forgets it when it restarts).
+        Returns 'device · header: n' for each one changed."""
+        done = []
+        for d in self.devices():
+            want = (sizes or {}).get(device_key(d)) or {}
+            for z in resizable_zones(d):
+                n = want.get(z["name"])
+                if n is not None and int(n) != z["leds"]:
+                    try:
+                        got = self.resize_zone(device_key(d), z["index"], n)
+                    except Exception as e:
+                        self.log(f"Couldn't set {d.name} · {z['name']} to {n} LEDs: {e}")
+                        continue
+                    if got is not None:
+                        done.append(f"{d.name} · {z['name']}: {got}")
+        return done
 
     def set_excluded(self, keys):
         with self.lock:
