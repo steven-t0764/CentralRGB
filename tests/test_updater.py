@@ -180,16 +180,78 @@ class Download(unittest.TestCase):
 class Apply(unittest.TestCase):
     def test_helper_waits_for_app_then_runs_installer_silently(self):
         script = upd.helper_script("installed", 4321, Path("C:/Temp/CentralRGB-Setup-update.exe"), "C:/x/Central RGB.exe")
-        self.assertTrue(script.startswith("Wait-Process -Id 4321"))
-        for flag in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/RELAUNCH=1"):
+        self.assertIn("Wait-Process -Id 4321", script)
+        self.assertLess(script.index("Wait-Process -Id 4321"), script.index("Running the installer"))
+        for flag in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/RELAUNCH=1", '/LOG="'):
             self.assertIn(flag, script)
+        self.assertIn("-Wait -PassThru", script)               # waits for setup and reads its exit code
+
+    def test_helper_stops_leftover_processes_before_installing(self):
+        # the sensor helper / splash run from the same exe; if one lingers the installer can't replace the exe
+        script = upd.helper_script("installed", 7, Path("C:/T/s.exe"), "C:/x/Central RGB.exe")
+        self.assertIn("Where-Object { $_.Path -eq $exe }", script)
+        self.assertIn("Stop-Process -Force", script)
+        self.assertLess(script.index("Stop-Process -Force"), script.index("Running the installer"))
+
+    def test_helper_always_reopens_the_app(self):
+        # if the installer doesn't reopen Central RGB (reboot needed, it failed...), the helper does
+        for kind, new in (("installed", "C:/T/s.exe"), ("portable", "C:/x/Central RGB.exe.new")):
+            script = upd.helper_script(kind, 7, Path(new), "C:/x/Central RGB.exe")
+            self.assertIn("Start-Process -FilePath $exe -ArgumentList '--restarted'", script, kind)
+            self.assertIn("update.log", script, kind)
+            self.assertIn(upd.RESULT_FILE, script, kind)
+        inst = upd.helper_script("installed", 7, Path("C:/T/s.exe"), "C:/x/Central RGB.exe")
+        self.assertLess(inst.index("Installer finished"), inst.index("Opening Central RGB"))
+
+    def test_helper_script_is_balanced(self):
+        for kind in ("installed", "portable"):
+            script = upd.helper_script(kind, 7, Path("C:/T/it's new.exe"), "C:/x/it's/Central RGB.exe")
+            for o, c in ("{}", "()"):
+                self.assertEqual(script.count(o), script.count(c), (kind, o))
+            self.assertEqual(script.count("'") % 2, 0, kind)   # every quoted path is closed ('' escapes pair up)
+
+    @unittest.skipUnless(os.name == "nt", "needs Windows PowerShell (runs in the windows check)")
+    def test_helper_script_parses_in_windows_powershell(self):
+        import subprocess
+        import tempfile
+        for kind in ("installed", "portable"):
+            script = upd.helper_script(kind, 7, Path("C:/T/it's new.exe"), "C:/x/it's/Central RGB.exe")
+            with tempfile.TemporaryDirectory() as d:
+                f = Path(d) / "helper.ps1"
+                f.write_text(script, encoding="utf-8-sig")
+                check = ("$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("
+                         f"'{f}', [ref]$null, [ref]$e); $e | ForEach-Object {{ $_.Message }}; exit $e.Count")
+                r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", check],
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 0, f"{kind}: {r.stdout} {r.stderr}")
 
     def test_portable_swap_and_relaunch(self):
         script = upd.helper_script("portable", 99, Path("C:/x/Central RGB.exe.new"), "C:/x/it's/Central RGB.exe")
-        self.assertTrue(script.startswith("Wait-Process -Id 99"))
+        self.assertIn("Wait-Process -Id 99", script)
         self.assertIn("it''s", script)                           # quotes in paths are escaped
         self.assertIn("Move-Item", script)
         self.assertIn("Start-Process", script)
+
+    def test_last_update_result_is_read_once(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(upd.last_update_result(folder=Path(d)))           # no update happened
+            (Path(d) / upd.RESULT_FILE).write_text("1603\r\n", encoding="utf-8")
+            self.assertEqual(upd.last_update_result(folder=Path(d)), 1603)
+            self.assertIsNone(upd.last_update_result(folder=Path(d)))           # reported only once
+            (Path(d) / upd.RESULT_FILE).write_text("\ufeff0", encoding="utf-8")
+            self.assertEqual(upd.last_update_result(folder=Path(d)), 0)
+            (Path(d) / upd.RESULT_FILE).write_text("garbage", encoding="utf-8")
+            self.assertEqual(upd.last_update_result(folder=Path(d)), -1)
+
+    def test_app_process_ends_after_closing(self):
+        # a process left alive by a stray thread locks the exe during an update and makes the reopened copy
+        # think Central RGB is still running, so it quietly exits: main() must end the process itself
+        import inspect
+        import central_rgb
+        src = inspect.getsource(central_rgb.main)
+        self.assertIn("os._exit(0)", src)
+        self.assertLess(src.index("app.mainloop()"), src.index("os._exit(0)"))
 
     @unittest.skipIf(os.name == "nt", "checks the non-Windows behaviour")
     def test_apply_fails_quietly_off_windows(self):

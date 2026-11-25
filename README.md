@@ -74,6 +74,9 @@ You can remove it separately from *Settings → Apps*.
   installed copy, `Central RGB.exe` for the portable copy), checks it against the `SHA256SUMS.txt` published with the
   release and refuses it if it doesn't match, closes Central RGB the normal way (fans go back to BIOS control), installs
   it silently and opens the new version. Pre-releases and test builds are never offered.
+  If anything gets in the way, Central RGB still opens again (on the old version if the install didn't finish) and
+  says so; every step is logged to `update.log`, and the installer's own log to `setup.log`, in
+  `%TEMP%\CentralRGB-update`.
 - **Fresh download:** the newest installer is always at
   [`releases/latest/download/CentralRGB-Setup.exe`](https://github.com/steven-t0764/CentralRGB/releases/latest/download/CentralRGB-Setup.exe).
   Running it over an existing install keeps your settings.

@@ -16,7 +16,10 @@ One-click updates from GitHub Releases (standard library only).
                    SHA256SUMS.txt published with the release.
 * start_apply()  - starts a small hidden helper that waits for this app to close normally (so fans
                    are handed back to the BIOS exactly as on any close), then runs the installer
-                   silently or swaps the portable exe, and opens the new version.
+                   silently or swaps the portable exe, and opens the new version. Every step goes to
+                   update.log in the CentralRGB-update temp folder (the installer's own log is setup.log there), and the
+                   helper always opens Central RGB again, even if the installer didn't.
+* last_update_result() - on the next start: did the last update install? (installer exit code)
 
 Everything that touches Windows fails quietly elsewhere. Network errors become an UpdateError with
 a message that can be shown to the user as-is.
@@ -329,26 +332,81 @@ def _ps_quote(s: str) -> str:
     return "'" + str(s).replace("'", "''") + "'"
 
 
+def update_dir() -> Path:
+    """Where the helper keeps its log (update.log), the installer's log (setup.log) and the result."""
+    return Path(tempfile.gettempdir()) / "CentralRGB-update"
+
+
+RESULT_FILE = "update-result.txt"     # the installer's exit code, written by the helper, read on the next start
+
+
+def _helper_prelude(pid: int, exe: str) -> str:
+    """Log helper, then wait until this app and every other process run from the same exe (the sensor helper,
+    the splash) have closed; anything still there after 20 s is stopped so the exe can be replaced."""
+    log = _ps_quote(update_dir() / "update.log")
+    return (f"$log = {log}; function L($m) {{ try {{ Add-Content -LiteralPath $log -Value ((Get-Date -Format s) + ' ' + $m) }} catch {{}} }}; "
+            f"$exe = {_ps_quote(exe)}; function Running {{ @(Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq $exe }}) }}; "
+            f"L 'Waiting for Central RGB to close'; "
+            f"Wait-Process -Id {int(pid)} -Timeout 120 -ErrorAction SilentlyContinue; "
+            f"$end = (Get-Date).AddSeconds(20); while ((Get-Date) -lt $end -and (Running).Count -gt 0) {{ Start-Sleep -Milliseconds 500 }}; "
+            f"$left = Running; if ($left.Count -gt 0) {{ L ('Stopping leftover Central RGB processes: ' + ($left.Id -join ', ')); "
+            f"$left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }}; "
+            f"Start-Sleep -Milliseconds 800")
+
+
+def _relaunch_if_closed(seconds: int = 10) -> str:
+    """Open the app unless something (the installer) already did within `seconds`."""
+    return (f"$end = (Get-Date).AddSeconds({int(seconds)}); while ((Get-Date) -lt $end -and (Running).Count -eq 0) {{ Start-Sleep -Milliseconds 500 }}; "
+            f"if ((Running).Count -eq 0) {{ L 'Opening Central RGB'; $env:PYINSTALLER_RESET_ENVIRONMENT = '1'; "
+            f"Start-Process -FilePath $exe -ArgumentList '--restarted' }} else {{ L 'Central RGB is open again' }}")
+
+
 def helper_script(kind: str, pid: int, new_file: Path, exe: str | None = None) -> str:
-    """PowerShell run by the hidden helper. It waits for `pid` (this app) to finish closing first."""
+    """PowerShell run by the hidden helper. It waits for `pid` (this app) to finish closing first, logs every
+    step to update.log, and always opens Central RGB again at the end (the new version, or the old one if the
+    update couldn't be installed)."""
     exe = str(Path(exe or sys.executable).resolve())
-    wait = f"Wait-Process -Id {int(pid)} -Timeout 120 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800"
+    pre = _helper_prelude(pid, exe)
     if kind == "installed":
-        args = ",".join(_ps_quote(a) for a in INSTALLER_ARGS)
-        return (f"{wait}; Start-Process -FilePath {_ps_quote(new_file)} -ArgumentList {args} -Wait; "
-                f"Remove-Item -LiteralPath {_ps_quote(new_file)} -Force -ErrorAction SilentlyContinue")
+        setup_log = update_dir() / "setup.log"
+        args = ",".join(_ps_quote(a) for a in INSTALLER_ARGS + [f'/LOG="{setup_log}"'])
+        result = _ps_quote(update_dir() / RESULT_FILE)
+        return (f"{pre}; L 'Running the installer'; "
+                f"$p = Start-Process -FilePath {_ps_quote(new_file)} -ArgumentList {args} -Wait -PassThru; "
+                f"$code = if ($p) {{ $p.ExitCode }} else {{ -1 }}; L ('Installer finished with code ' + $code); "
+                f"try {{ Set-Content -LiteralPath {result} -Value $code }} catch {{}}; "
+                f"Remove-Item -LiteralPath {_ps_quote(new_file)} -Force -ErrorAction SilentlyContinue; "
+                f"{_relaunch_if_closed(10)}")
     if kind == "portable":
         old = exe + ".old"
-        return (f"{wait}; $ok = $false; for ($i = 0; $i -lt 40 -and -not $ok; $i++) {{ try {{ "
+        return (f"{pre}; $ok = $false; for ($i = 0; $i -lt 40 -and -not $ok; $i++) {{ try {{ "
                 f"if (Test-Path -LiteralPath {_ps_quote(old)}) {{ Remove-Item -LiteralPath {_ps_quote(old)} -Force }}; "
-                f"Move-Item -LiteralPath {_ps_quote(exe)} -Destination {_ps_quote(old)} -Force -ErrorAction Stop; "
-                f"Move-Item -LiteralPath {_ps_quote(new_file)} -Destination {_ps_quote(exe)} -Force -ErrorAction Stop; "
-                f"$ok = $true }} catch {{ if (-not (Test-Path -LiteralPath {_ps_quote(exe)}) -and "
+                f"Move-Item -LiteralPath $exe -Destination {_ps_quote(old)} -Force -ErrorAction Stop; "
+                f"Move-Item -LiteralPath {_ps_quote(new_file)} -Destination $exe -Force -ErrorAction Stop; "
+                f"$ok = $true }} catch {{ if (-not (Test-Path -LiteralPath $exe) -and "
                 f"(Test-Path -LiteralPath {_ps_quote(old)})) {{ Move-Item -LiteralPath {_ps_quote(old)} "
-                f"-Destination {_ps_quote(exe)} -Force }}; Start-Sleep -Milliseconds 500 }} }}; "
-                f"$env:PYINSTALLER_RESET_ENVIRONMENT = '1'; Start-Process -FilePath {_ps_quote(exe)} -ArgumentList '--restarted'; "
+                f"-Destination $exe -Force }}; Start-Sleep -Milliseconds 500 }} }}; "
+                f"L ('Swapped the exe: ' + $ok); try {{ Set-Content -LiteralPath {_ps_quote(update_dir() / RESULT_FILE)} "
+                f"-Value $(if ($ok) {{ 0 }} else {{ 1 }}) }} catch {{}}; "
+                f"{_relaunch_if_closed(0)}; "
                 f"if ($ok) {{ Start-Sleep -Seconds 10; Remove-Item -LiteralPath {_ps_quote(old)} -Force -ErrorAction SilentlyContinue }}")
     raise UpdateError("This copy can't update itself.")
+
+
+def last_update_result(remove: bool = True, folder: Path | None = None) -> int | None:
+    """The exit code the last update's installer returned (0 = installed), or None if there was no update.
+    Read once on the next start; the file is removed so it's reported only once."""
+    f = Path(folder or update_dir()) / RESULT_FILE
+    try:
+        text = f.read_text(encoding="utf-8-sig", errors="ignore").strip()
+    except Exception:
+        return None
+    if remove:
+        _rm(f)
+    try:
+        return int(text.split()[0])
+    except Exception:
+        return -1
 
 
 def helper_command(kind: str, pid: int, new_file: Path, exe: str | None = None) -> list[str]:
@@ -364,6 +422,11 @@ def start_apply(kind: str, new_file: Path, exe: str | None = None, env: dict | N
     for k in list(env):                   # the portable exe's unpack folder must not leak to the new copy
         if k.startswith("_PYI_") or k.startswith("_MEIPASS"):
             env.pop(k, None)
+    try:
+        update_dir().mkdir(parents=True, exist_ok=True)
+        _rm(update_dir() / RESULT_FILE)
+    except Exception:
+        pass
     try:
         subprocess.Popen(helper_command(kind, os.getpid(), Path(new_file), exe), env=env,
                          creationflags=0x08000000 | 0x00000008,   # CREATE_NO_WINDOW | DETACHED_PROCESS

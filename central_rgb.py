@@ -2139,6 +2139,7 @@ class App(ctk.CTk):
         self.after(300, lambda: self._bg(self._startup))
         self.after(800, lambda: self._bg(self._load_sysinfo))
         self.after(20000, self._auto_check_updates)
+        self.after(4000, self._report_last_update)
 
     # ---------------------------------------------------------------- self-test (used by the CI build)
     def report_callback_exception(self, exc, val, tb):
@@ -5253,6 +5254,22 @@ class App(ctk.CTk):
             self.log("Removed from Windows startup.", "ok")
 
     # ---------------------------------------------------------------- updates (see updater.py)
+    def _report_last_update(self):
+        """After an in-app update: say whether it installed (the helper leaves the installer's exit code)."""
+        code = upd.last_update_result()
+        if code is None:
+            return
+        logs = upd.update_dir()
+        if code == 0:
+            self.log(f"Update installed: you're on Central RGB {APP_VERSION}.", "ok")
+            return
+        msg = (f"The last update didn't finish installing (installer code {code}), so you're still on "
+               f"{APP_VERSION}. Try Settings > Updates > Check now again, or download CentralRGB-Setup.exe from "
+               f"the Releases page. Details are in update.log and setup.log in {logs}.")
+        self.log(msg, "bad")
+        if not self.background:
+            messagebox.showwarning(eng.APP_NAME, msg)
+
     def _auto_check_updates(self):
         """At most once a day, if 'Automatically check for updates' is on (the default)."""
         if upd.should_auto_check(self.settings.data):
@@ -5497,6 +5514,14 @@ def main():
     _forward = threading.Thread(target=lambda: [app.q.put(q.get()) for _ in iter(int, 1)], daemon=True)
     _forward.start()
     app.mainloop()
+    # Everything was shut down in _quit (fans handed back, settings written). End the process now, so no
+    # leftover thread keeps it alive invisibly: that would lock the exe during an update and make the
+    # reopened copy think Central RGB is still running.
+    try:
+        app.settings.flush()
+    except Exception:
+        pass
+    os._exit(0)
 
 
 if __name__ == "__main__":
