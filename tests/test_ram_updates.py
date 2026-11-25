@@ -136,7 +136,7 @@ class RamUpdateTests(unittest.TestCase):
         sticks, led = ram_sticks(2), strip()
         e = self.engine(sticks + [led], effect="Rainbow Wave")
         # an animation that only wobbles by one step: nothing visible changes
-        wobble = lambda effect, color, b, s, n, t, offset=0.0: [(100 + int(t * 30) % 2, 50, 20)] * n
+        wobble = lambda effect, color, b, s, n, t, offset=0.0, **smooth: [(100 + int(t * 30) % 2, 50, 20)] * n
         with mock.patch.object(eng, "compute_colors", wobble):
             self.run_seconds(e, 1)
             before = [d.writes for d in sticks]

@@ -2025,8 +2025,9 @@ QUEUE_BATCH = 200         # queue items handled per _poll_queue tick, so a burst
 LOG_PREFIX = {"ok": "✓ ", "warn": "! ", "bad": "✕ ", "info": "  "}
 OVERLAY_FAST_MS = 250     # overlay on, or its page open: follow the game this often
 OVERLAY_IDLE_MS = 1000    # overlay off and its page not showing: only check whether that changed
-ANIM_MS = 40              # the live previews' frame time (25 fps)
-TILE_EVERY = 2            # effect tiles redraw every 2nd frame (12.5 fps), not all of them on the same frame
+ANIM_MS = 16              # the live previews' frame time (~60 fps, so fast effects glide on high-refresh screens)
+TILE_EVERY = 5            # effect tiles redraw every 5th frame (~12 fps), not all of them on the same frame
+CARD_EVERY = 2            # device cards on the Devices page: every 2nd frame (~30 fps)
 
 
 class App(ctk.CTk):
@@ -4524,6 +4525,7 @@ class App(ctk.CTk):
         memo = {}                                     # one compute_colors per set of arguments per frame
 
         def draw(widget, effect, color, bright, speed, n, offset=0.0, every=1, phase=0):
+            """Smoothed like the hardware: each LED averaged over its width and over its frame's time slice."""
             custom = eng.CUSTOM_PRESETS.get(effect)
             sig = (effect, tuple(color), bright, speed, n, offset, repr(custom) if custom else None)
             if sig == getattr(widget, "_anim_sig", None):
@@ -4532,7 +4534,8 @@ class App(ctk.CTk):
             widget._anim_sig = sig
             key = sig[:6]
             if key not in memo:
-                memo[key] = eng.compute_colors(effect, color, bright, speed, n, t, offset=offset)
+                memo[key] = eng.compute_colors(effect, color, bright, speed, n, t, offset=offset,
+                                               blur=ANIM_MS / 1000 * every if live else 0.0, aa=live)
             widget.show(memo[key])
             return True
 
@@ -4561,7 +4564,7 @@ class App(ctk.CTk):
                     continue
                 ds = overrides.get(card.key) or base
                 draw(card.strip, ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"], card.strip.n,
-                     offset=i * 0.07)
+                     offset=i * 0.07, every=CARD_EVERY, phase=i)
             if self.editor is not None:
                 ds = overrides.get(self.editor_key) or base
                 draw(self.editor_art, ds["effect"], ds["color"], max(ds["brightness"], 8), ds["speed"],

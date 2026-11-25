@@ -1397,11 +1397,43 @@ def diagnose_missing_mouse(found_types, mice=None, keyboards=None, conflicts=Non
             "blockers": blockers, "summary": summary}
 
 
+# Keyboards people have asked about that OpenRGB can't light yet: (vendor id, product id) -> (name, OpenRGB issue).
+# Only USB IDs confirmed in OpenRGB's own issue tracker go here.
+UNSUPPORTED_KEYBOARDS = {
+    ("046D", "C356"): ("Logitech G915 X LIGHTSPEED", "gitlab.com/CalcProgrammer1/OpenRGB/-/issues/4461"),
+    ("046D", "C359"): ("Logitech G915 X (wired)", "gitlab.com/CalcProgrammer1/OpenRGB/-/issues/4540"),
+}
+
+
+def diagnose_missing_keyboard(found_types, keyboards=None) -> dict | None:
+    """If Windows reports a keyboard OpenRGB is known not to support yet, and OpenRGB found no keyboard,
+    say so plainly (so nobody keeps closing apps and rescanning for it). Same shape as diagnose_missing_ram."""
+    if "Keyboard" in set(found_types):
+        return None
+    seen = []
+    for entry in (KEYBOARD_INVENTORY if keyboards is None else keyboards):
+        vp = _vid_pid(entry)
+        if vp in UNSUPPORTED_KEYBOARDS and vp not in seen:
+            seen.append(vp)
+    if not seen:
+        return None
+    names = ", ".join(UNSUPPORTED_KEYBOARDS[vp][0] for vp in seen)
+    ids = ", ".join(f"{v}:{p}" for v, p in seen)
+    reasons = [f"OpenRGB doesn't support the {names} yet (USB ID {ids}), so Central RGB can't light it. Support "
+               "has been requested: " + "; ".join(UNSUPPORTED_KEYBOARDS[vp][1] for vp in seen) + ". Central RGB "
+               "lights it as soon as an OpenRGB update adds it.",
+               "Until then, set its lighting in Logitech G HUB, which only controls Logitech gear. Close them also "
+               "closes G HUB; the keyboard then shows its built-in lighting until you open G HUB again."]
+    return {"kind": "keyboard", "title": "Keyboard not supported yet", "names": names, "reasons": reasons,
+            "blockers": [], "summary": f"{names} connected (USB ID {ids}); OpenRGB can't light it yet."}
+
+
 def diagnose_missing_devices(found_types, conflicts=None, **ram_kw) -> list[dict]:
-    """Every installed RGB device OpenRGB didn't report (RAM, mouse), each with its reasons. [] if none."""
+    """Every installed RGB device OpenRGB didn't report (RAM, mouse, keyboard), each with its reasons. [] if none."""
     conflicts = find_conflicts() if conflicts is None else conflicts
     out = [diagnose_missing_ram(found_types, conflicts=conflicts, **ram_kw),
-           diagnose_missing_mouse(found_types, conflicts=conflicts)]
+           diagnose_missing_mouse(found_types, conflicts=conflicts),
+           diagnose_missing_keyboard(found_types)]
     return [d for d in out if d]
 
 
@@ -1475,10 +1507,59 @@ def system_check() -> list[tuple[str, str]]:
 
 
 # --------------------------------------------------------------------------- effects
+_TO_LINEAR = [(v / 255) ** 2.2 for v in range(256)]
+
+
+def _to_srgb(x: float) -> int:
+    return min(255, max(0, int(round(255 * x ** (1 / 2.2))))) if x > 0 else 0
+
+
+SMOOTH_SAMPLES = 3       # motion blur: time samples averaged per frame
+SMOOTH_AA = 4            # anti-aliasing: sub-positions averaged per LED on short strips
+SMOOTH_AA_MAX_LEDS = 48  # strips longer than this are already fine-grained enough
+# effects where every LED does its own thing (drops, sparkles, embers): averaging across an LED's width would
+# blend unrelated LEDs into mud, so these only get motion blur
+SMOOTH_AA_SKIP = {"Drizzle", "Ember", "Frost", "Stardust", "Magma", "Cyberpunk"}
+
+
+def _per_led(effect: str) -> bool:
+    if effect in CUSTOM_PRESETS:
+        return CUSTOM_PRESETS[effect].get("motion") == "Sparkle"
+    return effect in SMOOTH_AA_SKIP
+
+
 def compute_colors(effect: str, color, brightness: int, speed: int, n: int, t: float,
-                   offset: float = 0.0) -> list[tuple[int, int, int]]:
-    """Pure function: colors for n LEDs at time t."""
+                   offset: float = 0.0, blur: float = 0.0, aa: bool = False) -> list[tuple[int, int, int]]:
+    """Pure function: colors for n LEDs at time t.
+
+    blur (seconds): average the effect over the frame's own time slice (motion blur), so a device updated
+    at a low rate (RAM: a few times a second) fades between frames instead of jumping.
+    aa: on short strips, each LED shows the average of the effect across its width, so moving edges glide
+    from LED to LED instead of popping. With neither (the default) the result is exactly the plain effect."""
     effect = RENAMED.get(effect, effect)
+    if (blur > 0 or aa) and is_animated(effect):
+        sub = SMOOTH_AA if aa and 1 < n <= SMOOTH_AA_MAX_LEDS and not _per_led(effect) else 1
+        times = [t - blur * (0.5 - (k + 0.5) / SMOOTH_SAMPLES) for k in range(SMOOTH_SAMPLES)] if blur > 0 else [t]
+        # averaged in linear light (like light really adds up), so a bright spark half across an LED still
+        # looks bright instead of turning muddy
+        lin = _TO_LINEAR
+        acc = [[0.0, 0.0, 0.0] for _ in range(n)]
+        for tt in times:
+            fine = _compute(effect, color, brightness, speed, n * sub, tt, offset)
+            for i in range(n):
+                a = acc[i]
+                for c in fine[i * sub:(i + 1) * sub]:
+                    a[0] += lin[c[0]]
+                    a[1] += lin[c[1]]
+                    a[2] += lin[c[2]]
+        w = len(times) * sub
+        return [(_to_srgb(a[0] / w), _to_srgb(a[1] / w), _to_srgb(a[2] / w)) for a in acc]
+    return _compute(effect, color, brightness, speed, n, t, offset)
+
+
+def _compute(effect: str, color, brightness: int, speed: int, n: int, t: float,
+             offset: float = 0.0) -> list[tuple[int, int, int]]:
+    """The plain effect: colors for n LEDs at time t (effect name already resolved)."""
     n = max(n, 1)
     b = max(0, min(100, brightness)) / 100.0
     f = 0.1 + max(0, min(100, speed)) / 100.0 * 1.4  # 0.1 .. 1.5 Hz-ish
@@ -1551,6 +1632,12 @@ def _mix(a, b, k):
     return tuple(a[i] + (b[i] - a[i]) * k for i in range(3))
 
 
+def _smooth(x: float) -> float:
+    """0..1 ease (smoothstep), clamped."""
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+
 def _palette(stops, x):
     x = (x % 1.0) * len(stops)
     i = int(x) % len(stops)
@@ -1572,7 +1659,7 @@ def _preset(effect, n, t, offset=0.0):
             x, cycle = tt % period, int(tt / period)
             hue = _rnd(i, 10 + cycle)
             drop = [c * 255 for c in colorsys.hsv_to_rgb(hue, 0.9, 1)]
-            out.append(_mix((0, 4, 14), drop, math.exp(-x * 3.5)))
+            out.append(_mix((0, 4, 14), drop, _smooth(x / 0.18) * math.exp(-x * 3.5)))   # quick fade in, no pop
     elif effect == "Sweep":        # a rainbow bar sweeping left and right
         pos = 0.5 + 0.5 * math.sin(t * 1.6 + offset * 6)
         for i in range(n):
@@ -1585,7 +1672,7 @@ def _preset(effect, n, t, offset=0.0):
             v = 0.5 + 0.5 * math.sin(t * (1.0 + 2.2 * _rnd(i, 3)) + _rnd(i, 4 + offset) * 6.28)
             out.append(_mix((70, 0, 4), (255, 38, 20), v * v))
     elif effect == "Pulse":              # equaliser bar bouncing green to yellow to red
-        level = 0.12 + 0.88 * abs(math.sin(t * 2.3 + offset * 9) * math.sin(t * 0.9 + 1.3) + 0.25 * math.sin(t * 5.1)) / 1.25
+        level = 0.12 + 0.88 * abs(math.sin(t * 2.3 + offset * 9) * math.sin(t * 0.9 + 1.3) + 0.12 * math.sin(t * 3.4)) / 1.12
         for i in range(n):
             x = (i + 0.5) / n
             col = _palette([(0, 255, 60), (0, 255, 60), (255, 230, 0), (255, 40, 0)], x * 0.749)
@@ -1644,13 +1731,21 @@ def _preset(effect, n, t, offset=0.0):
             out.append((200, 255, 215) if head_at[i] else (int(30 * k ** 4), int(14 + 230 * k ** 1.5), int(30 * k ** 2)))
     elif effect == "Cyberpunk":     # neon blocks that glitch between magenta, cyan and yellow
         pal = [(255, 40, 200), (0, 240, 255), (255, 225, 30), (150, 60, 255)]
-        slot = int(t * 2.2)
-        glitch = _rnd(int(t * 9), 41 + offset) < 0.12
+        st = t * 2.2
+        slot, frac = int(st), st - int(st)
+        fade = _smooth((frac - 0.65) / 0.35)                  # crossfade into the next blocks, no hard cut
+        gt = t * 9
+        glitch = _rnd(int(gt), 41 + offset) < 0.12
+        gk = 0.55 * math.sin(math.pi * (gt - int(gt)))        # a glitch flickers in and out, half strength
+
+        def block_col(s_, i):
+            block = int(i / max(1, n) * 6 + _rnd(s_, 43) * 3)
+            return int(_rnd(block, s_ + 50) * len(pal)) % len(pal)
         for i in range(n):
-            block = int(i / max(1, n) * 6 + _rnd(slot, 43) * 3)
-            col = pal[int(_rnd(block, slot + 50) * len(pal)) % len(pal)]
-            if glitch and _rnd(i, int(t * 9) + 60) < 0.5:
-                col = pal[(pal.index(col) + 1) % len(pal)]
+            a = block_col(slot, i)
+            col = _mix(pal[a], pal[block_col(slot + 1, i)], fade)
+            if glitch and _rnd(i, int(gt) + 60) < 0.5:
+                col = _mix(col, pal[(a + 1) % len(pal)], gk)
             out.append(col)
     elif effect == "Magma":         # dark rock with slow molten veins flowing through it
         for i in range(n):
@@ -1661,8 +1756,8 @@ def _preset(effect, n, t, offset=0.0):
             out.append(_mix((22, 2, 0), col, 0.3 + 0.7 * min(1.0, v * 1.6)))
     elif effect == "Stardust":      # deep navy with warm and cool sparkles twinkling
         for i in range(n):
-            rate = 0.8 + 2.4 * _rnd(i, 80)
-            v = (0.5 + 0.5 * math.sin(t * rate + _rnd(i, 81 + offset) * 6.28)) ** 12
+            rate = 0.6 + 1.8 * _rnd(i, 80)
+            v = (0.5 + 0.5 * math.sin(t * rate + _rnd(i, 81 + offset) * 6.28)) ** 8
             star = (255, 225, 170) if _rnd(i, 82) < 0.5 else (190, 215, 255)
             out.append(_mix((6, 6, 28), star, v))
     elif effect == "Nebula":        # slow churning purple, pink and blue clouds
@@ -2060,8 +2155,11 @@ class LightingEngine(threading.Thread):
                         if now - self.last_slow_push.get(key, 0) < 0.5:
                             continue
                         self.last_slow_push[key] = now
+                    # motion blur over this device's own update period, so slower devices fade rather than step
+                    period = (ram_cycle / self.FPS) if is_ram else (0.5 if how == "slow" else 1 / self.FPS)
                     cols = compute_colors(st["effect"], st["color"], st["brightness"],
-                                          st["speed"], len(dev.leds), now, offset=idx * 0.07)
+                                          st["speed"], len(dev.leds), now, offset=idx * 0.07,
+                                          blur=period if animated else 0.0, aa=animated)
                     if not dev_dirty and self._unchanged(key, cols, is_ram):
                         continue                    # nothing (visible) changed for this device: don't write
                     self.last_sent[key] = cols
