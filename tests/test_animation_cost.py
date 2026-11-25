@@ -48,7 +48,7 @@ if not (__name__ == "__main__" and APP_CHECK in sys.argv):   # the app check imp
     except Exception:  # pragma: no cover - needs tkinter/customtkinter
         cr = None
 
-FRAMES_PER_SECOND = 25            # _animate runs every ANIM_MS = 40 ms
+FRAMES_PER_SECOND = 1000 // cr.ANIM_MS if cr else 60   # _animate runs every ANIM_MS
 
 
 class FakeSettings:
@@ -143,12 +143,13 @@ class LightingPageCallsLess(unittest.TestCase):
         for _, t in moving:
             t.shown.clear()
         per_frame = []
-        for i in range(1, 21):
+        frames = cr.TILE_EVERY * 4
+        for i in range(1, frames + 1):
             before = sum(len(t.shown) for _, t in moving)
-            _run(app, 1, t0=1000.0 + i * 0.04)
+            _run(app, 1, t0=1000.0 + i * cr.ANIM_MS / 1000)
             per_frame.append(sum(len(t.shown) for _, t in moving) - before)
         for _, t in moving:
-            self.assertEqual(len(t.shown), 10)                          # 20 frames at 12.5 fps
+            self.assertEqual(len(t.shown), 4)                           # every TILE_EVERY-th frame (~12 fps)
         self.assertLess(max(per_frame), len(moving))                    # never all of them on one frame
 
     def test_still_tiles_draw_once(self):
