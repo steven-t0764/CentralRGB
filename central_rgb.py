@@ -46,6 +46,7 @@ import device_models as dm
 import fps_overlay as fpo
 import hw_monitor as hwm
 import rgb_engine as eng
+import springs
 import updater as upd
 import win_effects as fx
 
@@ -1015,6 +1016,8 @@ class NavItem(ctk.CTkFrame):
         self.pill.pack(side="right", padx=(0, 8))
         self._dot = None
         self.on = False
+        self._led = None
+        self.pop = springs.Animator(self.pill, self._draw_dot, value=0.0, **springs.POP)   # the LED pops in
         for w in (self, self.icon, self.text, self.pill):
             # e=None: CustomTkinter 6 can call these without an event
             w.bind("<Button-1>", lambda e=None: command())
@@ -1036,14 +1039,54 @@ class NavItem(ctk.CTkFrame):
         self.icon.configure(text_color=P["TEXT"] if on else P["MUTED"])
         bg = P["SEL"] if on else P["SIDE"]
         self.pill.configure(bg=bg)
+        lit_before = self._led is not None
+        self._led = (bg, led) if on else None
+        if on and not lit_before:
+            self.pop.to(0.0, animate=False)
+            self.pop.to(1.0)                         # newly opened page: the LED springs in
+        else:
+            self.pop.to(1.0 if on else 0.0, animate=False)
+
+    def _draw_dot(self, k):
         self.pill.delete("all")
-        if on:                                       # soft halo + bright core, like an LED behind diffuser
-            self.pill.create_oval(2, 2, 12, 12, fill=hexcol(mix(hex2rgb(bg), hex2rgb(led), 0.35)), width=0)
-            self.pill.create_oval(4, 4, 10, 10, fill=led, width=0)
+        if self._led is None or k <= 0.02:
+            return
+        bg, led = self._led                          # soft halo + bright core, like an LED behind diffuser
+        k = max(0.0, k)
+        for r, fill in ((5 * k, hexcol(mix(hex2rgb(bg), hex2rgb(led), 0.35))), (3 * k, led)):
+            r = min(r, 6.5)
+            self.pill.create_oval(7 - r, 7 - r, 7 + r, 7 + r, fill=fill, width=0)
 
 
 def fmt(v, unit="", nd=0, none="—"):
     return none if v is None else f"{v:.{nd}f}{unit}"
+
+
+def count_to(label, value, fmt_fn, **kw):
+    """Show a reading on a label, counting smoothly from the last shown value to the new one (no overshoot, about
+    half a second) instead of jumping. None shows as fmt_fn(None) at once. kw (colours etc.) apply straight away."""
+    anim = getattr(label, "_count", None)
+    if kw:
+        label.configure(**kw)
+    if value is None:
+        if anim is not None:
+            anim.stop()
+            label._count = None
+        label.configure(text=fmt_fn(None))
+        return
+    if anim is None:                                  # first reading: show it as it is
+        def show(v, lbl=label, f=fmt_fn):
+            lbl.configure(text=lbl._count_fmt(v))
+        label._count_fmt = fmt_fn
+        label._count = anim = springs.Animator(label, show, value=value, **springs.GENTLE)
+        anim.to(value, animate=False)
+        return
+    label._count_fmt = fmt_fn
+    try:
+        shown = label.winfo_ismapped()
+    except tk.TclError:
+        shown = False
+    anim.to(value, animate=shown)
 
 
 def temp_color(t):
@@ -1523,38 +1566,142 @@ class GlowBar(tk.Canvas):
 
 
 class PillSwitcher(ctk.CTkFrame):
-    """Pill selector: the chosen option gets a smooth accent outline and accent text (replaces segmented buttons)."""
+    """Pill selector: the chosen option sits in a soft accent pill that springs across to the next choice when
+    you pick another (like the sliding tabs in Motion / Framer apps). One canvas draws it all."""
+
+    PAD = 3            # space around the pill, as the old buttons had
+    GAP = 4            # space between options
 
     def __init__(self, master, values, command=None, height=32, font=None, selected_color=None, **_ignored):
         super().__init__(master, fg_color="transparent", corner_radius=0, border_width=0)
         self.values, self.command, self.accent = list(values), command, selected_color or DEFAULT_ACCENT
         self.current = self.values[0] if self.values else None
-        self.buttons = {}
-        for v in self.values:
-            b = SmoothButton(self, text=v, height=height - 6, width=max(40, 8 * len(v) + 26), corner_radius=(height - 6) // 2,
-                             font=font or F(13), border_width=1, command=lambda x=v: self._click(x))
-            b.pack(side="left", padx=2, pady=3, fill="x", expand=True)
-            self.buttons[v] = b
-        self._style()
+        try:
+            self._sc = ctk.ScalingTracker.get_widget_scaling(master)
+        except Exception:
+            self._sc = 1.0
+        self._font0 = font or F(13)
+        self._h = int(height * self._sc)
+        self._behind = SmoothFrame._color_behind(master)
+        self._natural = [int(max(40, 8 * len(v) + 26) * self._sc) for v in self.values]
+        need = sum(self._natural) + self.GAP * max(0, len(self.values) - 1) + 2 * self.PAD
+        self.cv = tk.Canvas(self, width=need, height=self._h, bg=self._behind, highlightthickness=0, bd=0,
+                            cursor="hand2")
+        self.cv.pack(fill="x", expand=True)
+        self._slots, self._hover = [], None
+        self._hover_item = self.cv.create_image(0, 0, anchor="nw")
+        self._pill_item = self.cv.create_image(0, 0, anchor="nw")
+        self._texts = [self.cv.create_text(0, 0, text=v) for v in self.values]
+        self._imgs = {}
+        idx = self.values.index(self.current) if self.current in self.values else 0
+        self.anim = springs.Animator(self.cv, self._place_pill, value=idx, **springs.SNAPPY)
+        self.cv.bind("<Configure>", lambda e=None: self._layout())
+        self.cv.bind("<Motion>", self._move)
+        self.cv.bind("<Leave>", lambda e=None: self._set_hover(None))
+        self.cv.bind("<ButtonRelease-1>", self._release)
+
+    # -- layout and drawing
+    def _font(self):
+        f = self._font0
+        try:
+            return (f.cget("family"), -max(8, round(abs(f.cget("size")) * self._sc)), f.cget("weight"))
+        except Exception:
+            return f
+
+    def _layout(self):
+        w = max(self.cv.winfo_width(), 2)
+        n = len(self.values)
+        if not n:
+            return
+        spare = max(0, w - 2 * self.PAD - self.GAP * (n - 1) - sum(self._natural))
+        x, self._slots = self.PAD, []
+        for nat in self._natural:                    # extra width shared out evenly, like pack(expand=True)
+            sw = nat + spare / n
+            self._slots.append((x, sw))
+            x += sw + self.GAP
+        for item, (sx, sw) in zip(self._texts, self._slots):
+            self.cv.coords(item, sx + sw / 2, self._h / 2)
+            self.cv.itemconfigure(item, font=self._font())
+        self._draw_hover()
+        self._place_pill(self.anim.value)
+
+    def _pill_img(self, w, fill, outline):
+        w = max(2, int(round(w)))
+        h = self._h - 2 * self.PAD
+        key = (w, h, fill, outline, self._behind)
+        img = self._imgs.get(key)
+        if img is None:
+            if len(self._imgs) > 120:
+                self._imgs.clear()
+            img = ImageTk.PhotoImage(aa_round_rect(w, h, h / 2, hex2rgb(fill), hex2rgb(self._behind),
+                                                   outline=hex2rgb(outline) if outline else None,
+                                                   width=max(1, self._sc)))
+            self._imgs[key] = img
+        return img
+
+    def _place_pill(self, s):
+        if not self._slots:
+            return
+        x, w = springs.lerp_slots(self._slots, s)
+        img = self._pill_img(w, P["SEL"], self.accent)
+        self.cv.itemconfigure(self._pill_item, image=img)
+        self.cv.coords(self._pill_item, round(x), self.PAD)
+        for i, item in enumerate(self._texts):       # the label under the pill takes the accent colour
+            near = max(0.0, 1.0 - abs(s - i))
+            col = hexcol(mix(hex2rgb(P["MUTED"]), hex2rgb(self.accent), near))
+            self.cv.itemconfigure(item, fill=col)
+
+    def _draw_hover(self):
+        i = self._hover
+        if i is None or not self._slots or self.values[i] == self.current:
+            self.cv.itemconfigure(self._hover_item, state="hidden")
+            return
+        x, w = self._slots[i]
+        self.cv.itemconfigure(self._hover_item, image=self._pill_img(w, P["HOVER"], None), state="normal")
+        self.cv.coords(self._hover_item, round(x), self.PAD)
+
+    # -- mouse
+    def _slot_at(self, x):
+        for i, (sx, sw) in enumerate(self._slots):
+            if sx - self.GAP / 2 <= x <= sx + sw + self.GAP / 2:
+                return i
+        return None
+
+    def _move(self, e):
+        self._set_hover(self._slot_at(e.x))
+
+    def _set_hover(self, i):
+        if i != self._hover:
+            self._hover = i
+            self._draw_hover()
+
+    def _release(self, e):
+        if not (0 <= e.y <= self.cv.winfo_height()):
+            return
+        i = self._slot_at(e.x)
+        if i is not None:
+            self._click(self.values[i])
 
     def _click(self, v):
         self.set(v)
         if self.command:
             self.command(v)
 
-    def _style(self):
-        for v, b in self.buttons.items():
-            on = v == self.current
-            b.configure(fg_color=P["SEL"] if on else "transparent", hover_color=P["HOVER"], border_width=1 if on else 0,
-                        border_color=self.accent, text_color=self.accent if on else P["MUTED"])
-
+    # -- the same calls as before
     def get(self):
         return self.current
 
     def set(self, v):
-        if v in self.buttons:
-            self.current = v
-            self._style()
+        if v not in self.values:
+            return
+        changed = v != self.current
+        self.current = v
+        try:
+            shown = self.cv.winfo_ismapped() and bool(self._slots)
+        except tk.TclError:
+            shown = False
+        self.anim.to(self.values.index(v), animate=changed and shown)   # glide when you can see it, else jump
+        self._draw_hover()
 
     def configure(self, require_redraw=False, **kw):
         acc = kw.pop("selected_color", None)
@@ -1563,7 +1710,7 @@ class PillSwitcher(ctk.CTkFrame):
             self.command = kw.pop("command")
         if acc:
             self.accent = acc
-            self._style()
+            self._place_pill(self.anim.value)
         if kw:
             super().configure(require_redraw=require_redraw, **kw)
 
@@ -1800,7 +1947,7 @@ class FanCard(SmoothFrame):
 
     def update_fan(self, f, accent, auto):
         rpm = f.get("rpm")
-        self.rpm.configure(text=f"{rpm:,.0f}" if rpm is not None else "—")
+        count_to(self.rpm, rpm, lambda v: f"{v:,.0f}" if v is not None else "—")
         target = f.get("target")
         shown = target if target is not None else f.get("pct")
         if time.time() - self.touched > 1.5:
@@ -2792,7 +2939,8 @@ class App(ctk.CTk):
         sub.configure(text=f"{len(fans)} fans · avg {sum(rpms) / len(rpms):,.0f} RPM" if rpms else "No controllable fans yet")
         for title, tk_, lk in (("Processor", "cpu_temp", "cpu_load"), ("Graphics", "gpu_temp", "gpu_load")):
             big, sub = self.home_tiles[title]
-            big.configure(text=fmt(m.get(tk_), "°C"), text_color=temp_color(m.get(tk_)) if m.get(tk_) else P["TEXT"])
+            count_to(big, m.get(tk_), lambda v: fmt(v, "°C"),
+                     text_color=temp_color(m.get(tk_)) if m.get(tk_) else P["TEXT"])
             sub.configure(text=f"{fmt(m.get(lk), '%')} load")
         if self.home_fan_seg.get() != s.get("profile") and s.get("profile") in hwm.PROFILES[:5]:
             self.home_fan_seg.set(s["profile"])
@@ -3389,7 +3537,7 @@ class App(ctk.CTk):
     def _refresh_fans(self, s):
         m = s["metrics"]
         for k, lbl in self.fan_temp_labels.items():
-            lbl.configure(text=fmt(m.get(k), "°"), text_color=temp_color(m.get(k)))
+            count_to(lbl, m.get(k), lambda v: fmt(v, "°"), text_color=temp_color(m.get(k)))
         if self.fan_seg.get() != s["profile"]:
             self.fan_seg.set(s["profile"])
         prof = s["profile"]
