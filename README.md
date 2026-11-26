@@ -310,6 +310,7 @@ CentralRGB/
 ├── fonts/                # Orbitron for the FPS counter (OFL 1.1, with its license)
 ├── presets/              # preview pictures for the preset effects (made by tools/make_preset_art.py)
 ├── win_effects.py        # dark, seamless title bar
+├── springs.py          # spring motion: sliding selectors, LED pop, counting readings
 ├── updater.py            # one-click updates from GitHub Releases (checksum-verified)
 ├── central_rgb.ico/.png  # app icon
 ├── central_rgb.iss       # Inno Setup installer script
