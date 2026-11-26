@@ -47,6 +47,7 @@ import fps_overlay as fpo
 import hw_monitor as hwm
 import rgb_engine as eng
 import springs
+import battery as bat
 import updater as upd
 import win_effects as fx
 
@@ -1883,6 +1884,75 @@ class DeviceArt(tk.Canvas):
         self._img.paste(self.model.render(colors))         # same size every frame: reuse the Tk image
 
 
+BATTERY_ICONS = {"keyboard": ("\ue765", "⌨"), "mouse": ("\ue962", "◉"), "headset": ("\ue95b", "◖"),
+                 "controller": ("\ue7fc", "▣"), "device": ("\ue83f", "▮")}
+
+
+def battery_color(b) -> str:
+    if b.charging:
+        return INFO
+    if b.level is None:
+        return P["FAINT"]
+    return OK if b.level > 40 else WARN if b.level > 15 else BAD
+
+
+def battery_short_name(b) -> str:
+    """The model without the brand in front (the brand is on the line underneath), trimmed to fit a tile."""
+    n = b.name
+    if b.brand and n.lower().startswith(b.brand.lower() + " "):
+        n = n[len(b.brand) + 1:]
+    return n if len(n) <= 26 else n[:25].rstrip() + "…"
+
+
+def battery_text(b) -> tuple[str, str]:
+    """(big number, small line) for a battery tile."""
+    if b.level is None:
+        return "—", "Asleep or off"
+    pct = f"{'~' if b.approx else ''}{b.level}%"
+    if b.charging:
+        return pct, "Charging"
+    return pct, "Low battery" if b.low else b.brand
+
+
+class BatteryTile(SmoothFrame):
+    """One wireless device: what it is, its battery level as a number and a bar, and whether it's charging."""
+
+    W = 64
+
+    def __init__(self, master, b):
+        super().__init__(master, fg_color=P["CARD"], corner_radius=8)
+        self.key = b.key
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=10)
+        glyph, fb = BATTERY_ICONS.get(b.kind, BATTERY_ICONS["device"])
+        icon_label(row, glyph, fb, size=18, width=26, color=P["MUTED"]).pack(side="left", padx=(0, 8))
+        right = ctk.CTkFrame(row, fg_color="transparent")
+        right.pack(side="right")
+        self.pct = ctk.CTkLabel(right, text="", font=ctk.CTkFont(family=MONO, size=13), text_color=P["TEXT"],
+                                anchor="e")
+        self.pct.pack(anchor="e")
+        self.bar = tk.Canvas(right, width=self.W, height=6, bg=P["CARD"], highlightthickness=0)
+        self.bar.pack(anchor="e", pady=(3, 0))
+        info = ctk.CTkFrame(row, fg_color="transparent")
+        info.pack(side="left", fill="x", expand=True)
+        self.name = ctk.CTkLabel(info, text=battery_short_name(b), font=F(12, "bold"), text_color=P["TEXT"],
+                                 anchor="w")
+        self.name.pack(fill="x")
+        self.sub = ctk.CTkLabel(info, text="", font=F(11), text_color=P["FAINT"], anchor="w")
+        self.sub.pack(fill="x")
+        self.update_battery(b)
+
+    def update_battery(self, b):
+        big, small = battery_text(b)
+        col = battery_color(b)
+        self.pct.configure(text=("⚡ " if b.charging else "") + big)
+        self.sub.configure(text=small, text_color=col if (b.low or b.charging) else P["FAINT"])
+        self.bar.delete("all")
+        self.bar.create_rectangle(0, 0, self.W, 6, fill=P["TRACK"], width=0)
+        if b.level is not None:
+            self.bar.create_rectangle(0, 0, max(2, round(self.W * b.level / 100)), 6, fill=col, width=0)
+
+
 class KeyEditor(ctk.CTkToplevel):
     """Paint single keys on a keyboard (WASD in red, say) on top of whatever effect is running. Changes show on
     the keyboard as you paint and are saved straight away."""
@@ -2360,6 +2430,7 @@ CARD_EVERY = 2            # device cards on the Devices page: every 2nd frame (~
 
 class App(ctk.CTk):
     TEST_BACKEND = None   # tests can inject a simulated sensor backend
+    BATTERY_HID = None    # tests and previews can inject fake wireless devices (tests/fake_hid.py)
 
     def __init__(self, background=False, selftest=None):
         self._t_start = time.perf_counter()
@@ -2399,6 +2470,12 @@ class App(ctk.CTk):
         self.engine.start()
         self.monitor = hwm.HardwareMonitor(self.log, self.settings, backend=self.TEST_BACKEND)
         self.monitor.start()
+        self.batteries, self._batt_warned = [], set()
+        testing = "unittest" in sys.modules           # test runs: no HeadsetControl download, no PowerShell query
+        self.battery_mon = bat.BatteryMonitor(on_update=self._batteries_from_thread, log=self.log,
+                                              hid=self.BATTERY_HID, bluetooth=not testing,
+                                              headsets=self.settings.data.get("battery_headsets", True) and not testing)
+        self.battery_mon.start()
         self.fps = fpo.FpsCounter(self.log)
         self.overlay_cfg = fpo.overlay_settings(self.settings)
         self.overlay_win = None
@@ -2645,6 +2722,10 @@ class App(ctk.CTk):
             for level, msg in res:
                 steps.append(f"  [{level}] {msg}")
             steps.append(f"monitor: {self.monitor.snapshot()['status']}")
+            if bat.real_hid() is None:                  # the battery readers need hidapi in the build
+                self.selftest_errors.append("Batteries: the hidapi module (hid) is missing from this build")
+            else:
+                steps.append(f"batteries: hidapi loads, {len(self.batteries)} wireless device(s) so far")
         except Exception:
             self.selftest_errors.append(traceback.format_exc())
         steps.append("timings:")
@@ -3101,6 +3182,14 @@ class App(ctk.CTk):
             return self.home_overlay_sw
         yield
         self.setting_row(p, "\ue7fc", "▤", "Game overlay", "Show your frame rate on top of games", overlay)
+        yield
+        self.home_batt_box = ctk.CTkFrame(p, fg_color="transparent")
+        self.caption(self.home_batt_box, "Batteries").pack(fill="x", pady=(20, 8))
+        self.home_batt_area = ctk.CTkFrame(self.home_batt_box, fg_color="transparent")
+        self.home_batt_area.pack(fill="x")
+        self.home_batt_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="hb")
+        self.home_batt_tiles = {}
+        self._show_batteries()
 
     def _home_overlay(self):
         on = self.home_overlay_sw.get() == 1
@@ -3392,6 +3481,14 @@ class App(ctk.CTk):
                                        wraplength=780)
         self.missing_text.pack(fill="x", padx=16, pady=(2, 10))
         yield
+        # wireless gear and its batteries (only shown once something reports one)
+        self.batt_box = ctk.CTkFrame(p, fg_color="transparent")
+        self.caption(self.batt_box, "Batteries").pack(fill="x", pady=(0, 8))
+        self.batt_area = ctk.CTkFrame(self.batt_box, fg_color="transparent")
+        self.batt_area.pack(fill="x")
+        self.batt_area.grid_columnconfigure((0, 1, 2), weight=1, uniform="b")
+        self.batt_tiles = {}
+        yield
         _sc_dev_area = LightScroll(p, bg=P["BG"])
         self.dev_area = _sc_dev_area.inner
         yield
@@ -3403,6 +3500,7 @@ class App(ctk.CTk):
         yield
         self.dev_empty.grid(row=0, column=0, columnspan=2, pady=50)
         self._update_missing_bar(getattr(self, "_missing", None))
+        self._show_batteries()
 
     def _fill_devices(self, rows):
         self.device_rows = rows
@@ -3449,6 +3547,69 @@ class App(ctk.CTk):
         if self.editor is not None:
             self.editor.destroy()
             self.editor = None
+
+    # ---- batteries
+    def _batteries_from_thread(self, items):
+        try:
+            self.after(0, lambda: self._on_batteries(items))
+        except (RuntimeError, tk.TclError):
+            pass                                   # shutting down
+
+    def _on_batteries(self, items):
+        self.batteries = items
+        self._show_batteries()
+        self._battery_alerts(items)
+
+    def _fill_battery_tiles(self, box, area, tiles, items, before=None):
+        if box is None:
+            return
+        keys = [b.key for b in items]
+        if list(tiles) != keys:                     # devices came or went: lay the tiles out again
+            for t in tiles.values():
+                t.destroy()
+            tiles.clear()
+            for i, b in enumerate(items):
+                t = BatteryTile(area, b)
+                t.grid(row=i // 3, column=i % 3, sticky="ew", padx=(0 if i % 3 == 0 else 6, 0 if i % 3 == 2 else 6),
+                       pady=(0, 12))
+                tiles[b.key] = t
+        else:
+            for b in items:
+                tiles[b.key].update_battery(b)
+        try:
+            if items and not box.winfo_manager():
+                box.pack(fill="x", **({"before": before} if before is not None else {}))
+            elif not items and box.winfo_manager():
+                box.pack_forget()
+        except tk.TclError:
+            pass
+
+    def _show_batteries(self):
+        items = getattr(self, "batteries", [])
+        for box, area, tiles, before in (
+                ("batt_box", "batt_area", "batt_tiles", lambda: self.dev_area.master.master),
+                ("home_batt_box", "home_batt_area", "home_batt_tiles", lambda: None)):
+            w = getattr(self, box, None)
+            try:
+                if w is None or not w.winfo_exists():
+                    continue                         # page not built yet, or mid-rebuild after a theme change
+                self._fill_battery_tiles(w, getattr(self, area), getattr(self, tiles), items, before=before())
+            except (tk.TclError, AttributeError):
+                pass
+
+    def _battery_alerts(self, items):
+        limit = int(self.settings.data.get("battery_alert", 15) or 0)
+        for b in items:
+            if b.level is None:
+                continue
+            if limit and b.level <= limit and not b.charging and b.key not in self._batt_warned:
+                self._batt_warned.add(b.key)
+                msg = f"{b.name} is at {b.level}% battery."
+                self.log(f"Low battery: {msg}")
+                if self.tray is not None:
+                    self.tray.notify(msg + " Time to charge it.")
+            elif b.key in self._batt_warned and (b.charging or b.level > limit + 5):
+                self._batt_warned.discard(b.key)    # charged: warn again next time it runs low
 
     def set_key_colors(self, key, colors):
         """Save one keyboard's painted keys and send them to the lighting engine."""
@@ -4535,6 +4696,29 @@ class App(ctk.CTk):
         self.setting_row(body, "\ue768", "▶", "Startup animation", "Show the logo animation when the app opens",
                          switch("anim_sw", self.settings.data.get("animations", True),
                                 lambda: self.settings.__setitem__("animations", self.anim_sw.get() == 1)))
+        yield
+        def alert(row):
+            seg = PillSwitcher(row, values=["Off", "10%", "15%", "20%", "30%"], height=30, font=F(12),
+                               selected_color=self.accent,
+                               command=lambda v: self.settings.__setitem__("battery_alert",
+                                                                           0 if v == "Off" else int(v[:-1])))
+            lim = int(self.settings.data.get("battery_alert", 15) or 0)
+            seg.set(f"{lim}%" if f"{lim}%" in seg.values else "Off")
+            self.accent_widgets.append(("seg", seg))
+            self.batt_alert_seg = seg
+            return seg
+        self.setting_row(body, "\ue83f", "▮", "Low battery warning",
+                         "Notify me when a wireless keyboard, mouse or headset runs low", alert)
+        yield
+
+        def _headsets():
+            on = self.headset_sw.get() == 1
+            self.settings["battery_headsets"] = on
+            self.battery_mon.headsets = on
+            self.battery_mon.refresh()
+        self.setting_row(body, "\ue95b", "◖", "Headset batteries",
+                         "Downloads the free HeadsetControl tool once to read wireless headset batteries",
+                         switch("headset_sw", self.settings.data.get("battery_headsets", True), _headsets))
 
         yield
         self.caption(body, "Sensors").pack(fill="x", pady=(22, 8))
@@ -5814,6 +5998,7 @@ class App(ctk.CTk):
             self.tray.stop()
         self.engine.stop()
         self.fps.stop()
+        self.battery_mon.stop()
         self.monitor.stop()       # hands fans back to the BIOS
         if eng.keep_openrgb_running(getattr(self, "ddr5", False)):
             pass                  # DDR5: keep the hidden OpenRGB so the RAM isn't searched for again this boot

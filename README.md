@@ -17,6 +17,7 @@ A free and open-source Windows desktop app that controls **all the RGB lighting 
 - **Finds your RGB hardware automatically**: motherboards, graphics cards, RAM, LED strips, coolers, keyboards, mice and more
 - **Sets every device at once** with a color wheel, swatches, RGB values, brightness and speed. Five basic effects (Static, Breathing, Color Cycle, Rainbow Wave, Off) plus a **preset gallery** of 16 effects with picture previews: Tide, Drizzle, Sweep, Ember, Pulse, Drift, Volt, Frost, Aurora, Supernova, Cascade, Cyberpunk, Magma, Stardust, Nebula and Eclipse
 - **Per-device lighting**: click Customize on a device to see a model of it (RAM stick, graphics card, fans, cooler, keyboard, mouse, board) lit with its live colors, plus its exact model details, and give it its own effect, color and brightness
+- **Battery levels**: wireless keyboards, mice, headsets and controllers show their battery on Home and the Devices page, with a warning when one runs low. Logitech (receiver, cable or Bluetooth), SteelSeries wireless mice, Razer wireless gear, most Logitech / Corsair / SteelSeries / HyperX headsets (through HeadsetControl) and anything Windows shows a Bluetooth battery for. G HUB, GG and Synapse can stay open
 - **Per-key lighting**: on keyboards OpenRGB controls key by key, the **Keys** button on the Devices page lets you paint single keys (WASD, arrows, numbers, F keys, or any key you click or drag over). Painted keys stay lit on top of whatever effect runs on the rest of the keyboard
 - **ARGB headers and LED strips**: fans or strips plugged into a motherboard header (JRAINBOW, ADD_GEN2...) light up once you set how many LEDs are on it under **Customize → Connected LEDs**. Central RGB remembers the count, sets it again every time OpenRGB starts, and the Devices page tells you when a header is still at 0
 - **Fan control** with Silent, Balanced, Performance and Max profiles, or a **custom fan curve you drag into shape**, with built-in safety limits
@@ -90,7 +91,7 @@ You can remove it separately from *Settings → Apps*.
 | Administrator rights | Needed for RAM and motherboard lighting, sensors and fan control. The .exe asks for them automatically. |
 | [PawnIO](https://pawnio.eu) driver | Low-level driver used by OpenRGB and LibreHardwareMonitor for RGB RAM, older motherboards, fan control and most temperature sensors. **The installer sets it up for you.** If you use the portable .exe, install it yourself from pawnio.eu. |
 | .NET Framework 4.7.2+ | Already built into Windows 10 and 11. Used to load LibreHardwareMonitor. |
-| Internet on first run | Central RGB downloads OpenRGB (≈15 MB) and LibreHardwareMonitor the first time |
+| Internet on first run | Central RGB downloads OpenRGB (≈15 MB) and LibreHardwareMonitor the first time, and [HeadsetControl](https://github.com/Sapd/HeadsetControl) (GPL-3.0, under 1 MB) to read wireless headset batteries unless you turn that off in Settings |
 
 > [!TIP]
 > Close other RGB and fan apps (Corsair iCUE, ASUS Armoury Crate, MSI Mystic Light, Gigabyte RGB Fusion, NZXT CAM, SignalRGB, Razer Synapse, Logitech G HUB and others). They fight over the same hardware. **Settings → System check** tells you if any of them are running.
@@ -311,6 +312,7 @@ CentralRGB/
 ├── fonts/                # Orbitron for the FPS counter (OFL 1.1, with its license)
 ├── presets/              # preview pictures for the preset effects (made by tools/make_preset_art.py)
 ├── win_effects.py        # dark, seamless title bar
+├── battery.py          # battery levels of wireless keyboards, mice, headsets and controllers
 ├── springs.py          # spring motion: sliding selectors, LED pop, counting readings
 ├── updater.py            # one-click updates from GitHub Releases (checksum-verified)
 ├── central_rgb.ico/.png  # app icon

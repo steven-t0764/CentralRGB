@@ -491,6 +491,8 @@ class Settings:
         "excluded": [],
         "device_overrides": {},
         "key_colors": {},          # device key -> {LED name: [r, g, b]}: keys painted in the key editor
+        "battery_alert": 15,       # warn when a wireless device drops to this % (0 = never)
+        "battery_headsets": True,  # download HeadsetControl to read headset batteries
         "profiles": {
             "Ocean": {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50},
             "Rainbow": {"color": [255, 0, 0], "effect": "Rainbow Wave", "brightness": 100, "speed": 40},

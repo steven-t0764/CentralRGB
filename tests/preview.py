@@ -88,6 +88,9 @@ def start_app(tmp: Path, effect: str | None = None, real_stats: bool = False, ap
             raise RuntimeError("no splash in previews")
     app_mod.SplashProcess = _NoSplash
     app_mod.App.TEST_BACKEND = FakeLHM()
+    import fake_hid                                     # the owner's wireless gear, plus a sample headset
+    app_mod.App.BATTERY_HID = fake_hid.FakeHid(fake_hid.OWNERS_GEAR)
+    app_mod.bat.read_headsets = lambda exe: app_mod.bat.parse_headsetcontrol(fake_hid.HEADSETCONTROL_JSON)
     if not real_stats:
         _demo_stats(app_mod.hwm)
     return app_mod, app_mod.App()
