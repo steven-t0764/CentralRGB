@@ -1883,8 +1883,183 @@ class DeviceArt(tk.Canvas):
         self._img.paste(self.model.render(colors))         # same size every frame: reuse the Tk image
 
 
+class KeyEditor(ctk.CTkToplevel):
+    """Paint single keys on a keyboard (WASD in red, say) on top of whatever effect is running. Changes show on
+    the keyboard as you paint and are saved straight away."""
+
+    U = 40              # one key cell, px (before display scaling)
+    WIDE = {"space": 7, "enter": 2, "right shift": 3, "left shift": 1, "backspace": 1, "caps lock": 1, "tab": 1,
+            "numpad 0": 2, "number pad 0": 2, "num 0": 2}
+
+    def __init__(self, app, key, dev):
+        super().__init__(app, fg_color=P["BG"])
+        self.app, self.key, self.dev = app, key, dev
+        self.colors = {n: tuple(c) for n, c in (app.settings.data.get("key_colors", {}).get(key) or {}).items()}
+        self.brush = (255, 0, 0)
+        try:
+            self.U = round(KeyEditor.U * ctk.ScalingTracker.get_widget_scaling(app))
+        except Exception:
+            self.U = KeyEditor.U
+        self.names = eng.led_names(dev)
+        self.layout = eng.keyboard_layout(dev)
+        cols = max((len(r) for r in self.layout), default=1)
+        self.title(f"Edit keys: {dev.name}")
+        self.geometry(f"{max(640, cols * KeyEditor.U + 60)}x{len(self.layout) * KeyEditor.U + 330}")
+        self.resizable(False, False)
+        self.transient(app)
+        self.after(150, self.grab_set)
+        pad = dict(padx=22)
+        app.label(self, "Edit keys", 22, "bold").pack(anchor="w", pady=(20, 2), **pad)
+        capable = eng.per_key_capable(dev)
+        msg = ("Pick a colour, then click or drag across keys to paint them. Right-click (or drag with the right "
+               "button) to give keys back to the effect. Painted keys stay on top of whatever lighting is running."
+               if capable else
+               f"OpenRGB can only set one colour for the whole {dev.name}, so single keys can't be painted on it.")
+        app.label(self, msg, 12, color=P["MUTED"], anchor="w", justify="left",
+                  wraplength=max(560, cols * self.U)).pack(anchor="w", **pad)
+        self.cv = tk.Canvas(self, width=cols * self.U + 4, height=len(self.layout) * self.U + 4, bg=P["BG"],
+                            highlightthickness=0, cursor="hand2" if capable else "")
+        self.cv.pack(anchor="w", pady=(14, 10), **pad)
+        self.cells = {}                     # canvas rect item -> LED name
+        self._draw()
+        if capable:
+            self.cv.bind("<Button-1>", lambda e: self._paint_at(e, self.brush))
+            self.cv.bind("<B1-Motion>", lambda e: self._paint_at(e, self.brush))
+            self.cv.bind("<Button-3>", lambda e: self._paint_at(e, None))
+            self.cv.bind("<B3-Motion>", lambda e: self._paint_at(e, None))
+
+        app.label(self, "Colour", 13, "bold").pack(anchor="w", pady=(6, 4), **pad)
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", **pad)
+        self.chips = []
+        for c in SWATCHES:
+            hc = hexcol(c)
+            b = SmoothButton(row, text="", width=30, height=30, corner_radius=15, fg_color=hc, hover_color=hc,
+                             border_width=2, border_color=P["BG"], command=lambda c=c: self._set_brush(c))
+            b.pack(side="left", padx=(0, 6))
+            self.chips.append((c, b))
+        app.secondary(row, "Custom…", self._custom, height=30, width=86).pack(side="left", padx=(6, 0))
+        self.brush_lbl = app.label(row, "", 11, color=P["FAINT"])
+        self.brush_lbl.pack(side="left", padx=10)
+
+        app.label(self, "Quick paint", 13, "bold").pack(anchor="w", pady=(14, 4), **pad)
+        q = ctk.CTkFrame(self, fg_color="transparent")
+        q.pack(fill="x", **pad)
+        for group in eng.KEY_GROUPS:
+            if eng.find_keys(dev, eng.KEY_GROUPS[group]):
+                app.secondary(q, group, lambda g=group: self._paint_group(g), height=32, width=90
+                              ).pack(side="left", padx=(0, 8))
+        app.secondary(q, "Clear all", self._clear, height=32, width=90).pack(side="left", padx=(8, 0))
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", side="bottom", pady=18, **pad)
+        app.primary(btns, "Done", self.destroy, height=38, width=120).pack(side="right")
+        self.count_lbl = app.label(btns, "", 12, color=P["MUTED"])
+        self.count_lbl.pack(side="left")
+        self._set_brush(self.brush)
+        self._refresh_count()
+        if not capable:
+            for w in q.winfo_children() + row.winfo_children():
+                try:
+                    w.configure(state="disabled")
+                except Exception:
+                    pass
+
+    # -- drawing
+    def _spans(self, r):
+        """(start column, width, LED index, label) for each key in a row; wide keys (Space, Enter, the shifts)
+        stretch over the empty cells right after them."""
+        out, c = [], 0
+        while c < len(r):
+            idx, label = r[c]
+            if idx is None:
+                c += 1
+                continue
+            w, limit = 1, self.WIDE.get(label.lower(), 1)
+            while w < limit and c + w < len(r) and r[c + w][0] is None:
+                w += 1
+            out.append((c, w, idx, label))
+            c += w
+        return out
+
+    def _short(self, label):
+        rep = {"escape": "Esc", "backspace": "⌫", "caps lock": "Caps", "left shift": "Shift", "right shift": "Shift",
+               "left control": "Ctrl", "right control": "Ctrl", "left alt": "Alt", "right alt": "Alt",
+               "left windows": "Win", "right windows": "Win", "up arrow": "↑", "down arrow": "↓",
+               "left arrow": "←", "right arrow": "→", "print screen": "PrtSc", "scroll lock": "ScrLk",
+               "pause/break": "Pause", "page up": "PgUp", "page down": "PgDn", "insert": "Ins", "delete": "Del",
+               "right fn": "Fn", "menu": "Menu", "enter": "Enter", "space": "", "tab": "Tab"}
+        return rep.get(label.lower(), label if len(label) <= 5 else label[:4])
+
+    def _draw(self):
+        self.cv.delete("all")
+        self.cells = {}
+        U = self.U
+        for ri, r in enumerate(self.layout):
+            for c, w, idx, label in self._spans(r):
+                name = self.names[idx] if 0 <= idx < len(self.names) else label
+                col = self.colors.get(name)
+                fill = hexcol(col) if col else P["CARD2"]
+                x0, y0 = 2 + c * U + 2, 2 + ri * U + 2
+                rect = self.cv.create_rectangle(x0, y0, x0 + w * U - 4, y0 + U - 4, fill=fill,
+                                                outline=P["LINE"] if not col else fill, width=1)
+                txt = hexcol((10, 10, 12)) if col and sum(col) > 380 else P["TEXT"] if not col else "#ffffff"
+                self.cv.create_text(x0 + (w * U - 4) / 2, y0 + (U - 4) / 2, text=self._short(label),
+                                    fill=txt, font=(FONT, -max(9, round(11 * self.U / 40))), tags=("lbl",))
+                self.cells[rect] = name
+
+    def _paint_at(self, e, colour):
+        for item in self.cv.find_overlapping(e.x, e.y, e.x, e.y):
+            name = self.cells.get(item)
+            if name is None:
+                continue
+            if (self.colors.get(name) == colour) or (colour is None and name not in self.colors):
+                return
+            self._set(name, colour)
+            return
+
+    def _set(self, name, colour, redraw=True):
+        if colour is None:
+            self.colors.pop(name, None)
+        else:
+            self.colors[name] = tuple(colour)
+        if redraw:
+            self._commit()
+
+    def _commit(self):
+        self._draw()
+        self._refresh_count()
+        self.app.set_key_colors(self.key, self.colors)
+
+    def _paint_group(self, group):
+        for name in eng.find_keys(self.dev, eng.KEY_GROUPS[group]):
+            self._set(name, self.brush, redraw=False)
+        self._commit()
+
+    def _clear(self):
+        self.colors.clear()
+        self._commit()
+
+    def _refresh_count(self):
+        n = len(self.colors)
+        self.count_lbl.configure(text=f"{plural(n, 'key')} painted" if n else "No keys painted: the whole "
+                                 "keyboard follows the lighting effect")
+
+    # -- colour
+    def _set_brush(self, c):
+        self.brush = tuple(c)
+        for cc, b in self.chips:
+            b.configure(border_color=P["TEXT"] if tuple(cc) == self.brush else P["BG"])
+        self.brush_lbl.configure(text=f"Painting with {hexcol(self.brush).upper()}")
+
+    def _custom(self):
+        got = colorchooser.askcolor(color=hexcol(self.brush), parent=self, title="Pick a key colour")
+        if got and got[0]:
+            self._set_brush(tuple(int(v) for v in got[0]))
+
+
 class DeviceCard(SmoothFrame):
-    def __init__(self, master, key, tname, name, leds, enabled, on_toggle, on_edit):
+    def __init__(self, master, key, tname, name, leds, enabled, on_toggle, on_edit, on_keys=None):
         super().__init__(master, fg_color=P["CARD"], corner_radius=8)
         accent_bar(self)
         self.key = key
@@ -1897,6 +2072,12 @@ class DeviceCard(SmoothFrame):
                                       fg_color=P["BTN"], hover_color=P["BTN_HOVER"], text_color=P["TEXT"],
                                       border_width=1, border_color=P["BTN_LINE"], command=lambda: on_edit(key))
         self.edit_btn.pack(side="right", padx=8)
+        self.keys_btn = None
+        if on_keys is not None:                      # keyboards: paint single keys
+            self.keys_btn = SmoothButton(top, text="Keys", width=52, height=26, corner_radius=6, font=F(11),
+                                         fg_color=P["BTN"], hover_color=P["BTN_HOVER"], text_color=P["TEXT"],
+                                         border_width=1, border_color=P["BTN_LINE"], command=lambda: on_keys(key))
+            self.keys_btn.pack(side="right")
         info = ctk.CTkFrame(top, fg_color="transparent")
         info.pack(side="left", fill="x", expand=True, padx=(4, 0))
         ctk.CTkLabel(info, text=name, font=F(13, "bold"), text_color=P["TEXT"], anchor="w").pack(fill="x")
@@ -2211,6 +2392,7 @@ class App(ctk.CTk):
         self.engine = eng.LightingEngine(self.log, on_disconnect=lambda: self.q.put(("disconnected",)))
         self.engine.set_excluded(self.settings["excluded"])
         self.engine.set_overrides(self.settings.data.get("device_overrides", {}))
+        self.engine.set_key_colors(self.settings.data.get("key_colors", {}))
         self.editor, self.editor_key, self.sysinfo = None, None, []
         self.engine.state.update(self.settings["state"])
         self.engine.paused = True
@@ -3234,7 +3416,8 @@ class App(ctk.CTk):
             self.dev_empty.configure(text="No RGB devices found yet. Settings → System check shows what's needed.")
             self.dev_empty.grid()
         for i, (key, t, name, leds) in enumerate(rows):
-            c = DeviceCard(self.dev_area, key, t, name, leds, key not in excluded, self._toggle_device, self._open_device)
+            c = DeviceCard(self.dev_area, key, t, name, leds, key not in excluded, self._toggle_device, self._open_device,
+                           on_keys=self.open_key_editor if t == "Keyboard" and leds > 1 else None)
             if key in self.settings.data.get("device_overrides", {}):
                 c.edit_btn.configure(text="Custom ✓")
             c.switch.configure(progress_color=self.accent)
@@ -3266,6 +3449,31 @@ class App(ctk.CTk):
         if self.editor is not None:
             self.editor.destroy()
             self.editor = None
+
+    def set_key_colors(self, key, colors):
+        """Save one keyboard's painted keys and send them to the lighting engine."""
+        allk = dict(self.settings.data.get("key_colors", {}))
+        if colors:
+            allk[key] = {n: list(c) for n, c in colors.items()}
+        else:
+            allk.pop(key, None)
+        self.settings["key_colors"] = allk
+        self.engine.set_key_colors(allk)
+        card = next((c for c in getattr(self, "device_cards", []) if c.key == key), None)
+        if card is not None and card.keys_btn is not None:
+            card.keys_btn.configure(text="Keys ✓" if colors else "Keys")
+
+    def open_key_editor(self, key):
+        dev = next((d for d in self.engine.devices() if eng.device_key(d) == key), None)
+        if dev is None:
+            return
+        old = getattr(self, "key_editor", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+        self.key_editor = KeyEditor(self, key, dev)
 
     def _open_device(self, key):
         """Pop up one device: a drawing of it with live LEDs, its exact model details, and its own lighting."""

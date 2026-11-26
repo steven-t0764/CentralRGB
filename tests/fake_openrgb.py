@@ -25,6 +25,20 @@ from types import SimpleNamespace
 
 from openrgb.utils import DeviceType, ModeColors, RGBColor, ZoneType
 
+# A tenkeyless key matrix the way OpenRGB reports one: rows of key names, None where there's no key.
+TKL_MATRIX = [
+    ["Escape", None, "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+     "Print Screen", "Scroll Lock", "Pause/Break"],
+    ["`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "Backspace", "Insert", "Home", "Page Up"],
+    ["Tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "[", "]", "\\", "Delete", "End", "Page Down"],
+    ["Caps Lock", "A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'", "Enter", None, None, None, None],
+    ["Left Shift", "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Right Shift", None, None, None, "Up Arrow",
+     None],
+    ["Left Control", "Left Windows", "Left Alt", "Space", None, None, None, None, None, None, "Right Alt",
+     "Right Fn", "Menu", "Right Control", "Left Arrow", "Down Arrow", "Right Arrow"],
+]
+
+
 # name, type, vendor, zones [(zone name, LED count)], modes
 DEMO_DEVICES = [
     ("ASUS ROG STRIX B650-A GAMING WIFI", DeviceType.MOTHERBOARD, "ASUS",
@@ -40,7 +54,7 @@ DEMO_DEVICES = [
     ("NZXT Kraken Elite 360", DeviceType.COOLER, "NZXT",
      [("Pump Ring", 24)], ("Direct", "Fixed", "Breathing", "Spectrum Wave")),
     ("Razer BlackWidow V4", DeviceType.KEYBOARD, "Razer",
-     [("Keyboard", 104)], ("Direct", "Static", "Spectrum Cycle", "Off")),
+     [("Keyboard", 104, 104, 104, TKL_MATRIX)], ("Direct", "Static", "Spectrum Cycle", "Off")),
     ("Logitech G502 X Plus", DeviceType.MOUSE, "Logitech",
      [("Logo", 1), ("Strip", 8)], ("Direct", "Static", "Breathing", "Off")),
 ]
@@ -79,7 +93,7 @@ B550_PC = [
     ("MSI B550-A PRO (MS-7C56)", DeviceType.MOTHERBOARD, "MSI",
      [("JRGB1", 1), ("JRAINBOW1", 30), ("Onboard LEDs", 6)], ("Direct", "Static", "Breathing", "Rainbow", "Off")),
     ("Razer Huntsman V2 Tenkeyless", DeviceType.KEYBOARD, "Razer",
-     [("Keyboard", 87)], ("Direct", "Static", "Spectrum Cycle", "Off")),
+     [("Keyboard", 87, 87, 87, TKL_MATRIX)], ("Direct", "Static", "Spectrum Cycle", "Off")),
     STEELSERIES_MOUSE,
 ] + CORSAIR_VENGEANCE_DDR4
 
@@ -95,7 +109,7 @@ B550_PRO_PC = B550_PC[:3] + CORSAIR_VENGEANCE_PRO_DDR4
 OWNERS_BOARD = ("MSI B550-A PRO (MS-7C56)", DeviceType.MOTHERBOARD, "MSI",
                 [("JRGB1", 1), ("JRAINBOW1", 0, 0, 200), ("JRAINBOW2", 0, 0, 200), ("Onboard LEDs", 6)],
                 ("Direct", "Static", "Breathing", "Rainbow", "Off"))
-OWNERS_KEYBOARD = ("Razer Huntsman V2 TKL", DeviceType.KEYBOARD, "Razer", [("Keyboard", 102)],
+OWNERS_KEYBOARD = ("Razer Huntsman V2 TKL", DeviceType.KEYBOARD, "Razer", [("Keyboard", 102, 102, 102, TKL_MATRIX)],
                    ("Direct", "Static", "Spectrum Cycle", "Off"))
 OWNERS_MOUSE = ("SteelSeries Aerox 3 Wireless", DeviceType.MOUSE, "SteelSeries", [("Logo", 1), ("Strip", 2)],
                 ("Direct", "Static", "Off"))
@@ -124,8 +138,13 @@ class FakeDevice:
         self.type = dtype
         self.metadata = SimpleNamespace(vendor=vendor, description=f"{vendor} {name}", version="1.0",
                                         serial=f"DEMO{idx:04d}", location=f"DEMO:{idx}")
-        # zones: (name, LEDs) or, for an ARGB header you size yourself, (name, LEDs, min, max)
+        # zones: (name, LEDs) or, for an ARGB header you size yourself, (name, LEDs, min, max), or for a keyboard
+        # (name, LEDs, LEDs, LEDs, matrix): the matrix's keys come first (named "Key: W" like OpenRGB does), any
+        # LEDs left over are underglow
         self._zone_specs = [list(z) + ([z[1], z[1]] if len(z) == 2 else []) for z in zones]
+        for spec in self._zone_specs:
+            if len(spec) == 4:
+                spec.append(None)
         self.resized = []                      # (zone index, size) for every resize OpenRGB was asked for
         self._build_zones()
         self.modes = []
@@ -140,11 +159,18 @@ class FakeDevice:
 
     def _build_zones(self):
         self.zones, self.leds, data_zones = [], [], []
-        for zi, (zname, count, lo, hi) in enumerate(self._zone_specs):
-            zl = [SimpleNamespace(name=f"{zname} LED {i + 1}", id=len(self.leds) + i) for i in range(count)]
+        for zi, (zname, count, lo, hi, matrix) in enumerate(self._zone_specs):
+            names = [f"{zname} LED {i + 1}" for i in range(count)]
+            mat = None
+            if matrix:
+                keys = [k for row in matrix for k in row if k]
+                names = [f"Key: {k}" for k in keys][:count] + [f"Underglow {i + 1}" for i in range(count - len(keys))]
+                pos = {k: i for i, k in enumerate(keys)}
+                mat = [[pos[k] if k and pos.get(k, count) < count else None for k in row] for row in matrix]
+            zl = [SimpleNamespace(name=names[i], id=len(self.leds) + i) for i in range(count)]
             self.leds += zl
-            zone = SimpleNamespace(name=zname, leds=zl, colors=[RGBColor(0, 0, 0)] * count,
-                                   type=ZoneType.LINEAR if hi > lo else ZoneType.SINGLE)
+            zone = SimpleNamespace(name=zname, leds=zl, colors=[RGBColor(0, 0, 0)] * count, matrix_map=mat,
+                                   type=ZoneType.MATRIX if mat else ZoneType.LINEAR if hi > lo else ZoneType.SINGLE)
             zone.resize = (lambda n, zi=zi: self._resize(zi, n))
             self.zones.append(zone)
             data_zones.append(SimpleNamespace(name=zname, zone_type=zone.type, leds_min=lo, leds_max=hi,

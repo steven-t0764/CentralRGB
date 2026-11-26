@@ -392,6 +392,93 @@ def device_key(dev) -> str:
     return f"{dev.name}|{loc}|{serial}"
 
 
+# --------------------------------------------------------------------------- per-key colours
+# Keyboards that OpenRGB drives LED by LED report each key as an LED named like "Key: W" and lay the keys out in
+# a matrix (rows x columns of LED numbers). Per-key colours are kept by LED name, so they survive OpenRGB
+# renumbering, and sit on top of whatever effect runs on the rest of the keyboard.
+KEY_GROUPS = {
+    "WASD": ["W", "A", "S", "D"],
+    "Arrows": ["Up Arrow", "Left Arrow", "Down Arrow", "Right Arrow"],
+    "Numbers": [str(i) for i in range(1, 10)] + ["0"],
+    "F keys": [f"F{i}" for i in range(1, 13)],
+}
+_KEY_ALIASES = {"up": "up arrow", "down": "down arrow", "left": "left arrow", "right": "right arrow",
+                "arrow up": "up arrow", "arrow down": "down arrow", "arrow left": "left arrow",
+                "arrow right": "right arrow", "esc": "escape"}
+
+
+def key_label(led_name: str) -> str:
+    """'Key: Left Shift' -> 'Left Shift'; other names come back as they are."""
+    n = str(led_name or "").strip()
+    return n[4:].strip() if n.lower().startswith("key:") else n
+
+
+def _key_norm(label: str) -> str:
+    n = key_label(label).lower().replace("_", " ").strip()
+    if n.startswith("number "):                         # some keyboards say "Number 1"
+        n = n[7:]
+    return _KEY_ALIASES.get(n, n)
+
+
+def per_key_capable(dev) -> bool:
+    """True if the device has a mode that takes a colour for every LED (OpenRGB's Direct / custom mode)."""
+    try:
+        return any(m.color_mode == ModeColors.PER_LED for m in dev.modes) and len(dev.leds) > 1
+    except Exception:
+        return False
+
+
+def keyboard_layout(dev) -> list[list[tuple]]:
+    """Rows of (LED index or None, label) to draw the keys in their places. Uses OpenRGB's key matrix when the
+    keyboard reports one; otherwise the LEDs in order, 16 to a row."""
+    rows = []
+    for zone in getattr(dev, "zones", []) or []:
+        mat = getattr(zone, "matrix_map", None)
+        leds = getattr(zone, "leds", []) or []
+        if not mat:
+            continue
+        for mrow in mat:
+            row = []
+            for v in mrow:
+                if v is None or not (0 <= v < len(leds)):
+                    row.append((None, ""))
+                else:
+                    led = leds[v]
+                    row.append((getattr(led, "id", v), key_label(getattr(led, "name", ""))))
+            if any(i is not None for i, _ in row):
+                rows.append(row)
+    if rows:
+        return rows
+    leds = list(getattr(dev, "leds", []) or [])
+    flat = [(getattr(led, "id", i), key_label(getattr(led, "name", f"LED {i + 1}"))) for i, led in enumerate(leds)]
+    return [flat[i:i + 16] for i in range(0, len(flat), 16)]
+
+
+def led_names(dev) -> list[str]:
+    return [str(getattr(led, "name", f"LED {i + 1}")) for i, led in enumerate(getattr(dev, "leds", []) or [])]
+
+
+def find_keys(dev, labels) -> list[str]:
+    """The LED names on this keyboard for the given key labels (e.g. KEY_GROUPS['WASD']), in that order."""
+    by_norm = {}
+    for name in led_names(dev):
+        by_norm.setdefault(_key_norm(name), name)
+    return [by_norm[_key_norm(lb)] for lb in labels if _key_norm(lb) in by_norm]
+
+
+def apply_key_colors(cols, dev, key_colors, brightness=100):
+    """Put the per-key colours (LED name -> (r, g, b)) on top of a frame of colours for dev. Brightness scales
+    them like the rest of the lighting, so dimming the keyboard dims the painted keys too."""
+    if not key_colors:
+        return cols
+    out = list(cols)
+    for i, name in enumerate(led_names(dev)[:len(out)]):
+        c = key_colors.get(name)
+        if c is not None:
+            out[i] = compute_colors("Static", tuple(c), brightness, 0, 1, 0)[0]
+    return out
+
+
 def type_name(dev) -> str:
     return TYPE_NAMES.get(dev.type, "Other")
 
@@ -403,6 +490,7 @@ class Settings:
         "state": {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50},
         "excluded": [],
         "device_overrides": {},
+        "key_colors": {},          # device key -> {LED name: [r, g, b]}: keys painted in the key editor
         "profiles": {
             "Ocean": {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50},
             "Rainbow": {"color": [255, 0, 0], "effect": "Rainbow Wave", "brightness": 100, "speed": 40},
@@ -1797,6 +1885,7 @@ class LightingEngine(threading.Thread):
         self.state = {"color": [0, 120, 255], "effect": "Static", "brightness": 100, "speed": 50}
         self.excluded: set[str] = set()
         self.overrides: dict[str, dict] = {}   # device key -> its own lighting state
+        self.key_colors: dict[str, dict] = {}  # device key -> {LED name: (r, g, b)} painted on top (per-key)
         self.broken: set[str] = set()      # devices that errored; skipped until next rescan
         self.dirty = True
         self.prepared: dict[str, bool] = {}   # device key -> True if per-LED capable
@@ -1879,6 +1968,12 @@ class LightingEngine(threading.Thread):
     def set_state(self, **kw):
         with self.lock:
             self.state.update(kw)
+            self.dirty = True
+
+    def set_key_colors(self, key_colors):
+        """Per-key colours for every keyboard: {device key: {LED name: (r, g, b)}}."""
+        with self.lock:
+            self.key_colors = {k: {n: tuple(c) for n, c in v.items()} for k, v in (key_colors or {}).items() if v}
             self.dirty = True
 
     def set_overrides(self, overrides):
@@ -2130,8 +2225,11 @@ class LightingEngine(threading.Thread):
                                 self.ram_pending.add(key)
                             continue
                         self.ram_pending.discard(key)
-                    hw = self._hw_effect_mode(dev, st) if animated else None
-                    pkey = (key, animated, hw is not None)
+                    # painted keys need the per-LED mode even for a still colour (the keyboard's own Static or
+                    # effect modes would paint every key the same)
+                    painted = bool(self.key_colors.get(key))
+                    hw = self._hw_effect_mode(dev, st) if animated and not painted else None
+                    pkey = (key, animated or painted, hw is not None)
                     if hw is not None:
                         # the RAM runs this effect itself: one write when something changes, then nothing
                         if not dev_dirty and pkey in self.prepared:
@@ -2149,7 +2247,7 @@ class LightingEngine(threading.Thread):
                         continue
                     if pkey not in self.prepared:
                         self.prepared = {k: v for k, v in self.prepared.items() if k[0] != key}
-                        self.prepared[pkey] = self._prepare(dev, animated)
+                        self.prepared[pkey] = self._prepare(dev, animated or painted)
                     how = self.prepared[pkey]
                     if how == "slow" and animated:
                         # mode-specific devices are slow to update; ~2 updates/second
@@ -2161,6 +2259,9 @@ class LightingEngine(threading.Thread):
                     cols = compute_colors(st["effect"], st["color"], st["brightness"],
                                           st["speed"], len(dev.leds), now, offset=idx * 0.07,
                                           blur=period if animated else 0.0, aa=animated)
+                    kc = self.key_colors.get(key)
+                    if kc and how == "per_led":
+                        cols = apply_key_colors(cols, dev, kc, st["brightness"])
                     if not dev_dirty and self._unchanged(key, cols, is_ram):
                         continue                    # nothing (visible) changed for this device: don't write
                     self.last_sent[key] = cols
