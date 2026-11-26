@@ -3,6 +3,7 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- **Page animations:** switching pages now glides the new page up into place on a spring instead of swapping instantly. Turn it off in **Settings > Page animations**; it also stays off when Windows' Animation effects setting is off. <!-- feature -->
 - **Spring motion:** the pill selectors (fan profiles, Monitor tabs, Settings choices) now slide their highlight across to your pick with a little bounce. The sidebar's LED pops in on the page you open, and temperatures and fan RPM count smoothly to each new reading instead of jumping. Everything jumps straight to the end if Windows' Animation effects setting is off. <!-- feature -->
 - **Smoother preset effects:** the preset colourways (Drizzle, Stardust, Eclipse, Cyberpunk and the rest) no longer step or pop. Each LED now shows the effect blended across its width and over the moment between updates, so edges glide from LED to LED and RAM (which can only update a few times a second) fades between updates instead of jumping. Cyberpunk crossfades its blocks, Pulse flickers less harshly, and the in-app previews run at about 60 fps. <!-- feature -->
 - **Logitech G915 X explained:** OpenRGB can't light the G915 X (wired or LIGHTSPEED) yet, so when one is plugged in the Devices page now says so, links the OpenRGB request, and suggests keeping its lighting in G HUB until support arrives.

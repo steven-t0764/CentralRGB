@@ -336,6 +336,9 @@ def main():
                 wait(40)
 
             wait(1200)
+            # the repaint itself is checked without the entrance slide (a page mid-slide is meant to differ from
+            # its finished look); the slide gets its own check below
+            app.settings.data["page_animations"] = False
             refs = {}
             for name in pages:
                 app.show_page(name)
@@ -373,6 +376,35 @@ def main():
                         + (f" (left behind, % of the page: {bad[:6]})" if bad else ""))
             ok(not early, "the sidebar highlight moves in the same repaint as the page, not before it is laid out"
                           + (f" (lit early: {early[:6]})" if early else ""))
+            # with Page animations on: the page rises into place, nothing of the previous page shows in the gap
+            # above it while it moves, and once settled the page is exactly its normal self
+            app.settings.data["page_animations"] = True
+            slid, gap_bad, settle_bad = 0, [], []
+            for a, b in pairs[:6]:
+                app.settings.data["page_animations"] = False
+                app.show_page(a)
+                app.settings.data["page_animations"] = True
+                app.show_page(b)
+                if getattr(app, "_page_anim", None) is not None and app._page_anim.running:
+                    slid += 1
+                    img = ImageGrab.grab(page_box())
+                    gap = img.crop((0, 0, img.width, max(1, app._page_anim.spring.value - 2)))
+                    bg = app_mod.hex2rgb(app_mod.P["BG"])
+                    px = list(gap.convert("RGB").getdata())
+                    off = sum(1 for p in px if max(abs(p[i] - bg[i]) for i in range(3)) > 12) / max(1, len(px))
+                    if off > 0.03:                     # the gap must be plain background
+                        gap_bad.append(f"{a} -> {b} ({off * 100:.0f} % not background)")
+                wait(700)
+                full_redraw()
+                share = stale_share(ImageGrab.grab(page_box()), refs[a], refs[b])
+                y = app.pages[b].place_info().get("y", "0")
+                if share > 0.03 or str(y) not in ("0", ""):
+                    settle_bad.append((f"{a} -> {b}", round(share * 100, 1), y))
+            ok(slid > 0, f"pages slide into place when Page animations is on ({slid} of {min(6, len(pairs))} switches)")
+            ok(not gap_bad, "nothing of the previous page shows above a page while it slides in"
+                            + (f" ({gap_bad})" if gap_bad else ""))
+            ok(not settle_bad, "once the slide settles the page sits exactly in place, nothing left behind"
+                               + (f" ({settle_bad})" if settle_bad else ""))
             ms = sorted(t for t, _ in times)
             phases = {}
             for _, ph in times:
