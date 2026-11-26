@@ -96,8 +96,8 @@ class Animator:
 
     enabled = None         # cached animations_on(); tests and the app can set it
 
-    def __init__(self, widget, on_frame, value=0.0, on_done=None, **spring):
-        self.widget, self.on_frame, self.on_done = widget, on_frame, on_done
+    def __init__(self, widget, on_frame, value=0.0, **spring):
+        self.widget, self.on_frame = widget, on_frame
         self.spring = Spring(value, **spring)
         self._job, self._last = None, 0.0
 
@@ -116,7 +116,6 @@ class Animator:
             self.stop()
             self.spring.jump(target)
             self._frame()
-            self._done()
             return
         self.spring.target = float(target)
         if self._job is None and not self.spring.settled:
@@ -143,13 +142,6 @@ class Animator:
         except Exception:                               # a drawing error must never take the app down
             pass
 
-    def _done(self):
-        if self.on_done is not None:
-            try:
-                self.on_done()
-            except Exception:
-                pass
-
     def _tick(self):
         self._job = None
         try:
@@ -163,8 +155,6 @@ class Animator:
         self._frame()
         if not self.spring.settled:
             self._schedule()
-        else:
-            self._done()
 
 
 def ease_mix(a, b, t):

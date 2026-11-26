@@ -497,7 +497,6 @@ class Settings:
             "Red breathing": {"color": [255, 0, 0], "effect": "Breathing", "brightness": 100, "speed": 30},
         },
         "restore_on_start": True,
-        "page_animations": True,   # pages glide into place when switching (Settings > Page animations)
         "openrgb_boot": 0,          # boot_id() when the hidden OpenRGB last searched for hardware
         "ram_seen": False,          # RGB RAM has been found on this PC before
         "ram_note_boot": 0,         # boot_id() when the "RAM not found" pop-up was last shown

@@ -4535,10 +4535,6 @@ class App(ctk.CTk):
         self.setting_row(body, "\ue768", "▶", "Startup animation", "Show the logo animation when the app opens",
                          switch("anim_sw", self.settings.data.get("animations", True),
                                 lambda: self.settings.__setitem__("animations", self.anim_sw.get() == 1)))
-        yield
-        self.setting_row(body, "\ue8ab", "⇅", "Page animations", "Pages glide into place when you switch between them",
-                         switch("page_anim_sw", self.settings.data.get("page_animations", True),
-                                lambda: self.settings.__setitem__("page_animations", self.page_anim_sw.get() == 1)))
 
         yield
         self.caption(body, "Sensors").pack(fill="x", pady=(22, 8))
@@ -4754,7 +4750,7 @@ class App(ctk.CTk):
             return
         self._switching = True
         try:
-            self._swap_page(name, slide=animate and self._page_motion_on())
+            self._swap_page(name)
         finally:
             self._switching = False
         if self.current_page == "Overlay":
@@ -4771,32 +4767,7 @@ class App(ctk.CTk):
         elif name == "Fans":
             self._refresh_fans(s)
 
-    PAGE_SLIDE = 18            # px the new page rises from when it opens
-
-    def _page_motion_on(self):
-        return (self.settings.data.get("page_animations", True) and springs.Animator.enabled is not False
-                and springs.animations_on() and not self._hidden())
-
-    def _end_page_slide(self):
-        """Finish a page slide now: page back in place, the page it replaced back in the layout underneath."""
-        anim = getattr(self, "_page_anim", None)
-        if anim is not None:
-            anim.stop()
-            self._page_anim = None
-        sliding, hidden = getattr(self, "_slide_pages", (None, None))
-        self._slide_pages = (None, None)
-        try:
-            if sliding is not None:
-                sliding.place_configure(y=0)
-            if hidden is not None and hidden is not self.pages.get(self.current_page) and not hidden.winfo_manager():
-                hidden.place(relx=0, rely=0, relwidth=1, relheight=1)
-                hidden.lower()
-        except tk.TclError:
-            pass
-
-    def _swap_page(self, name, slide=False):
-        self._end_page_slide()
-        old = self.pages.get(self.current_page)
+    def _swap_page(self, name):
         self.current_page = name
         page = self.pages[name]
         ph, t = {}, time.perf_counter()
@@ -4826,31 +4797,13 @@ class App(ctk.CTk):
         for n, item in self.nav.items():
             item.set(n == name, self._led_color())
         mark("nav")
-        slide = slide and old is not None and old is not page
-        if slide:
-            # Motion-style entrance: the page rises the last few pixels into place on a spring. Only the page frame
-            # moves (Windows shifts its pixels in one go, nothing is laid out again); the page it replaces leaves
-            # the layout meanwhile so it can't show through the gap, and comes back underneath once it settles.
-            off = round(self.PAGE_SLIDE * ctk.ScalingTracker.get_widget_scaling(page))
-            page.place_configure(y=off)
-            page.tkraise()
-            old.place_forget()
-        else:
-            page.tkraise()
+        page.tkraise()
         mark("raise")
         # Tk draws later, widget by widget, spread over several screen frames; do it now, all in one go (the
         # sidebar highlight included), so the page appears complete.
         self._paint_now()
         mark("paint")
         self._switch_phases = ph
-        if slide:
-            self._slide_pages = (page, old)
-
-            self._page_anim = springs.Animator(page, lambda v, pg=page: pg.place_configure(y=round(v)), value=off,
-                                               on_done=lambda pg=page: self.after_idle(
-                                                   lambda: self._slide_pages[0] is pg and self._end_page_slide()),
-                                               **springs.SNAPPY)
-            self._page_anim.to(0)
 
     def _update_accent(self):
         h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in self.color))
