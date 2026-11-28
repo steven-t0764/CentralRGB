@@ -830,7 +830,8 @@ class LightScroll(tk.Frame):
         self.win = self.cv.create_window(0, 0, anchor="nw", window=self.inner)
         self.thumb = self.bar.create_rectangle(2, 0, 6, 0, fill=P["TRACK"], width=0)
         self.inner.bind("<Configure>", lambda e=None: self._sync())
-        self.cv.bind("<Configure>", lambda e: self._fit(e.width))
+        # (e=None: something can fire this binding with no event; fall back to the canvas's own width)
+        self.cv.bind("<Configure>", lambda e=None: self._fit(e.width if e is not None else self.cv.winfo_width()))
         self.cv.bind("<Map>", lambda e=None: self.after_idle(lambda: self._fit(self.cv.winfo_width())), add="+")
         self.cv.configure(yscrollcommand=self._on_scroll)
         for w in (self, self.cv, self.inner, self.bar):

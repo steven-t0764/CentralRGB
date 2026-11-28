@@ -3,6 +3,7 @@
 Changes that users will notice, newest first. Agents add a line under **Unreleased** with every change.
 
 ## Unreleased
+- Fixed a rare error where a scrolling page's resize handler could fail while the app was starting.
 - **FPS counter only in games:** the counter now shows up only for games, not over your browser, Discord, video players or other apps, even when they're full screen. Games are recognised from Windows' own list of games, where they're installed (Steam, Epic, GOG, Xbox, Riot, EA, Ubisoft, Battle.net...), or by filling the screen. If a game isn't picked up, turn off **Overlay > Only in games**.
 - **Less work for OpenRGB at startup:** when OpenRGB takes minutes to finish detecting hardware (for example while SteelSeries GG holds the mouse), Central RGB no longer resends every colour to every device each time it checks for new hardware, runs only one of those checks at a time, and checks less often after the first minute and a half. This cuts OpenRGB's CPU use during that time, most of all with RGB RAM. <!-- big -->
 - **Spring motion:** the pill selectors (fan profiles, Monitor tabs, Settings choices) now slide their highlight across to your pick with a little bounce. The sidebar's LED pops in on the page you open, and temperatures and fan RPM count smoothly to each new reading instead of jumping. Everything jumps straight to the end if Windows' Animation effects setting is off. <!-- feature -->
