@@ -6,7 +6,8 @@
 # License, or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY; see the
 # GNU General Public License for more details: <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""FPS overlay: reading PresentMon's output, picking the game, and the status messages shown to the user.
+"""FPS overlay: reading PresentMon's output, picking the game, telling games from other apps (no counter over a
+browser, Discord or a video player), and the status messages shown to the user.
 Runs anywhere; PresentMon itself is replaced by fake CSV lines from fake_presentmon.py."""
 import os
 import sys
@@ -35,7 +36,7 @@ def tracker(counter, family=None, names=None, windows=None, clock=None):
     return fpo.GameTracker(counter, family=lambda pid: (family or {}).get(pid, set()),
                            window_state=lambda h: windows.get(h, RECT if h else None),
                            name_of=lambda pid: (names or {}).get(pid, ""), own_pid=OWN,
-                           clock=clock or (lambda: 0.0))
+                           clock=clock or (lambda: 0.0), detector=detector())
 
 
 class ReadStreamTests(unittest.TestCase):
@@ -200,6 +201,77 @@ class LifecycleTests(unittest.TestCase):
             pass
         self.assertFalse(new.is_set())     # the new run's flag was never touched by the old stop
         self.assertNotEqual(c.status, "off")   # and the late stop didn't report the new run as off
+
+
+BROWSER, PLAYER, WINAPP = 7100, 7200, 7300
+EXES = {GAME: r"D:\SteamLibrary\steamapps\common\rocketleague\Binaries\Win64\RocketLeague.exe",
+        BROWSER: r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        PLAYER: r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+        WINAPP: r"C:\Windows\System32\SomeTool.exe",
+        OTHER: r"C:\Indie\MyGame.exe",
+        LAUNCHER: r"C:\Program Files\Epic Games\Fortnite\FortniteLauncher.exe"}
+
+
+def detector(known=()):
+    return fpo.GameDetector(exe_of=lambda pid: EXES.get(pid, ""), known_games=lambda: {k.lower() for k in known})
+
+
+class GameDetectionTests(unittest.TestCase):
+    def test_everyday_apps_are_never_games(self):
+        d = detector()
+        for pid, name in ((BROWSER, "chrome.exe"), (PLAYER, "vlc.exe"), (DISCORD, "Discord.exe"),
+                          (WINAPP, "SomeTool.exe"), (LAUNCHER, "FortniteLauncher.exe")):
+            self.assertFalse(d.verdict(pid, name, fills_screen=True)[0], name)     # not even full screen
+
+    def test_games_by_library_folder_windows_list_or_full_screen(self):
+        self.assertEqual(detector().verdict(GAME, "RocketLeague.exe"), (True, "installed in a game library"))
+        self.assertFalse(detector().verdict(OTHER, "MyGame.exe")[0])               # windowed, unknown: no
+        self.assertEqual(detector().verdict(OTHER, "MyGame.exe", fills_screen=True), (True, "fills the screen"))
+        self.assertEqual(detector(known=[EXES[OTHER]]).verdict(OTHER, "MyGame.exe"),
+                         (True, "Windows lists it as a game"))
+        self.assertTrue(detector().verdict(8800, "javaw.exe")[0])                  # Minecraft Java
+
+    def test_windows_list_is_reread_now_and_then(self):
+        calls, now = [], [0.0]
+        d = fpo.GameDetector(exe_of=lambda pid: "", known_games=lambda: calls.append(1) or set(),
+                             clock=lambda: now[0])
+        d.known()
+        d.known()
+        now[0] += fpo.GameDetector.KNOWN_EVERY + 1
+        d.known()
+        self.assertEqual(len(calls), 2)
+
+    def test_no_counter_over_a_browser_or_video(self):
+        lines = pm.stream(pm.V2_HEADER, pm.game("chrome.exe", BROWSER, 144, 144) + pm.game("vlc.exe", PLAYER, 60, 60))
+        t = tracker(counter_with(lines))
+        t.detector = detector()
+        for pid in (BROWSER, PLAYER):
+            st = t.update(1, pid, True)                                            # even full screen
+            self.assertIsNone(st["pid"])
+            self.assertEqual(st["note"], "")                                       # and no "no frames" note
+        st = t.update(1, BROWSER, True)
+        self.assertNotIn("chrome", st["text"].lower())
+
+    def test_game_is_still_picked_and_browser_in_front_keeps_it(self):
+        lines = pm.stream(pm.V2_HEADER, pm.game("RocketLeague.exe", GAME, 240, 240) + pm.game("chrome.exe", BROWSER, 144, 144))
+        t = tracker(counter_with(lines))
+        t.detector = detector()
+        self.assertEqual(t.update(1, GAME, False)["pid"], GAME)                    # windowed, from Steam
+        st = t.update(2, BROWSER, True)                                            # alt-tab to the browser
+        self.assertEqual(st["pid"], GAME)
+        self.assertFalse(st["in_front"])
+
+    def test_only_in_games_off_follows_any_app(self):
+        lines = pm.stream(pm.V2_HEADER, pm.game("chrome.exe", BROWSER, 144, 144))
+        t = tracker(counter_with(lines))
+        t.detector = detector()
+        t.games_only = False
+        self.assertEqual(t.update(1, BROWSER, False)["pid"], BROWSER)
+
+    def test_setting_defaults_to_games_only(self):
+        self.assertTrue(fpo.DEFAULTS["games_only"])
+        cfg = fpo.overlay_settings(type("S", (), {"data": {"overlay": {"enabled": True, "style": 2}}})())
+        self.assertTrue(cfg["games_only"])                                         # older settings get it on
 
 
 if __name__ == "__main__":
