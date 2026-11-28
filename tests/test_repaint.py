@@ -164,5 +164,31 @@ class NoBlackFramesOnRestoreOrSwitch(unittest.TestCase):
             self.assertNotIn("FAIL  " + line, r.stdout)
 
 
+class ScrollAreaBindings(unittest.TestCase):
+    """The Windows self-test once saw the scroll area's resize handler called with no event; it must cope."""
+
+    def test_configure_handler_without_an_event(self):
+        import tkinter as tk
+        import central_rgb as cr
+        root = tk.Tk()
+        errors = []
+        root.report_callback_exception = lambda *exc: errors.append(exc[1])
+        try:
+            sc = cr.LightScroll(root, bg="#000000")
+            sc.pack(fill="both", expand=True)
+            root.update()
+            names = [w for w in sc.cv.bind("<Configure>").replace("{", " ").replace("}", " ").replace("[", " ").split()
+                     if w[0].isdigit() and "lambda" in w]
+            self.assertTrue(names)
+            sc.cv.tk.call(names[0])                       # fire it the way the self-test saw: no event at all
+            root.update()
+        finally:
+            root.destroy()
+            sc = names = None                             # let Tk go here, on this thread, not later on another
+            import gc
+            gc.collect()
+        self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
