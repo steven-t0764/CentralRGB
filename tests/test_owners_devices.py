@@ -146,7 +146,7 @@ class LateDevices(unittest.TestCase):
         logs = []
         app = SimpleNamespace(engine=e, settings=SimpleNamespace(data={}), log=lambda m, *a: logs.append(m),
                               status=lambda *a, **k: None, checked=[])
-        app._rescan = lambda quiet=False, initial=False: e.rescan()
+        app._rescan = lambda quiet=False, initial=False, reapply=True: e.rescan(reapply=reapply)
         app._check_missing = lambda: app.checked.append(len(e.devices()))
         app._check_ram = lambda: None
         clock = {"t": 1000.0}

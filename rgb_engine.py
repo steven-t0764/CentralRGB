@@ -1957,13 +1957,19 @@ class LightingEngine(threading.Thread):
                 return []
             return [d for d in self.client.devices if d is not None]
 
-    def rescan(self):
+    def rescan(self, reapply: bool = True):
+        """Re-read OpenRGB's device list. reapply=False (the background checks while OpenRGB is still detecting)
+        only sets devices up and resends colours when the list actually changed: resending everything every few
+        seconds keeps OpenRGB busy for nothing, worst of all on RAM, where every frame is a slow SMBus write."""
         with self.lock:
             if self.client:
+                before = [(device_key(d), len(d.leds)) for d in self.client.devices if d is not None]
                 self.client.update()
-                self.broken.clear()
-                self.prepared.clear()
-                self.dirty = True
+                after = [(device_key(d), len(d.leds)) for d in self.client.devices if d is not None]
+                if reapply or after != before:
+                    self.broken.clear()
+                    self.prepared.clear()
+                    self.dirty = True
 
     # ---- state
     def set_state(self, **kw):
