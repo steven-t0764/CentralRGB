@@ -291,7 +291,7 @@ class LateRamTests(unittest.TestCase):
         app = SimpleNamespace(engine=engine, log=lambda m, level="info": logs.append((level, m)), q=queue.Queue(),
                               manager=SimpleNamespace(started_by_us=lambda: True, own_copies=lambda: []),
                               _full_rescan=lambda **k: restarts.append(1), _check_ram=lambda: None)
-        app._rescan = lambda quiet=False, initial=False: engine.rescan()
+        app._rescan = lambda quiet=False, initial=False, reapply=True: engine.rescan(reapply=reapply)
         app._check_missing = lambda: cr.App._check_missing(app)
         real_sleep = time.sleep
         with mock.patch.object(cr.time, "sleep", lambda s: real_sleep(0.01)):

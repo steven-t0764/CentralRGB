@@ -5089,6 +5089,17 @@ class App(ctk.CTk):
         by its vendor app (SteelSeries GG, for example) can hold detection up for minutes. Keep reading the
         device list until it has stopped changing, and for as long as OpenRGB's own log says it is still
         detecting (up to long_wait). Runs on a background thread; never restarts or rescans OpenRGB."""
+        if getattr(self, "_settling", False):  # one watcher is enough (a reconnect can ask for another)
+            return
+        self._settling = True
+        try:
+            App._settle_loop(self, max_wait, quiet_for, min_wait, long_wait)   # (tests pass a stand-in app)
+        finally:
+            self._settling = False
+
+    SETTLE_SLOW_EVERY = 15.0                   # s between checks once OpenRGB has been detecting a while
+
+    def _settle_loop(self, max_wait, quiet_for, min_wait, long_wait):
         t0 = last_change = time.time()
         since = t0 - 120                       # OpenRGB was started (or reconnected) just before this
         count = len(self.engine.devices())
@@ -5098,9 +5109,9 @@ class App(ctk.CTk):
             state, waiting = eng.openrgb_detection_state(since=since)
             if elapsed > long_wait or (elapsed > max_wait and state != "running"):
                 break
-            time.sleep(1.5 if elapsed < max_wait else 5.0)
+            time.sleep(1.5 if elapsed < max_wait else App.SETTLE_SLOW_EVERY)
             try:
-                self._rescan(quiet=True)
+                self._rescan(quiet=True, reapply=False)   # colours are only resent if the list changed
             except Exception:
                 pass
             rows = len(self.engine.devices())
@@ -5133,14 +5144,14 @@ class App(ctk.CTk):
             self.settings["ram_note_boot"] = boot
             self.q.put(("call", lambda: messagebox.showwarning(eng.APP_NAME, note)))
 
-    def _rescan(self, initial=False, quiet=False):
+    def _rescan(self, initial=False, quiet=False, reapply=True):
         if not self.engine.client:
             self._connect_flow()
             return
         if not quiet:
             self.status("Scanning…")
         try:
-            self.engine.rescan()
+            self.engine.rescan(reapply=reapply)
         except Exception as e:
             self.log(f"Rescan failed: {e}", "bad")
             return
