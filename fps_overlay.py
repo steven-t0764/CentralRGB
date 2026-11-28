@@ -111,7 +111,7 @@ def fps_color(v) -> str:
     return FPS_COLORS["good"] if v >= FPS_GOOD else FPS_COLORS["ok"] if v >= FPS_OK else FPS_COLORS["low"]
 ITEMS = [("fps", "Frame rate (the number)"), ("low", "1% low"), ("frametime", "Frame time"),
          ("cpu", "CPU temperature and load"), ("gpu", "GPU temperature and load")]
-DEFAULTS = {"enabled": False, "corner": "Top left", "size": "Medium",
+DEFAULTS = {"enabled": False, "corner": "Top left", "size": "Medium", "games_only": True,
             "items": {"fps": True, "low": False, "frametime": False, "cpu": False, "gpu": False}, "style": 2}
 
 
@@ -137,6 +137,135 @@ HELPERS = {"steam.exe", "steamwebhelper.exe", "gameoverlayui.exe", "epicgameslau
            "msi center.exe", "msi.centralserver.exe", "mysticlight.exe", "steelseriesgg.exe",
            "steelseriesggclient.exe", "steelseriesengine.exe", "steelseriesprism.exe", "razer synapse 3.exe",
            "razerappengine.exe", "icue.exe", "lghub.exe", "armourycrate.exe", "openrgb.exe"}
+# ---------------------------------------------------------------------------- is it a game?
+# Browsers, chat, video players and everyday apps draw frames too (smooth scrolling, video, animations), so
+# "it's presenting frames" isn't enough. An app counts as a game when Windows itself lists it as one (Game Bar's
+# list), it's installed in a game library (Steam, Epic, GOG, Xbox, Riot, EA, Ubisoft...), or it fills the
+# screen while drawing, and it's never one of these.
+NOT_GAMES = {
+    # browsers and web views
+    "chrome.exe", "msedge.exe", "msedgewebview2.exe", "firefox.exe", "opera.exe", "opera_gx.exe", "brave.exe",
+    "vivaldi.exe", "arc.exe", "iexplore.exe", "librewolf.exe", "waterfox.exe", "zen.exe", "thorium.exe",
+    "floorp.exe", "yandex.exe", "chromium.exe",
+    # chat, calls, mail
+    "slack.exe", "teams.exe", "ms-teams.exe", "zoom.exe", "telegram.exe", "whatsapp.exe", "signal.exe",
+    "skype.exe", "outlook.exe", "olk.exe", "thunderbird.exe", "element.exe", "guilded.exe", "vesktop.exe",
+    # video and music
+    "spotify.exe", "vlc.exe", "mpc-hc64.exe", "mpc-hc.exe", "mpc-be64.exe", "potplayermini64.exe",
+    "potplayermini.exe", "wmplayer.exe", "mpv.exe", "itunes.exe", "applemusic.exe", "music.ui.exe",
+    "video.ui.exe", "plex.exe", "kodi.exe", "stremio.exe", "netflix.exe", "twitch.exe", "aimp.exe",
+    "foobar2000.exe", "tidal.exe", "deezer.exe", "amazon music.exe",
+    # office, notes, PDFs
+    "winword.exe", "excel.exe", "powerpnt.exe", "onenote.exe", "msaccess.exe", "acrobat.exe", "acrord32.exe",
+    "notion.exe", "obsidian.exe", "evernote.exe", "sumatrapdf.exe", "notepad.exe", "notepad++.exe",
+    # code and terminals
+    "code.exe", "cursor.exe", "devenv.exe", "windowsterminal.exe", "wt.exe", "cmd.exe", "powershell.exe",
+    "pwsh.exe", "conhost.exe", "openconsole.exe", "pycharm64.exe", "idea64.exe", "rider64.exe", "clion64.exe",
+    "webstorm64.exe", "sublime_text.exe", "githubdesktop.exe", "zed.exe",
+    # creative and streaming tools
+    "photoshop.exe", "illustrator.exe", "afterfx.exe", "adobe premiere pro.exe", "resolve.exe", "figma.exe",
+    "obs64.exe", "obs32.exe", "streamlabs obs.exe", "streamlabs desktop.exe", "xsplit.core.exe", "gimp-2.10.exe",
+    "krita.exe", "paint.net.exe", "mspaint.exe", "clipchamp.exe",
+    # system and utilities
+    "taskmgr.exe", "systemsettings.exe", "mmc.exe", "regedit.exe", "control.exe", "photos.exe",
+    "microsoft.photos.exe", "snippingtool.exe", "screenclippinghost.exe", "lockapp.exe", "hwinfo64.exe",
+    "cpuz.exe", "gpu-z.exe", "aida64.exe", "wiztree64.exe", "everything.exe", "7zfm.exe", "winrar.exe",
+}
+# Where game launchers install games (matched anywhere in the exe's full path, lower case)
+GAME_FOLDERS = ("\\steamapps\\common\\", "\\epic games\\", "\\gog galaxy\\games\\", "\\gog games\\",
+                "\\xboxgames\\", "\\riot games\\", "\\ea games\\", "\\origin games\\", "\\electronic arts\\",
+                "\\ubisoft game launcher\\games\\", "\\rockstar games\\", "\\amazon games\\library\\",
+                "\\battle.net\\games\\", "\\blizzard entertainment\\", "\\itch\\apps\\", "\\games\\",
+                "\\.minecraft\\", "\\wargaming.net\\")
+NOT_GAME_WORDS = ("launcher", "crashhandler", "crashreport", "crashpad", "setup", "unins", "updater",
+                  "installer", "bootstrapper")   # launchers, crash reporters and installers live in game folders too
+GAME_EXES = {"javaw.exe"}          # Minecraft Java runs as javaw.exe from wherever Java is installed
+
+
+def process_exe(pid: int) -> str:
+    try:
+        import psutil
+        return psutil.Process(pid).exe()
+    except Exception:
+        return ""
+
+
+def windows_known_games() -> set[str]:
+    """Full paths (lower case) of the exes Windows has recognised as games: Game Bar's own list, in
+    HKCU\\System\\GameConfigStore\\Children. Empty anywhere it can't be read."""
+    if not eng.IS_WIN:
+        return set()
+    out = set()
+    try:
+        import winreg
+        root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"System\GameConfigStore\Children")
+        i = 0
+        while True:
+            try:
+                sub = winreg.EnumKey(root, i)
+            except OSError:
+                break
+            i += 1
+            try:
+                with winreg.OpenKey(root, sub) as k:
+                    path, _ = winreg.QueryValueEx(k, "MatchedExeFullPath")
+                    if path:
+                        out.add(str(path).lower())
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return out
+
+
+class GameDetector:
+    """Decides whether a process is a game the FPS counter should follow. Results are cached per process."""
+
+    KNOWN_EVERY = 120.0        # re-read Windows' list of games this often (new installs show up)
+
+    def __init__(self, exe_of=process_exe, known_games=windows_known_games, clock=time.monotonic):
+        self.exe_of, self.known_games, self.clock = exe_of, known_games, clock
+        self._known, self._known_at = set(), -1e9
+        self._cache = {}
+
+    def known(self) -> set[str]:
+        now = self.clock()
+        if now - self._known_at > self.KNOWN_EVERY:
+            self._known, self._known_at = self.known_games(), now
+        return self._known
+
+    def verdict(self, pid: int, name: str = "", fills_screen: bool = False) -> tuple[bool, str]:
+        """(is_game, why). fills_screen: its window covers the monitor (fullscreen or borderless)."""
+        if not pid:
+            return False, "no app"
+        hit = self._cache.get(pid)
+        if hit and hit[0] == (name or "").lower():
+            fixed, why = hit[1], hit[2]
+            if fixed is not None:
+                return fixed, why
+            return (True, "fills the screen") if fills_screen else (False, "not recognised as a game")
+        n = (name or "").lower()
+        exe = (self.exe_of(pid) or "").lower()
+        n = n or exe.rsplit("\\", 1)[-1]
+        fixed, why = None, ""
+        if n in NOT_GAMES or n in IGNORED or is_helper(n) or any(w in n for w in NOT_GAME_WORDS):
+            fixed, why = False, f"{n} is not a game"
+        elif exe.startswith(("c:\\windows\\", "c:\\program files\\windowsapps\\microsoft.windows")):
+            fixed, why = False, "part of Windows"
+        elif exe and exe in self.known():
+            fixed, why = True, "Windows lists it as a game"
+        elif n in GAME_EXES or any(f in exe for f in GAME_FOLDERS):
+            fixed, why = True, "installed in a game library"
+        self._cache[pid] = ((name or "").lower(), fixed, why)
+        if len(self._cache) > 500:
+            self._cache.clear()
+        if fixed is not None:
+            return fixed, why
+        if fills_screen:                    # unknown app drawing full screen: very likely a game
+            return True, "fills the screen"
+        return False, "not recognised as a game"
+
+
 MIN_FRAMES = 3          # frames in the last second before a process counts as "drawing"
 WAIT_SECS = 4.0         # a game-like window in front with no frames this long -> tell the user
 RESTART_DELAYS = (2, 5, 10)   # seconds before restarting PresentMon after it stops on its own
@@ -262,9 +391,10 @@ def frame_stats(frames, now, window=1.0, low_window=10.0):
     return 1000.0 / avg_ms, 1000.0 / worst, avg_ms
 
 
-def pick_game(fg_pid, fg_name, presenting, related=(), own_pid=None):
+def pick_game(fg_pid, fg_name, presenting, related=(), own_pid=None, is_game=None):
     """Which process to show FPS for, given the window in front.
     presenting: {pid: (name, frames_in_last_second)} from FpsCounter.presenting(); related: process_family(fg_pid).
+    is_game(pid, name) -> bool: when given, only games are picked (no counter over a browser or Discord).
     Returns a pid, or None to keep whatever was picked before (desktop, helper apps, this app, nothing drawing)."""
     own_pid = os.getpid() if own_pid is None else own_pid
     if not fg_pid or fg_pid == own_pid or (fg_name or "").lower() in IGNORED:
@@ -272,7 +402,8 @@ def pick_game(fg_pid, fg_name, presenting, related=(), own_pid=None):
 
     def drawing(pid):
         name, n = presenting.get(pid, ("", 0))
-        return n >= MIN_FRAMES and pid != own_pid and not is_helper(name)
+        return (n >= MIN_FRAMES and pid != own_pid and not is_helper(name)
+                and (is_game is None or is_game(pid, name or (fg_name if pid == fg_pid else ""))))
 
     if drawing(fg_pid) and not is_helper(fg_name):
         return fg_pid
@@ -627,8 +758,10 @@ class GameTracker:
     Kept apart from the window code so it can be tested with a fake PresentMon."""
 
     def __init__(self, counter, *, family=process_family, window_state=None, name_of=process_name,
-                 own_pid=None, clock=time.monotonic):
+                 own_pid=None, clock=time.monotonic, detector=None, games_only=True):
         self.counter, self.family, self.name_of, self.clock = counter, family, name_of, clock
+        self.detector = detector or GameDetector(clock=clock)
+        self.games_only = games_only        # Overlay page: "Only in games"
         self.window_state = window_state or game_window_state
         self.own_pid = os.getpid() if own_pid is None else own_pid
         self.pid = self.hwnd = self.fg_pid = None
@@ -658,7 +791,11 @@ class GameTracker:
             presenting = c.presenting()
             fg_name = c.names.get(fg_pid) or (self.name_of(fg_pid) if fg_pid else "")
             related = () if fg_pid in presenting else self._family(fg_pid, now) if fg_pid else ()
-            pick = pick_game(fg_pid, fg_name, presenting, related, self.own_pid)
+            is_game = None
+            if self.games_only:
+                def is_game(pid, name, _fg=fg_pid, _full=fg_gamelike):
+                    return self.detector.verdict(pid, name, fills_screen=_full and pid in (_fg,) + tuple(related))[0]
+            pick = pick_game(fg_pid, fg_name, presenting, related, self.own_pid, is_game)
             if pick and pick != self.pid:
                 self.pid, self.hwnd, self.fg_pid, self.last = pick, fg_hwnd, fg_pid, None      # a new game is in front
             elif pick and fg_hwnd and fg_hwnd != self.hwnd and self.window_state(self.hwnd) is None:
@@ -673,7 +810,8 @@ class GameTracker:
                     fps, stale = self.last, True
             # A fullscreen window is in front but nothing is being measured for it
             if (fg_gamelike and fg_pid and fg_pid != self.own_pid and not pick and fg_pid != self.fg_pid
-                    and not is_helper(fg_name)):
+                    and not is_helper(fg_name)
+                    and (not self.games_only or self.detector.verdict(fg_pid, fg_name, True)[0])):
                 if self._wait[0] != fg_pid:
                     self._wait = (fg_pid, now)
                 if now - self._wait[1] >= WAIT_SECS:

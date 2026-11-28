@@ -4396,6 +4396,15 @@ class App(ctk.CTk):
         self.overlay_status = self.label(left, "Off", 11, color=P["MUTED"], anchor="w", justify="left", wraplength=560)
         yield
         self.overlay_status.pack(fill="x", padx=16, pady=(2, 10))
+        yield
+        self.overlay_games_sw = Switch(left, text="Only in games", font=F(12), text_color=P["TEXT"],
+                                       command=self._overlay_games_only)
+        self.overlay_games_sw.pack(anchor="w", padx=16, pady=(0, 2))
+        if cfg.get("games_only", True):
+            self.overlay_games_sw.select()
+        self.label(left, "Leaves browsers, Discord, video players and other apps alone. Turn off if a game isn't "
+                   "picked up.", 11, color=P["FAINT"], anchor="w", justify="left", wraplength=560
+                   ).pack(fill="x", padx=16, pady=(0, 10))
 
         yield
         def seg(parent, values, current, cmd):
@@ -4458,6 +4467,13 @@ class App(ctk.CTk):
     def _overlay_save(self):
         self.settings["overlay"] = self.overlay_cfg
 
+    def _overlay_games_only(self):
+        on = self.overlay_games_sw.get() == 1
+        self._overlay_set("games_only", on)
+        if hasattr(self, "game_tracker"):
+            self.game_tracker.games_only = on
+            self.game_tracker.reset()               # look at what's in front again with the new rule
+
     def _overlay_set(self, key, value):
         self.overlay_cfg[key] = value
         self._overlay_save()
@@ -4502,7 +4518,7 @@ class App(ctk.CTk):
         try:
             metrics = self.snap.get("metrics", {})
             if not hasattr(self, "game_tracker"):
-                self.game_tracker = fpo.GameTracker(self.fps)
+                self.game_tracker = fpo.GameTracker(self.fps, games_only=cfg.get("games_only", True))
             fg_hwnd, fg_pid = fpo.foreground_window()
             fg_rect = fpo.game_window_state(fg_hwnd) if fg_hwnd and fg_pid != os.getpid() else None
             gamelike = fpo.covers_monitor(fg_rect, fpo.monitor_rect(fg_hwnd)) if fg_rect else False
